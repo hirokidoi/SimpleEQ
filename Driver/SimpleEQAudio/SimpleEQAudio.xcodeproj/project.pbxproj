@@ -1,0 +1,312 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		233E0DBEC1F3718EFA8F47F6 /* SimpleEQAudio.c in Sources */ = {isa = PBXBuildFile; fileRef = CD60C237A360C0C0807C1E20 /* SimpleEQAudio.c */; };
+		C74F75C69452ECAD44F19B37 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A956EDC0AC84539C9B6D8283 /* CoreAudio.framework */; };
+		BCE61D801A2EF55B32D72964 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 78EF11C38DDDFEED5BD84906 /* CoreFoundation.framework */; };
+		A1C0FE01D2B34C5E6F708192 /* SimpleEQAudio.icns in Resources */ = {isa = PBXBuildFile; fileRef = A1C0FE02D2B34C5E6F708192 /* SimpleEQAudio.icns */; };
+		A1C0FE04D2B34C5E6F708192 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 9813E9D4DEE0F7EA5BCAB911 /* LICENSE */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		CD60C237A360C0C0807C1E20 /* SimpleEQAudio.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = SimpleEQAudio.c; sourceTree = "<group>"; };
+		A0287441E617139D98B9E9EB /* SimpleEQAudio.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = SimpleEQAudio.plist; sourceTree = "<group>"; };
+		78EF11C38DDDFEED5BD84906 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
+		A956EDC0AC84539C9B6D8283 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		CDD8AC0956AC38E99DDDE8ED /* SimpleEQAudio.driver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimpleEQAudio.driver; sourceTree = BUILT_PRODUCTS_DIR; };
+		9813E9D4DEE0F7EA5BCAB911 /* LICENSE */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
+		A1C0FE02D2B34C5E6F708192 /* SimpleEQAudio.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = SimpleEQAudio.icns; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4462A7B2C18AEF18E4DF28F9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C74F75C69452ECAD44F19B37 /* CoreAudio.framework in Frameworks */,
+				BCE61D801A2EF55B32D72964 /* CoreFoundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		796D96C47E2FCA61406A3D12 /* SimpleEQAudio */ = {
+			isa = PBXGroup;
+			children = (
+				A0287441E617139D98B9E9EB /* SimpleEQAudio.plist */,
+				A1C0FE02D2B34C5E6F708192 /* SimpleEQAudio.icns */,
+				CD60C237A360C0C0807C1E20 /* SimpleEQAudio.c */,
+			);
+			path = SimpleEQAudio;
+			sourceTree = "<group>";
+		};
+		495CC5C9867BFE0FE26B0B36 = {
+			isa = PBXGroup;
+			children = (
+				9813E9D4DEE0F7EA5BCAB911 /* LICENSE */,
+				796D96C47E2FCA61406A3D12 /* SimpleEQAudio */,
+				D97BEEC973ECB8253CD840F7 /* Frameworks */,
+				9536BF4835454032882EA281 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9536BF4835454032882EA281 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CDD8AC0956AC38E99DDDE8ED /* SimpleEQAudio.driver */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		D97BEEC973ECB8253CD840F7 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A956EDC0AC84539C9B6D8283 /* CoreAudio.framework */,
+				78EF11C38DDDFEED5BD84906 /* CoreFoundation.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4968B1E7B43185FDEF861D54 /* SimpleEQAudio */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3CE326C7478FA8E2F0DA5B8B /* Build configuration list for PBXNativeTarget "SimpleEQAudio" */;
+			buildPhases = (
+				0324A02BCD52FCE8F004A008 /* Sources */,
+				4462A7B2C18AEF18E4DF28F9 /* Frameworks */,
+				A1C0FE03D2B34C5E6F708192 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SimpleEQAudio;
+			productName = SimpleEQAudio;
+			productReference = CDD8AC0956AC38E99DDDE8ED /* SimpleEQAudio.driver */;
+			productType = "com.apple.product-type.bundle";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		FEFA3D6D48F1BAA802EA06A6 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = 2F25655DA36E0E892325C65A /* Build configuration list for PBXProject "SimpleEQAudio" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 495CC5C9867BFE0FE26B0B36;
+			productRefGroup = 9536BF4835454032882EA281 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4968B1E7B43185FDEF861D54 /* SimpleEQAudio */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1C0FE03D2B34C5E6F708192 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1C0FE01D2B34C5E6F708192 /* SimpleEQAudio.icns in Resources */,
+				A1C0FE04D2B34C5E6F708192 /* LICENSE in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0324A02BCD52FCE8F004A008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				233E0DBEC1F3718EFA8F47F6 /* SimpleEQAudio.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		E22BCACC3E0E28D235476324 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_MISSING_FIELD_INITIALIZERS = YES;
+				GCC_WARN_ABOUT_MISSING_NEWLINE = YES;
+				GCC_WARN_ABOUT_MISSING_PROTOTYPES = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_INITIALIZER_NOT_FULLY_BRACKETED = YES;
+				GCC_WARN_SHADOW = YES;
+				GCC_WARN_SIGN_COMPARE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNKNOWN_PRAGMAS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_LABEL = YES;
+				GCC_WARN_UNUSED_PARAMETER = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		AF9D6519BD56255182BA5FEC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_MISSING_FIELD_INITIALIZERS = YES;
+				GCC_WARN_ABOUT_MISSING_NEWLINE = YES;
+				GCC_WARN_ABOUT_MISSING_PROTOTYPES = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_INITIALIZER_NOT_FULLY_BRACKETED = YES;
+				GCC_WARN_SHADOW = YES;
+				GCC_WARN_SIGN_COMPARE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNKNOWN_PRAGMAS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_LABEL = YES;
+				GCC_WARN_UNUSED_PARAMETER = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		4F7F3E7E9167DBC1BBD81CB3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				// アプリ側 (project.yml) と同じ ad-hoc "Sign to Run Locally" (バイナリ配布は行わず署名/公証なし)。
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "-";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=0",
+				);
+				// Driver/Shared/SimpleEQRingLayout.h (共有定義ヘッダ) を参照する。
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../Shared";
+				INFOPLIST_FILE = SimpleEQAudio/SimpleEQAudio.plist;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Audio/Plug-Ins/HAL";
+				// アプリ本体 (project.yml) と同一。ドライバはアプリと組で配布・運用され、下限を別々に
+				// 管理する理由が無い。
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				// SimpleEQAudio.c の kPlugIn_BundleID マクロと同一値に統一している。
+				PRODUCT_BUNDLE_IDENTIFIER = com.hirokidoi.simpleeq.driver;
+				PRODUCT_NAME = SimpleEQAudio;
+				WRAPPER_EXTENSION = driver;
+			};
+			name = Release;
+		};
+		FE199AA78D3047F54E04DCF3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "-";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../Shared";
+				INFOPLIST_FILE = SimpleEQAudio/SimpleEQAudio.plist;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Audio/Plug-Ins/HAL";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hirokidoi.simpleeq.driver;
+				PRODUCT_NAME = SimpleEQAudio;
+				WRAPPER_EXTENSION = driver;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2F25655DA36E0E892325C65A /* Build configuration list for PBXProject "SimpleEQAudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E22BCACC3E0E28D235476324 /* Release */,
+				AF9D6519BD56255182BA5FEC /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		3CE326C7478FA8E2F0DA5B8B /* Build configuration list for PBXNativeTarget "SimpleEQAudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4F7F3E7E9167DBC1BBD81CB3 /* Release */,
+				FE199AA78D3047F54E04DCF3 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = FEFA3D6D48F1BAA802EA06A6 /* Project object */;
+}
