@@ -1,0 +1,78 @@
+name: SimpleEQ
+options:
+  bundleIdPrefix: com.hirokidoi
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+# 言語モードはルート Package.swift と揃える。省略すると XcodeGen の既定が入り、検証と
+# 製品バイナリが別の言語モードでビルドされる。ターゲットではなくプロジェクトに置くのは、
+# ターゲットを足したときに既定へ落ちないようにするため。
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+
+# Driver/RingShim (ローカルパッケージ SimpleEQRingC) は、専用ドライバとの共有メモリの
+# 共有レイアウトヘッダ (Driver/Shared/SimpleEQRingLayout.h) を直接 #include する薄い C シム。構造体オフセットを
+# Swift 側 (SharedRingReader) で手書きしないための唯一の窓口 (ルート Package.swift と同じ依存)。
+# AtomicShim (ローカルパッケージ SimpleEQAtomicC) は同じ考え方で、単一値に対する acquire/release
+# アトミック操作を提供する薄い C シム (ルート Package.swift と同じ依存)。SPSC リングのカウンタの
+# ほか、内部観測量・共有リング読み手・出力フェードの受け渡しがこれを使う。
+packages:
+  SimpleEQRingC:
+    path: Driver/RingShim
+  SimpleEQAtomicC:
+    path: AtomicShim
+
+# ドライバはアプリバンドルへ同梱する。アプリはインストール後にソースツリーを参照しない。
+projectReferences:
+  SimpleEQAudio:
+    path: Driver/SimpleEQAudio/SimpleEQAudio.xcodeproj
+
+targets:
+  SimpleEQ:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/SimpleEQ
+      - path: Resources
+      - path: LICENSE
+        buildPhase: resources
+      # スクリプトは自身の位置から Shared/SimpleEQRingLayout.h を読むため、この 2 つの相対関係を保つ。
+      - path: Driver/install-driver.sh
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: Driver
+      - path: Driver/uninstall-driver.sh
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: Driver
+      - path: Driver/Shared/SimpleEQRingLayout.h
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: Driver/Shared
+    dependencies:
+      - package: SimpleEQRingC
+        product: SimpleEQRingC
+      - package: SimpleEQAtomicC
+        product: SimpleEQAtomicC
+      - target: SimpleEQAudio/SimpleEQAudio
+        copy:
+          destination: resources
+          subpath: Driver
+    settings:
+      base:
+        PRODUCT_NAME: SimpleEQ
+        PRODUCT_BUNDLE_IDENTIFIER: com.hirokidoi.simpleeq
+        INFOPLIST_FILE: Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "2.5"
+        CURRENT_PROJECT_VERSION: "1"
+        # Ad-hoc "Sign to Run Locally": バイナリ配布は行わずソースを各自ビルドする配布方針のため開発者証明書を使わない。
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: YES
