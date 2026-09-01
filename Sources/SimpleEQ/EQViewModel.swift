@@ -214,8 +214,6 @@ final class EQViewModel: ObservableObject {
     @Published private(set) var defaultOutputReachesDriver: Bool = true
     /// 音に関わる資源を持つ直列キューが応答していないか。
     @Published private(set) var audioWorldUnresponsive: Bool = false
-    /// 出力段に適用されている実効ゲイン (システム音量と消音の合成)。
-    @Published private(set) var outputGain: Float = 1
     /// 起動の最初の組み立てを終えたか。
     @Published private(set) var startupActivationSettled: Bool = false
     /// 上部バーの警告チップの表示内容 (文言と誘導先)。該当なしは nil。
@@ -231,6 +229,7 @@ final class EQViewModel: ObservableObject {
             guard oldValue != visualizerActive else { return }
             if visualizerActive {
                 engine.levelMeter.resetForRestart()
+                resetDisplayedMeter()
                 resetClipHold()
                 engine.levelMeter.captureEnabled = true
             } else {
@@ -597,12 +596,18 @@ final class EQViewModel: ObservableObject {
             engine.levelMeter.resetForRestart()
             resetClipHold()
         }
-        let clip = engine.levelMeter.analyzeAvailableHops(outputGain: outputGain)
+        let clip = engine.levelMeter.analyzeAvailableHops()
         let snap = engine.levelMeter.snapshot()
         if levels != snap.levels { levels = snap.levels }
         if peaks != snap.peaks { peaks = snap.peaks }
         if stereoLevel != snap.stereo { stereoLevel = snap.stereo }
         advanceClipHold(dt: dt, observation: clip)
+    }
+
+    private func resetDisplayedMeter() {
+        levels = Self.unobservedMeter.levels
+        peaks = Self.unobservedMeter.peaks
+        stereoLevel = Self.unobservedMeter.stereo
     }
 
     private func resetClipHold() {
@@ -706,12 +711,6 @@ final class EQViewModel: ObservableObject {
     func noteStartupActivationSettled() {
         guard !startupActivationSettled else { return }
         startupActivationSettled = true
-    }
-
-    /// 実効ゲインの変化をそのまま反映する。値が動くのは利用者がシステム音量や消音を操作したときだけ。
-    func updateOutputGain(_ gain: Float) {
-        guard outputGain != gain else { return }
-        outputGain = gain
     }
 
     /// ハートビートの判定結果をそのまま反映する。

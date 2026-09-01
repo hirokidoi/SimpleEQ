@@ -274,6 +274,20 @@ final class AudioRuntimeMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.peak, 0.5, "走行最大値は下がらない")
     }
 
+    func testRecordPeakBeforeVolumeTracksItsOwnRunningMaximum() {
+        let metrics = AudioRuntimeMetrics()
+        metrics.recordPeakBeforeVolume(1.5)
+        metrics.recordPeak(0.5)
+        XCTAssertEqual(metrics.peakBeforeVolume, 1.5)
+        XCTAssertEqual(metrics.peak, 0.5, "音量適用後の走行最大値とは別に持つ")
+
+        metrics.recordPeakBeforeVolume(0.9)
+        XCTAssertEqual(metrics.peakBeforeVolume, 1.5, "走行最大値は下がらない")
+
+        metrics.reset()
+        XCTAssertEqual(metrics.peakBeforeVolume, 0, "リセット直後はまだ観測が無い")
+    }
+
     // MARK: - リセット (基準値方式)
 
     func testResetHasNoBaselineUntilCalled() {

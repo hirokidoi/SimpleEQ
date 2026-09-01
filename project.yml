@@ -70,7 +70,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.hirokidoi.simpleeq
         INFOPLIST_FILE: Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.0"
+        MARKETING_VERSION: "1.1"
         CURRENT_PROJECT_VERSION: "1"
         # Ad-hoc "Sign to Run Locally": バイナリ配布は行わずソースを各自ビルドする配布方針のため開発者証明書を使わない。
         CODE_SIGN_STYLE: Manual

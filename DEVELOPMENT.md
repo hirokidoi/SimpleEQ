@@ -190,6 +190,7 @@ Building the UI side itself does not touch the audio world at all. Starting subs
 
 Values shaped for display (values that have passed through clamping, smoothing, or holding) are not fed back as material for a judgement.
 When processing sits on the path from where a value is produced to where it reaches the display, overshoot and the very instant it occurred can no longer be expressed, so wherever a judgement is needed, the value is read by going back to the unprocessed form.
+The clip indication on the level meter is judged on the amplitude before the system volume is applied, the same point the meter itself is drawn from. Judging it after would leave the indication meaning one thing on an output device that carries its own volume and another where the app carries it, since only in the latter case does the system volume reach the app's gain stage at all.
 When values for a judgement arrive at a finer interval than the drawing interval, the analyzer itself takes the maximum of what arrived in that drawing interval before judging. The drawing side never accumulates several drawing intervals' worth before reading. How long a judgement's result stays displayed on screen (such as holding a clip indication) is managed by the drawing side using elapsed time.
 Even when a judgement is derived from multiple inputs, the result is not held as state. Holding it would mean chasing "the instant it changed" separately for as many inputs as there are, so the same judgement is re-read each time at the point where drawing and evaluation happen.
 
@@ -463,10 +464,10 @@ The maximum value the target occupancy has reached since the last reset. If it i
 The fact of the jump, read together with the number of re-primings (on the target-growth side), gives a sense of its frequency and scale.
 
 **Peak**
-The running maximum of the amplitude after the EQ and the app's own gain stage are applied, holding the maximum since the last reset.
-While the real output device is carrying out both volume and mute, the app's own gain stage stays at unity, so the peak reflects the EQ's output on its own, independent of where the system volume is set. Where the app is the one carrying out either of them, the peak follows what the app applies — scaled down by the volume it holds, and flat at nothing while it is the one muting.
+Two running maximums of the amplitude, each held since the last reset: one taken before the system volume is applied, one after.
+The one before is the output of the EQ and the preamp alone, and does not move with the system volume. The one after is what actually leaves for the output device: where the app's own gain stage carries volume or mute it follows what the app applies, and where the real output device carries both, the two agree.
 The amplitude itself and dBFS relative to full scale are shown together. The amplitude is dimensionless, so where it will clip is read on the dBFS side.
-If it keeps touching full scale, the EQ or preamp is boosting too much.
+The one before is what tells whether the EQ or the preamp is boosting too much. The gap between the two is how far the system volume is pulling the output down.
 
 **The driver's generation counter**
 A value that advances each time the dedicated driver starts IO and each time it changes the sample rate; the reading side uses only whether it differs from the value read last time, as a signal of a discontinuity.
@@ -568,6 +569,7 @@ The analysis step size is decided separately from the window length, so this alo
 
 Rendering and analysis are driven by the same timer. There is no dedicated analysis timer; the render timer asks the analyzer every frame to "analyze what has accumulated" and then retrieves the display values.
 Analysis processes everything that has accumulated, so the number of windows analyzed is pinned to the frequency at which analysis results arrive (the hop arrival rate) and does not change no matter what the drawing step size is set to.
+Rebuilding the analyzer does not clear the values the drawing side is already holding; those are replaced only at the next retrieval. They are dropped at the moment visibility resumes as well, since leaving them shows the previous picture until the next frame lands.
 
 The level meter's smoothing steps are held as a coefficient per update.
 Because of that, changing the interval at which analysis results arrive changes how the same step behaves in real time. When the analysis step size is moved, the layout of the steps is redrawn as well.

@@ -276,11 +276,18 @@ final class DiagnosticsTests: XCTestCase {
     // 振幅 0 は対数が定義できないため、数値ではなく下限で示す。
     func testPeakShowsAmplitudeWithItsDbfsAndHandlesSilence() {
         let silent = AudioRuntimeMetrics()
-        XCTAssertEqual(valuesOfRow("ピーク", in: silent), ["0.0000 (-inf. dBFS)"])
+        XCTAssertEqual(
+            valuesOfRow("ピーク", in: silent),
+            ["音量適用前: 0.0000 (-inf. dBFS)", "音量適用後: 0.0000 (-inf. dBFS)"]
+        )
 
         let loud = AudioRuntimeMetrics()
+        loud.recordPeakBeforeVolume(2)
         loud.recordPeak(1)
-        XCTAssertEqual(valuesOfRow("ピーク", in: loud), ["1.0000 (0.0 dBFS)"])
+        XCTAssertEqual(
+            valuesOfRow("ピーク", in: loud),
+            ["音量適用前: 2.0000 (6.0 dBFS)", "音量適用後: 1.0000 (0.0 dBFS)"]
+        )
     }
 
     // 読み手が外れても、それまでの走行最大値の痕跡は縮まない。

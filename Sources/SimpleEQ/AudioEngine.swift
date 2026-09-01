@@ -70,9 +70,6 @@ final class AudioEngine: @unchecked Sendable {
     /// 可視性の再開は含めない。
     let levelMeterRestartGeneration = AtomicUInt64(0)
 
-    /// オーディオ世界のキュー上で発火するため、受け手は表示側のスレッドへ渡し直すこと。
-    var outputGainDidChange: (@Sendable (Float) -> Void)?
-
     let runtimeMetrics = AudioRuntimeMetrics()
     func evaluateRingStalled(_ token: AudioWorldToken) -> Bool {
         guard let reader = ringReader else { return true }
@@ -156,9 +153,7 @@ final class AudioEngine: @unchecked Sendable {
 
     private func wireOutputVolumeBridge() {
         outputVolumeBridge.appGainDidChange = { [weak self] gain in
-            guard let self else { return }
-            self.outputGain = gain
-            self.outputGainDidChange?(gain)
+            self?.outputGain = gain
         }
         outputVolumeBridge.driverVolumeWriteRequested = { [weak self] volume, token in
             guard let self, let id = self.driverDeviceID, self.volumeDeviceIO.writeVolume(id, volume, token) else { return }
@@ -637,6 +632,20 @@ final class AudioEngine: @unchecked Sendable {
         for i in 0..<count { buf[i] *= preampGain }
     }
 
+    /// レベル解析へ渡す信号も返すピークも、ゲインを掛ける前の振幅。
+    func captureLevelsAndApplyOutputGain(
+        _ buf: UnsafeMutablePointer<Float>, frameCount: Int, channels: Int, gain: Float
+    ) -> Float {
+        levelMeter.capture(buf, frameCount: frameCount, channels: channels)
+
+        let count = frameCount * channels
+        var peak: Float = 0
+        for i in 0..<count { peak = max(peak, abs(buf[i])) }
+        guard gain != 1 else { return peak }
+        for i in 0..<count { buf[i] *= gain }
+        return peak
+    }
+
     // 出力コールバック実体: 常に EQ 経由で render し、結果を ioData (interleaved) へ書く。
     func renderOutput(
         _ flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
@@ -659,21 +668,17 @@ final class AudioEngine: @unchecked Sendable {
 
         guard let mData = UnsafeMutableAudioBufferListPointer(ioData).first?.mData else { return noErr }
         let dst = mData.assumingMemoryBound(to: Float.self)
-        let total = Int(frames) * Int(AudioConfig.channels)
-
-        // レベル解析はシステム音量適用前 (ビジュアライザは音量設定に影響されない)。
-        levelMeter.capture(dst, frameCount: Int(frames), channels: Int(AudioConfig.channels))
 
         let gain = outputGain
-        if gain != 1 {
-            for i in 0..<total { dst[i] *= gain }
-        }
+        let peakBeforeVolume = captureLevelsAndApplyOutputGain(
+            dst, frameCount: Int(frames), channels: Int(AudioConfig.channels), gain: gain
+        )
 
         applyOutputFade(dst, frameCount: Int(frames), channels: Int(AudioConfig.channels))
 
         recordOutputLevel(
             dst, frameCount: Int(frames), channels: Int(AudioConfig.channels),
-            effectiveOutputGain: gain, reader: ringReader
+            peakBeforeVolume: peakBeforeVolume, effectiveOutputGain: gain, reader: ringReader
         )
         return noErr
     }
@@ -682,11 +687,12 @@ final class AudioEngine: @unchecked Sendable {
     /// クロスフェード長を超えないため実害はない)。
     func recordOutputLevel(
         _ dst: UnsafePointer<Float>, frameCount: Int, channels: Int,
-        effectiveOutputGain: Float, reader: SharedRingReader?
+        peakBeforeVolume: Float, effectiveOutputGain: Float, reader: SharedRingReader?
     ) {
         var peak: Float = 0
         for i in 0..<(frameCount * channels) { peak = max(peak, abs(dst[i])) }
         runtimeMetrics.recordPeak(peak)
+        runtimeMetrics.recordPeakBeforeVolume(peakBeforeVolume)
         reader?.observeOutputLevel(peak: peak, effectiveOutputGain: effectiveOutputGain, frames: frameCount)
     }
 

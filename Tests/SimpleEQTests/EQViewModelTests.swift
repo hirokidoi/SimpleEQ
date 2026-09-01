@@ -1654,6 +1654,32 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(vm.stereoLevel, engine.levelMeter.snapshot().stereo)
     }
 
+    // 解析器を作り直しても表示値は次の tick まで残るため、再開の時点で捨てないと前回の絵が一瞬出る。
+    func testActivatingTheVisualizerDropsTheValuesLeftFromTheLastActivation() {
+        let store = SettingsStore(defaults: defaults)
+        let (vm, engine) = makeVMWithEngine(store)
+        let unobserved = LevelMeter.Snapshot.silent(bandCount: EQSpec.bandCount)
+
+        vm.visualizerActive = true
+        let frameCount = 8192
+        let channels = Int(AudioConfig.channels)
+        let interleaved = [Float](repeating: 1.0, count: frameCount * channels)
+        interleaved.withUnsafeBufferPointer { ptr in
+            engine.levelMeter.capture(ptr.baseAddress!, frameCount: frameCount, channels: channels)
+        }
+        vm.tick(now: Date(timeIntervalSinceReferenceDate: 1))
+        XCTAssertNotEqual(vm.levels, unobserved.levels, "前提: 閉じる前に観測値が乗っていること")
+        XCTAssertNotEqual(vm.peaks, unobserved.peaks, "前提: ピークにも観測値が乗っていること")
+        XCTAssertNotEqual(vm.stereoLevel, unobserved.stereo, "前提: L/R にも観測値が乗っていること")
+
+        vm.visualizerActive = false
+        vm.visualizerActive = true
+
+        XCTAssertEqual(vm.levels, unobserved.levels, "再開の時点で未観測へ戻ること")
+        XCTAssertEqual(vm.peaks, unobserved.peaks)
+        XCTAssertEqual(vm.stereoLevel, unobserved.stereo)
+    }
+
     // MARK: - クリップ表示のホールド
 
     func testClipHoldKeepsLightingForTheHoldDurationThenDecaysByDrawTimeAlone() {

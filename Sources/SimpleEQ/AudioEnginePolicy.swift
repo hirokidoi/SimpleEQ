@@ -13,8 +13,8 @@ func isExcludedFromOutputPicker(uid: String, driverDeviceUID: String?, containsD
 
 /// 判定には頭打ちも平滑化もしていない生のピーク振幅を渡すこと (表示用のレベル値は表示レンジで
 /// 頭打ちにされ超過を表せない)。ちょうどフルスケールは超過に含めない。
-func outputExceedsFullScale(peakAmplitude: Float, outputGain: Float) -> Bool {
-    peakAmplitude * outputGain > 1
+func outputExceedsFullScale(peakAmplitude: Float) -> Bool {
+    peakAmplitude > 1
 }
 
 /// 出力先の切替要否 (outputSwitchDecision の結果)。

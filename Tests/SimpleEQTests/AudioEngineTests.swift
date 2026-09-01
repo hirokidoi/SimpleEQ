@@ -860,6 +860,50 @@ final class AudioEngineTests: XCTestCase {
 
     // MARK: - 出力段の水準の受け渡し (ピークの観測と、無音判定の材料)
 
+    func testCaptureLevelsAndApplyOutputGainReturnsThePeakMeasuredBeforeTheGain() {
+        let engine = AudioEngine()
+        let channels = Int(AudioConfig.channels)
+
+        var attenuated: [Float] = [1.5, -0.5]
+        let attenuatedPeak = attenuated.withUnsafeMutableBufferPointer {
+            engine.captureLevelsAndApplyOutputGain($0.baseAddress!, frameCount: 1, channels: channels, gain: 0.5)
+        }
+        XCTAssertEqual(attenuatedPeak, 1.5, "返るピークは音量を掛ける前の振幅")
+        XCTAssertEqual(attenuated, [0.75, -0.25], "バッファには音量が適用される")
+
+        var muted: [Float] = [1.5, -1.5]
+        let mutedPeak = muted.withUnsafeMutableBufferPointer {
+            engine.captureLevelsAndApplyOutputGain($0.baseAddress!, frameCount: 1, channels: channels, gain: 0)
+        }
+        XCTAssertEqual(mutedPeak, 1.5, "消音中も掛ける前の振幅を返す")
+        XCTAssertEqual(muted, [0, 0])
+
+        var unity: [Float] = [0.25, -0.75]
+        let unityPeak = unity.withUnsafeMutableBufferPointer {
+            engine.captureLevelsAndApplyOutputGain($0.baseAddress!, frameCount: 1, channels: channels, gain: 1)
+        }
+        XCTAssertEqual(unityPeak, 0.75)
+        XCTAssertEqual(unity, [0.25, -0.75], "ユニティではバッファを書き換えない")
+    }
+
+    func testCaptureLevelsAndApplyOutputGainFeedsTheAnalyzerBeforeTheGain() {
+        let engine = AudioEngine()
+        let channels = Int(AudioConfig.channels)
+        let fftSize = LevelMeter.deriveFFTSize(sampleRate: engine.levelMeter.appliedSampleRate)
+        let frameCount = LevelMeter.deriveHopSize(fftSize: fftSize)
+
+        var buffer = [Float](repeating: 1.5, count: frameCount * channels)
+        _ = buffer.withUnsafeMutableBufferPointer {
+            engine.captureLevelsAndApplyOutputGain(
+                $0.baseAddress!, frameCount: frameCount, channels: channels, gain: 0.5
+            )
+        }
+
+        let clip = engine.levelMeter.analyzeAvailableHops()
+        XCTAssertTrue(clip.left, "音量を掛ける前の振幅で超過を判定する")
+        XCTAssertTrue(clip.right)
+    }
+
     // 出力コールバックの末尾で 1 回だけ走る受け渡しを直接駆動して結線を固定する。
     func testRecordOutputLevelPassesThePostVolumePeakWithTheEffectiveOutputGain() throws {
         let engine = AudioEngine()
@@ -872,34 +916,52 @@ final class AudioEngineTests: XCTestCase {
         let threshold = OccupancyPolicy.silenceLevelThresholdAmplitude
         // 素の閾値だけを見れば無音と判定される水準。
         let quietPeak = threshold * 0.5
-        func record(_ value: Float, gain: Float) {
+        func record(_ value: Float, gain: Float, beforeVolume: Float) {
             let buffer = [Float](repeating: value, count: frameCount * channels)
             buffer.withUnsafeBufferPointer {
                 engine.recordOutputLevel(
                     $0.baseAddress!, frameCount: frameCount, channels: channels,
-                    effectiveOutputGain: gain, reader: reader
+                    peakBeforeVolume: beforeVolume, effectiveOutputGain: gain, reader: reader
                 )
             }
         }
 
         // 閾値は実効出力ゲインを掛けて比べる。
-        record(quietPeak, gain: 0.25)
+        record(quietPeak, gain: 0.25, beforeVolume: quietPeak * 4)
         XCTAssertEqual(reader.silentOutputFrameCount, 0, "音量を絞っただけの通常再生は無音にしない")
 
         // 渡すピークは音量適用後のバッファそのもの (適用前の値へ戻して渡さない)。
         XCTAssertEqual(engine.runtimeMetrics.peak, quietPeak, accuracy: 1e-9, "ピークは音量適用後の実出力")
 
         // 同じバッファでも、音量を絞っていない回は閾値を下回り静けさとして積まれる。
-        record(quietPeak, gain: 1)
+        record(quietPeak, gain: 1, beforeVolume: quietPeak)
         XCTAssertEqual(reader.silentOutputFrameCount, frameCount)
 
         // 消音 (ゲイン 0) でも受け渡しは行われ、静けさの継続が伸びる (消音中に捨てるのは望ましい)。
-        record(0, gain: 0)
+        record(0, gain: 0, beforeVolume: threshold * 10)
         XCTAssertEqual(reader.silentOutputFrameCount, frameCount * 2, "消音中も静けさとして数える")
 
         // 静かでない回は数え直す。
-        record(threshold * 10, gain: 1)
+        record(threshold * 10, gain: 1, beforeVolume: threshold * 10)
         XCTAssertEqual(reader.silentOutputFrameCount, 0, "静かでない回は継続を 0 へ戻す")
+    }
+
+    func testRecordOutputLevelRecordsTheTwoPeaksSeparately() {
+        let engine = AudioEngine()
+        let frameCount = 128
+        let channels = Int(AudioConfig.channels)
+        let exceedingPeak: Float = 1.5
+
+        let buffer = [Float](repeating: 0, count: frameCount * channels)
+        buffer.withUnsafeBufferPointer {
+            engine.recordOutputLevel(
+                $0.baseAddress!, frameCount: frameCount, channels: channels,
+                peakBeforeVolume: exceedingPeak, effectiveOutputGain: 0, reader: nil
+            )
+        }
+
+        XCTAssertEqual(engine.runtimeMetrics.peak, 0, "音量適用後は渡したバッファそのもの")
+        XCTAssertEqual(engine.runtimeMetrics.peakBeforeVolume, exceedingPeak, accuracy: 1e-9)
     }
 
     // MARK: - レート変更の検知・再構築 (実クラス経由)
@@ -1523,9 +1585,6 @@ final class AudioActivationCoordinatorTests: XCTestCase {
         engine.outputVolumeBridge.rebind(outputUID: "app-mode-uid", outputDeviceID: deviceID, driverVolume: 1, driverMuted: false, testToken)
         XCTAssertEqual(engine.outputVolumeBridge.volumeMode, .app, "前提: プロパティ無しのデバイス")
 
-        let notified = Recorded<[Float]>([])
-        engine.outputGainDidChange = { gain in notified.update { $0.append(gain) } }
-
         engine.applyDriverVolumeAndMute(volume: 0.25, muted: false, testToken)
         XCTAssertEqual(engine.outputGain, effectiveOutputGain(volume: 0.25, muted: false))
         XCTAssertNotEqual(engine.outputGain, 1, "前提: 音量を下げた回はユニティから外れること")
@@ -1537,9 +1596,6 @@ final class AudioActivationCoordinatorTests: XCTestCase {
         // 音量を戻せば実効ゲインも戻る (保持したまま取り残されない)。
         engine.applyDriverVolumeAndMute(volume: 1, muted: false, testToken)
         XCTAssertEqual(engine.outputGain, effectiveOutputGain(volume: 1, muted: false))
-
-        XCTAssertEqual(notified.value.count, 3, "前提: 変更のたびに通知されること")
-        XCTAssertEqual(notified.value.last, engine.outputGain, "通知に渡る値と保持値が一致すること")
     }
 
     func testOutputGainStaysUnityInDeviceModeAndRealDeviceReceivesTheValue() {
@@ -1580,18 +1636,10 @@ final class AudioActivationCoordinatorTests: XCTestCase {
 
     // MARK: - outputExceedsFullScale
 
-    // 実測レベルへ実効ゲインを掛けて判定する。
-    func testOutputExceedsFullScaleUsesPeakAfterVolume() {
-        XCTAssertFalse(outputExceedsFullScale(peakAmplitude: 1, outputGain: 1), "ちょうどフルスケールは超過ではない")
-        XCTAssertTrue(outputExceedsFullScale(peakAmplitude: 1.2, outputGain: 1))
-        // 音量を半分に絞れば、振幅 1.2 は音量適用後に 0.6 となり潰れない。
-        XCTAssertFalse(outputExceedsFullScale(peakAmplitude: 1.2, outputGain: 0.5))
-        XCTAssertTrue(outputExceedsFullScale(peakAmplitude: 2.4, outputGain: 0.5))
-    }
-
-    // 消音中は超えようがない。
-    func testOutputExceedsFullScaleIsFalseWhenMuted() {
-        XCTAssertFalse(outputExceedsFullScale(peakAmplitude: 4, outputGain: 0))
+    func testOutputExceedsFullScaleComparesAgainstFullScale() {
+        XCTAssertFalse(outputExceedsFullScale(peakAmplitude: 0.99))
+        XCTAssertFalse(outputExceedsFullScale(peakAmplitude: 1), "ちょうどフルスケールは超過ではない")
+        XCTAssertTrue(outputExceedsFullScale(peakAmplitude: 1.2))
     }
 
     func testExcludedFromOutputPickerWhenAirPlay() {

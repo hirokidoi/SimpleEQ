@@ -135,8 +135,11 @@ enum DiagnosticsReport {
                 values: [framesText(s.targetOccupancyFramesMax, s)]
             ),
             DiagnosticsRow(
-                title: "ピーク", subtitle: "EQ・アプリ側ゲイン適用後の走行最大振幅",
-                values: [peakText(s.peak)]
+                title: "ピーク", subtitle: "EQ 適用後の走行最大振幅",
+                values: [
+                    "音量適用前: " + peakText(s.peakBeforeVolume),
+                    "音量適用後: " + peakText(s.peak),
+                ]
             ),
         ])
     }

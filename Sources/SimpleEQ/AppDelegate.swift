@@ -93,9 +93,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         engine.appliedSampleRateDidChange = { [weak self] rate in
             DispatchQueue.main.async { self?.viewModel.handleAppliedSampleRateDidChange(rate) }
         }
-        engine.outputGainDidChange = { [weak self] gain in
-            DispatchQueue.main.async { self?.viewModel.updateOutputGain(gain) }
-        }
         startAudioWorldHeartbeat()
         presentUI()
         beginStartupActivation()

@@ -275,7 +275,7 @@ final class LevelMeter {
     private(set) var hopsAnalyzedForTesting = 0
 
     @discardableResult
-    func analyzeAvailableHops(outputGain: Float = 1) -> ClipObservation {
+    func analyzeAvailableHops() -> ClipObservation {
         os_unfair_lock_lock(&rebuildLock)
         defer { os_unfair_lock_unlock(&rebuildLock) }
 
@@ -351,8 +351,8 @@ final class LevelMeter {
         os_unfair_lock_unlock(&levelsLock)
 
         return ClipObservation(
-            left: stereoObserved && outputExceedsFullScale(peakAmplitude: frameLeftRoundPeak, outputGain: outputGain),
-            right: stereoObserved && outputExceedsFullScale(peakAmplitude: frameRightRoundPeak, outputGain: outputGain)
+            left: stereoObserved && outputExceedsFullScale(peakAmplitude: frameLeftRoundPeak),
+            right: stereoObserved && outputExceedsFullScale(peakAmplitude: frameRightRoundPeak)
         )
     }
 

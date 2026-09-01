@@ -447,16 +447,27 @@ final class AudioRuntimeMetrics {
         ringCapacityStorage.store(UInt64(frames))
     }
 
-    // MARK: - ピーク (音量適用後の出力振幅の走行最大値)
+    // MARK: - ピーク (出力振幅の走行最大値)
 
     private let peakStorage = AtomicUInt64(0)
+    private let peakBeforeVolumeStorage = AtomicUInt64(0)
 
     private var rawPeak: Float { Float(bitPattern: UInt32(truncatingIfNeeded: peakStorage.value)) }
 
+    private var rawPeakBeforeVolume: Float {
+        Float(bitPattern: UInt32(truncatingIfNeeded: peakBeforeVolumeStorage.value))
+    }
+
     var peak: Float { rawPeak }
+
+    var peakBeforeVolume: Float { rawPeakBeforeVolume }
 
     func recordPeak(_ peak: Float) {
         if peak > rawPeak { peakStorage.store(UInt64(peak.bitPattern)) }
+    }
+
+    func recordPeakBeforeVolume(_ peak: Float) {
+        if peak > rawPeakBeforeVolume { peakBeforeVolumeStorage.store(UInt64(peak.bitPattern)) }
     }
 
     // MARK: - リセット (累積カウンタ・窓統計は基準値方式、走行最大値と直近イベントの値は書き直し)
@@ -486,6 +497,7 @@ final class AudioRuntimeMetrics {
         resetBaseline.reprimeDueToWriterStallCount = reprimeDueToWriterStallCounter.value
         resetBaseline.reprimeDueToTargetGrowthCount = reprimeDueToTargetGrowthCounter.value
         peakStorage.store(0)
+        peakBeforeVolumeStorage.store(0)
         // 0 ではなくリセット時点の目標を起点にする (現在値を下回らないため)。読めていない間は
         // 0 から数え直す。
         targetOccupancyRunningMaxStorage.store(readerObserved ? UInt64(max(0, targetOccupancyFrames)) : 0)
@@ -547,6 +559,7 @@ final class AudioRuntimeMetrics {
         let maxOccupancyFrames: Int
         let ringCapacityFrames: Int
         let peak: Float
+        let peakBeforeVolume: Float
         let lastResetAt: Date?
     }
 
@@ -595,6 +608,7 @@ final class AudioRuntimeMetrics {
             maxOccupancyFrames: maxOccupancyFrames,
             ringCapacityFrames: ringCapacityFrames,
             peak: peak,
+            peakBeforeVolume: peakBeforeVolume,
             lastResetAt: lastResetAt
         )
     }
