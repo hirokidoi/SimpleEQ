@@ -255,7 +255,7 @@
 				// アプリ本体 (project.yml) と同一。ドライバはアプリと組で配布・運用され、下限を別々に
 				// 管理する理由が無い。
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0;
 				// SimpleEQAudio.c の kPlugIn_BundleID マクロと同一値に統一している。
 				PRODUCT_BUNDLE_IDENTIFIER = com.hirokidoi.simpleeq.driver;
 				PRODUCT_NAME = SimpleEQAudio;
@@ -278,7 +278,7 @@
 				INFOPLIST_FILE = SimpleEQAudio/SimpleEQAudio.plist;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Audio/Plug-Ins/HAL";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hirokidoi.simpleeq.driver;
 				PRODUCT_NAME = SimpleEQAudio;
 				WRAPPER_EXTENSION = driver;

@@ -234,6 +234,93 @@ final class DiagnosticsTests: XCTestCase {
         }
     }
 
+    // MARK: - ミキサー
+
+    private func makeMixerMetrics(readerObserved: Bool) -> AudioRuntimeMetrics {
+        let metrics = AudioRuntimeMetrics()
+        metrics.recordReaderObserved(readerObserved)
+        metrics.recordMixerDriverObservation(MixerDriverObservation(
+            slotsInUse: 18, slotCount: 64, leaseRemainingSeconds: 4.14,
+            slotOverflowCount: 2, neutralizedCount: 3, gainEntryDroppedCount: 4
+        ))
+        metrics.recordMixerCoordination(MixerCoordinationObservation(
+            channelCount: 3, nonNeutralChannelCount: 1, resolvedByPrivateAPICount: 6,
+            resolvedByParentCount: 2, resolvedAsProcessCount: 3, unresolvedCount: 0,
+            privateAPIAvailable: true
+        ))
+        return metrics
+    }
+
+    func testMixerRowsCarryTheObservedValues() {
+        let metrics = makeMixerMetrics(readerObserved: true)
+        XCTAssertEqual(valuesOfRow("アプリ別ゲイン", in: metrics), ["3 / 1"])
+        XCTAssertEqual(valuesOfRow("接続中のクライアント", in: metrics), ["18 / 64"])
+        XCTAssertEqual(valuesOfRow("アプリの特定", in: metrics), ["6 / 2 / 3 / 0"])
+        XCTAssertEqual(valuesOfRow("特定に使える手段", in: metrics), ["非公開 API + 親プロセス"])
+        XCTAssertEqual(valuesOfRow("ゲイン制御のリース", in: metrics), ["4.1 s"])
+        XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["2 回"])
+        XCTAssertEqual(valuesOfRow("リース失効によるゲイン解除", in: metrics), ["3 回"])
+        XCTAssertEqual(valuesOfRow("ゲインの受け渡し失敗", in: metrics), ["4 件"])
+    }
+
+    /// 非公開 API による集約が効いているかの点検。壊れ方が静かなので、そのものを出す。
+    func testMixerResolutionMeansIsShownAsFallbackOnlyWhenTheSymbolIsMissing() {
+        let metrics = makeMixerMetrics(readerObserved: true)
+        metrics.recordMixerCoordination(MixerCoordinationObservation(privateAPIAvailable: false))
+        XCTAssertEqual(valuesOfRow("特定に使える手段", in: metrics), ["親プロセスのみ"])
+    }
+
+    /// 「異常の痕跡」はリセット以降の累計。ドライバ由来の他のカウンタと同じ扱いにする。
+    func testMixerCountersAreRebasedByReset() {
+        let metrics = makeMixerMetrics(readerObserved: true)
+        XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["2 回"])
+
+        metrics.reset()
+        XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["0 回"])
+        XCTAssertEqual(valuesOfRow("リース失効によるゲイン解除", in: metrics), ["0 回"])
+        XCTAssertEqual(valuesOfRow("ゲインの受け渡し失敗", in: metrics), ["0 件"])
+
+        metrics.recordMixerDriverObservation(MixerDriverObservation(
+            slotsInUse: 18, slotCount: 64, leaseRemainingSeconds: 4.14,
+            slotOverflowCount: 5, neutralizedCount: 3, gainEntryDroppedCount: 4
+        ))
+        XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["3 回"], "リセット後の増分だけを出す")
+    }
+
+    /// ドライバが共有領域を作り直すとカウンタは 0 から数え直しになる。基準を残すと増分が出なくなる。
+    func testMixerCountersReanchorWhenTheDriverStartsOver() {
+        let metrics = makeMixerMetrics(readerObserved: true)
+        metrics.reset()
+        metrics.recordMixerDriverObservation(MixerDriverObservation(
+            slotsInUse: 18, slotCount: 64, leaseRemainingSeconds: 4.14,
+            slotOverflowCount: 9, neutralizedCount: 9, gainEntryDroppedCount: 9
+        ))
+        XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["7 回"])
+
+        metrics.recordMixerDriverObservation(MixerDriverObservation(
+            slotsInUse: 18, slotCount: 64, leaseRemainingSeconds: 4.14,
+            slotOverflowCount: 1, neutralizedCount: 1, gainEntryDroppedCount: 1
+        ))
+        XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["1 回"], "巻き戻ったら基準を立て直す")
+        XCTAssertEqual(valuesOfRow("リース失効によるゲイン解除", in: metrics), ["1 回"])
+        XCTAssertEqual(valuesOfRow("ゲインの受け渡し失敗", in: metrics), ["1 件"])
+    }
+
+    func testUnarmedLeaseIsSpelledOutRatherThanShownAsZero() {
+        let metrics = makeMixerMetrics(readerObserved: true)
+        metrics.recordMixerDriverObservation(MixerDriverObservation(slotCount: 64, leaseRemainingSeconds: nil))
+        XCTAssertEqual(valuesOfRow("ゲイン制御のリース", in: metrics), ["制御なし"])
+    }
+
+    /// 共有メモリ由来の現在の状態は読み手が居ないと観測できない。内訳と累計はそのまま出す。
+    func testMixerCurrentStateIsUnobservedWhileNoReaderIsAttached() {
+        let metrics = makeMixerMetrics(readerObserved: false)
+        XCTAssertEqual(valuesOfRow("接続中のクライアント", in: metrics), [unreadableValue])
+        XCTAssertEqual(valuesOfRow("ゲイン制御のリース", in: metrics), [unreadableValue])
+        XCTAssertEqual(valuesOfRow("アプリの特定", in: metrics), ["6 / 2 / 3 / 0"])
+        XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["2 回"])
+    }
+
     private func valuesOfRow(_ title: String, in metrics: AudioRuntimeMetrics) -> [String]? {
         DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate))
             .flatMap { $0.rows }.first { $0.title == title }?.values

@@ -276,6 +276,6 @@ final class RingWritePlanTests: XCTestCase {
     /// レイアウトを変えたらレイアウトバージョンも動かす必要があることに、この比較で気づけるようにする。
     /// 期待値を導出で書くとレイアウト変更へ黙って追従してしまい、番人にならない。
     func testLayoutVersionMatchesTheValueThisFixtureTableWasWrittenAgainst() {
-        XCTAssertEqual(simpleeq_ring_expected_layout_version(), 1)
+        XCTAssertEqual(simpleeq_ring_expected_layout_version(), 2)
     }
 }

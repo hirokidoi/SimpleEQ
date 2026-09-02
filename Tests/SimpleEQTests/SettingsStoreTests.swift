@@ -717,4 +717,71 @@ final class SettingsStoreTests: XCTestCase {
         assertResetToDefaults(SettingsStore(defaults: defaults))
         XCTAssertEqual(SettingsStore(defaults: defaults).peakCapBrightenAmount, EQLayout.Tuning.peakCapBrightenAmountDefault)
     }
+
+    // MARK: - ミキサーのチャンネル
+
+    /// 足したのが Optional 1 件だけであることの検証。ここが崩れると旧データが全項目既定へ戻る。
+    func testLoadingDataWithoutMixerChannelsKeepsEveryOtherSetting() throws {
+        let gains = (0..<EQSpec.bandCount).map { Double($0 % 7) - 3 }
+        writeStoredPayload(overriding: ["gains": gains, "preset": EQPreset.slot3.rawValue, "bypass": true])
+        let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        XCTAssertNil(json["mixerChannels"], "前提: この項目を持たない保存データであること")
+        XCTAssertNil(json["mixerWindowPlacement"], "前提: この項目を持たない保存データであること")
+
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertNil(store.mixerChannels, "不在は「まだ一度も設定していない」")
+        XCTAssertNil(store.mixerWindowPlacement)
+        XCTAssertEqual(store.gains, gains, "他の項目が既定へ戻らない")
+        XCTAssertEqual(store.preset, .slot3)
+        XCTAssertTrue(store.bypass)
+    }
+
+    func testMixerWindowPlacementRoundTripsAcrossInstances() {
+        let placement = SettingsStore.WindowPlacement(
+            origin: SettingsStore.WindowOrigin(x: 120, y: 340), height: 700
+        )
+        SettingsStore(defaults: defaults).mixerWindowPlacement = placement
+        XCTAssertEqual(SettingsStore(defaults: defaults).mixerWindowPlacement, placement)
+    }
+
+    /// 空配列は「ユーザーが全部消した」であり、初回判定には使わない。
+    func testEmptyMixerChannelsIsDistinctFromNeverConfigured() {
+        let store = SettingsStore(defaults: defaults)
+        store.mixerChannels = []
+        XCTAssertEqual(SettingsStore(defaults: defaults).mixerChannels, [])
+
+        store.mixerChannels = nil
+        XCTAssertNil(SettingsStore(defaults: defaults).mixerChannels)
+    }
+
+    func testMixerChannelOrderAndValuesRoundTripAcrossInstances() {
+        let sixDbDown = pow(10, -6.0 / 20)
+        let entries = [
+            SettingsStore.MixerChannelEntry(key: MixerSpec.bundleKey("com.example.b"), gain: sixDbDown, muted: false),
+            SettingsStore.MixerChannelEntry(key: MixerSpec.processKey("afplay"), gain: 1, muted: true),
+            SettingsStore.MixerChannelEntry(key: MixerSpec.bundleKey("com.example.a"), gain: 0, muted: false),
+        ]
+        SettingsStore(defaults: defaults).mixerChannels = entries
+
+        let reloaded = SettingsStore(defaults: defaults).mixerChannels
+        XCTAssertEqual(reloaded?.map(\.key), entries.map(\.key), "並び順そのものが保存される")
+        XCTAssertEqual(reloaded?.map(\.muted), entries.map(\.muted))
+        XCTAssertEqual(reloaded?.first?.gain ?? 0, sixDbDown, accuracy: 1e-9, "刻みに乗った値はそのまま戻る")
+        XCTAssertEqual(reloaded?.last?.gain, 0, "無音はそのまま残る")
+    }
+
+    func testMixerChannelsAreSanitizedOnLoad() {
+        SettingsStore(defaults: defaults).mixerChannels = [
+            SettingsStore.MixerChannelEntry(key: "unknown:com.example.a", gain: 1, muted: false),
+            SettingsStore.MixerChannelEntry(key: MixerSpec.bundleKey("com.example.b"), gain: 4, muted: false),
+            SettingsStore.MixerChannelEntry(key: MixerSpec.bundleKey("com.example.b"), gain: 0.5, muted: true),
+        ]
+
+        let reloaded = SettingsStore(defaults: defaults).mixerChannels
+        XCTAssertEqual(reloaded?.count, 1, "未知の前置きを落とし、重複キーを畳む")
+        XCTAssertEqual(reloaded?.first?.key, MixerSpec.bundleKey("com.example.b"))
+        XCTAssertEqual(reloaded?.first?.gain, MixerGainScale.unityGain, "上限 0dB を超えない")
+        XCTAssertEqual(reloaded?.first?.muted, false, "先に現れた側を残す")
+    }
 }

@@ -100,4 +100,8 @@ enum AudioRequestKey: Hashable {
     case outputDeviceOptions
     /// キューが塞がっている間も投入は続くため、畳まないと未処理の依頼が積み上がる。
     case heartbeat
+    /// 意味があるのは最新の 1 件だけ。
+    case mixerRoster
+    /// ドラッグ中のゲイン変更が溜まらないよう 1 本にする。
+    case mixerGainTable
 }

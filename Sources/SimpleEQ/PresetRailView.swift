@@ -37,7 +37,14 @@ struct PresetRailView: View {
             }
 
             Spacer(minLength: 0)
-            settingsButton
+            // 既定のウィンドウ高ではプリセットの最低高が効いて縦 2 段が入らないため横並びにする。
+            HStack(spacing: 8) {
+                railButton("slider.horizontal.3", help: "Mixer", caption: "Mixer") { onOpenWindow(.mixer) }
+                railButton("gearshape", help: "Settings", width: EQLayout.railCompactButtonWidth) {
+                    // option を押しながらの操作では Diagnostics を開く (メニューバーの隠し項目と同じ条件)。
+                    onOpenWindow(DiagnosticsEntry.isRevealed ? .diagnostics : .settings)
+                }
+            }
         }
         .padding(16)
         .frame(width: EQLayout.railWidth)
@@ -141,25 +148,28 @@ struct PresetRailView: View {
         )
     }
 
-    private var settingsButton: some View {
-        Button {
-            // option を押しながらの操作では Diagnostics を開く (メニューバーの隠し項目と同じ条件)。
-            onOpenWindow(DiagnosticsEntry.isRevealed ? .diagnostics : .settings)
-        } label: {
-            HStack(spacing: 8) {
-                Text("⚙")
-                Text("Settings")
+    /// 幅を詰めた側はラベルが入らないため、行き先はツールチップで補う。
+    private func railButton(
+        _ symbolName: String, help: String, caption: String? = nil, width: CGFloat? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbolName)
+                if let caption { Text(caption) }
             }
             .font(.system(size: 13, weight: .semibold))
             .foregroundColor(EQLayout.Palette.dim)
-            .frame(maxWidth: .infinity)
+            .frame(width: width)
+            .frame(maxWidth: width == nil ? .infinity : nil)
             .padding(.vertical, 11)
-            // ラベルの余白部分もクリック対象にし、ボタン全域を押せるようにする (文字だけに限定しない)。
+            // ラベルの余白部分もクリック対象にし、ボタン全域を押せるようにする (記号だけに限定しない)。
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.02)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(EQLayout.Palette.line, lineWidth: 1))
+        .help(help)
         .onHover { hovering in
             if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }

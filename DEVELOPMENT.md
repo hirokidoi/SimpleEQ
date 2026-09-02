@@ -40,6 +40,7 @@ All of these states can be inspected as actual numbers from the Diagnostics scre
 - **Token** — An empty type, carrying no data, that can only be created on the audio world's queue. Every function that mutates an audio resource requires this token as an argument, so an attempt to call such a function from outside the queue fails to compile. The token does not exist to carry a value. What it carries is proof that execution is happening somewhere the call is allowed (on the audio world's queue), and nothing else. Mistaking this property makes the discussion of the crossing rules that follows — the distinction that a request can be submitted but direct reads and writes cannot — impossible to follow.
 - **Occupancy / target occupancy / ceiling occupancy** — Occupancy is the amount of audio accumulated in the ring that has not yet been read; target occupancy is the level the reading side tries to hold it at; ceiling occupancy is the boundary past which correction becomes necessary. The mechanism that maintains the relationship among these three is the subject of → Occupancy Control.
 - **Priming** — Stopping consumption and waiting until occupancy reaches the target. Beginning consumption before it is reached breaks the instantaneous floor and cuts the audio off, so this wait is entered not only on starting and resuming playback but also when the target has grown so that the current occupancy no longer reaches it, and when occupancy has run dry.
+- **Control lease** — The expiry the app attaches to the per-application gains it pushes to the dedicated driver, renewed for as long as the app is running. Once it passes, the driver returns every client to neutral on its own, so gains cannot outlive the app that set them.
 - **Heartbeat** — A unit of no-op work posted periodically to the audio world's queue. The fact that it runs and returns a timestamp is itself the evidence that the queue is not stuck.
 - **Presentation time** — The time the HAL hands to the dedicated driver on every IO cycle, representing when that audio will be played. The dedicated driver separately counts and records cycles where this time did not advance from the previous cycle (stalls) and cycles where the way it was given is itself inconsistent (inconsistencies), but does not use them to decide whether to write.
 - **Bypass** — The state in which the EQ and preamp processing is skipped and the input is passed straight to the output. Switching it does not change the audio path itself (dedicated driver → shared memory → audio engine → output device).
@@ -57,6 +58,7 @@ Everything else (the skeleton of AudioServerPlugIn property dispatch, the basic 
 - Writing audio out to shared memory (the layout definition lives in `Driver/Shared/`)
 - Custom properties for the visibility override and the display-name override (showing/hiding the device from the general UI and switching the display name at runtime)
 - A custom property for synthesizing drift (kept hidden as a standalone device custom property; for accelerated testing)
+- A custom property carrying the per-application gains, and a table of the clients attached to the device, through which those gains are applied to each client's own output (→ The Per-Application Mixer)
 - A setup in which the dB range of the Volume/Mute controls is obtained from the single source in the shared header. These controls themselves, however, do not act on the audio on the path (→ Operating Rules for the Dedicated Driver)
 - Following multiple sample rates and deriving the ring capacity
 - Declaring the device icon (pointing at an image bundled into the bundle)
@@ -78,7 +80,11 @@ A hidden custom property (one not exposed to the general UI) is not protected by
 The visibility override is held as a custom property because the standard selector does not work for it. The standard selector that expresses whether a device is hidden from the general UI has its writes from external clients rejected by the host.
 Replacing it on the assumption that the standard one suffices makes writes silently stop taking effect.
 
-The Volume/Mute controls the driver exposes are the window through which the system's volume keys and volume UI operate; the driver itself does not act on the audio passing through it.
+The driver acts on the audio passing through it in exactly one way: it multiplies each client's own output buffer by a per-application gain, in place, before that audio is mixed and written to the ring. The table of gains is pushed in by the app as a custom property, and the driver interprets nothing about it — it only matches the key against the seat it handed that client and applies what it was told. Every other decision (which process belongs to which application, what gain a row should carry) is made by the app, because resolving the responsible application needs interfaces that have no business running inside the host's audio service.
+
+A gain that is not neutral is only honored while the push that set it is still current. Each push carries a control lease, and once it expires, the driver ramps every client back to neutral on its own. This is the single condition that covers the app being quit, killed, or hung — nothing about the audio path is left muted by an app that is no longer there.
+
+The Volume/Mute controls the driver exposes are a separate matter. They are the window through which the system's volume keys and volume UI operate, and the driver does not act on the audio on their behalf.
 Volume and mute are each carried out either by the real output device or by the app's own gain stage, and which one it is is decided separately for each, from what that device supports. A state where the device carries out volume while the app carries out mute is therefore reachable, and neither side may assume the two agree.
 Where the app's own gain stage is the one carrying it out, the gain is derived from the same dB range the driver declared.
 The upper end of that range being unity is what structurally guarantees that the app's output stage never moves into amplification even when the system volume is at maximum. Moving the upper end loses that guarantee.
@@ -139,8 +145,11 @@ The visibility of the shared region rests solely on publication order. This orde
 The reading side confirms the sequence number is **even** before reading the contents, and after reading, reads the sequence number once more to see whether the two match.
 Reads where it was odd, and reads where the two disagreed, discard that read's value and use the previous snapshot
 
-Some fields have no ordering pair. The most recent IO cycle length and the group of metrics concerning the write position are those fields; these only rule out races, and guarantee no ordering.
+Some fields have no ordering pair. The most recent IO cycle length, the group of metrics concerning the write position, and the per-client activity a seat in the client table carries (its cycle counter, its peak, its clip count, the gain being applied to it) are those fields; these only rule out races, and guarantee no ordering.
 They are values read as a rough indication, and their ordering relative to other values carries no meaning. When adding a field, decide first which of the two treatments it gets.
+
+The client table applies the pairing above one seat at a time: the process and bundle a seat describes are written first, and the seat's identifying value is published last, so a reading side that sees a non-zero identifying value can read the rest of that seat. Freeing a seat invalidates its identifying value before anything else is touched, for the same reason recreating the shared memory file does.
+Of the per-application gains, only the expiry that governs them lives here; the gains themselves are held in the driver's own memory (→ The Per-Application Mixer).
 
 The last snapshot needs a caution the other three do not.
 Because **the reading side does not retry** by design, if the sequence number sticks at an odd value, the reading side's timestamp stops updating entirely from then on.
@@ -167,6 +176,8 @@ These resources may be touched only on this queue, and every operation that muta
 What the token binds is ownership and mutation; it does not bind references themselves. Individual CoreAudio calls can block when coreaudiod backs up, so no path is created that calls them directly from outside this serial queue.
 
 The analyzer does not count as one of these resources. Capture and analysis/display are directly connected as a single producer and a single consumer, so it is treated as being outside the scope of this rule.
+
+The per-application meter values are carved out for the same reason and in the same shape: the realtime output callback folds what the driver left in the client table into a fixed-size holder, and the drawing side takes it from there. The holder is a single producer and a single consumer, holds nothing but fixed-length arrays and atomic scalars, and no new exception has to be invented for it. What does not go through it is the roster — which client is present, and which application it belongs to — because that is not a per-frame value and copying strings is not something the realtime path does. The roster is read as an ordinary low-frequency request on the audio world's queue.
 
 The analyzer's internals (the working buffers, the analysis window, the capture ring) are rebuilt whenever the sample rate changes. The rebuild is mutually exclusive with analysis by way of a lock, but capture is a realtime path and therefore takes no lock. That the two never overlap is guaranteed solely by the ordering that **the rebuild is only ever done while the output stage is stopped**. This order is detected neither by the compiler nor by the tests, so when adding places that call the rebuild, always confirm that the output stage is stopped at that point. The fact that the analyzer reference itself never moves is no substitute for this ordering.
 
@@ -201,6 +212,24 @@ No warning is shown while the check is in progress, so right after launch there 
 
 The divergence occurs in the other direction as well. In the interval where the driver has been found but the first assembly at launch has not finished and the output path cannot be established, no warning is shown and the controls remain enabled as well.
 This is meant to avoid reporting an absence at a stage where nothing has been tried yet as an anomaly, but this interval is the only one where the fact that "there is no way for it to affect the audio" surfaces in neither presentation.
+
+---
+
+## The Per-Application Mixer
+
+The division of labour is that the driver applies gains and decides nothing, and the app decides everything and touches no audio. What the driver is handed is a table of keys and gains; it matches a client against that table and multiplies. Which process belongs to which application, and what gain a row carries, are both settled on the app's side, because working that out needs interfaces that have no business running inside the host's audio service.
+
+Tracing a client back to an application falls through four steps, in order: ask the system which process is responsible for it; failing that, walk up to the parent process; failing that, take the process as the application itself; failing that, give up. Giving up means no row and no entry — a client that cannot be named is not offered as something to control. The first step exists because an application that plays through a helper process would otherwise appear as the helper rather than as itself, and because two applications embedding the same framework would otherwise collapse into a single row under one bundle identifier. The symbol it calls is not part of the published interface, so it is looked up at run time and held as an optional: writing a declaration and calling it directly makes the app fail to launch wherever the symbol is absent. The step's availability is therefore a state the app can be in, and one that degrades silently, so it is surfaced in the Diagnostics screen rather than left to be inferred.
+
+Two key spaces are in play and they must not be confused. What a row is saved under is chosen by the app and never moves for the driver's convenience. What a client is matched against is built by the shared header, from the client's own bundle identifier or, lacking one, its process id. A row saved under an application's identifier can therefore own several match keys at once, one per helper process, and the two spaces are related only through the resolution above. Both use the same `bundle:` prefix on the way in, which is exactly why the distinction has to be held deliberately.
+
+A gain that is not neutral is only honored while its push is current (→ Control lease). The app renews on a period derived from the lease's own length, so the two cannot drift apart into a state where renewal arrives after expiry. Neutral rows are left out of the table entirely, which is what makes "nothing is being controlled" and "nothing is being pushed" the same condition, decided by comparing tables alone. The gains are written before the expiry is armed, so a realtime reader that sees an armed expiry is guaranteed to see the gains it governs.
+
+A row keeps the match keys its clients have been seen under, so an application that is relaunched is matched the moment it takes a seat rather than at whatever pass comes next. What is kept is narrower than what is matched: only a key built from a bundle identifier inside the row's own namespace, since a key built from a process id names a process that no longer exists, and a key built from a shared framework's identifier would go on being applied to whatever else embeds that framework once this application is gone. What bounds the set is the rows themselves: deleting a row forgets the keys it held.
+
+A match key can still turn out to name the clients of two different applications at once, and then it belongs to neither: it is left out of the table entirely rather than resolved in favour of one. Having a row is not what puts an application into that count — every application the keys in play reach is counted, since a key that would reach one is no more another row's own for that application having been left unarranged. Those clients keep whatever the system gives them, which is the same outcome as having no row at all, and is preferable to one row's setting silently reaching another application's audio.
+
+The per-frame side is carved out the same way the analyzer is (→ Crossing Rules). What the realtime callback folds is fixed-width numbers only; the roster — which client is present and which application it belongs to — is read as an ordinary low-frequency request, because it carries strings and a name is not a per-frame value.
 
 ---
 
@@ -528,6 +557,15 @@ The right edge of the fill is the current occupancy, and the divider line marks 
 If it is temporary, it is within expectations as consumption of the margin Occupancy Control assumes; if it is sustained or frequent, it is grounds for suspecting the system is being pushed, read together with the increases in each counter.
 Note that the gauge's current position is the median of the window statistics and is a different value from the instantaneous occupancy the realtime path actually uses for its judgements. While the reader cannot observe, the current, target, and ceiling values are all drawn as 0.
 
+**The per-application gains and the clients behind them**
+The channel count is what the user has arranged; the count beside it is how many of those are set to anything other than unity. The client count is how many processes are attached to the dedicated driver against the size of the table that holds them, which is mostly system daemons that never produce a sound — a client being listed says nothing about whether it is playing.
+The breakdown of how each client was traced back to an application says which of the four steps decided it. The row above it says which of those steps are available at all: losing the first one is a silent degradation, in which processes that share a bundle identifier collapse into one row, so the availability is shown in its own right rather than inferred from the breakdown.
+The lease is the remaining time on the expiry that governs those gains. It reads as absent whenever no channel is set to anything other than unity, since there is nothing to take away then.
+
+**Failures on the mixer's path**
+These three answer the same question — why a gain did not take effect — at three different points, and all are normally zero.
+A registration failure means a client could not be placed in the driver's table, so nothing can tell which application its audio belongs to and its gain never applies. A release by lease expiry means the app stopped renewing and the driver returned every client to unity on its own, which is the failure path for the app being killed or hung. A handover failure means the driver received more gains than its table holds and dropped the remainder, which leaves exactly those applications unaffected.
+
 ### Export
 
 The export uses a snapshot newly taken from the audio world at the moment it runs, not the values currently shown on screen.
@@ -559,6 +597,10 @@ Doing this unconditionally on paths that write values at high frequency, such as
 For that reason, per-frame display values are not routed through `@Published`; they are reflected directly on the CALayer side.
 On paths that do use `@Published`, such as state changes during a drag, assignments are filtered so that a notification is emitted only when the value actually changed.
 
+Colors applied on a per-frame path are built from their RGB components directly. Going through a SwiftUI `Color` to reach a `CGColor` resolves against the environment on every call, and doing that for each element of each frame costs more than the drawing it feeds. A color that depends only on fixed inputs — an element's index, whether it is lit — is built once and kept.
+
+Periodic work whose only purpose is to drive a window's contents is gated on whether that window is visible. Closing a window does not detach the views inside it, so a view leaving its window is not a signal that arrives on close, and work gated on that alone keeps running for the rest of the session. Hiding a window without closing it delivers no delegate callback at all, so each place that hides one applies the gating itself. The auxiliary windows share a single rule for the decision, so that the gating of one cannot drift from another's. The EQ window's own drawing timer is not among them; it is gated on its own path.
+
 If the internal identifier (action) assigned to a menu bar item contains certain words, the OS regards it as a standard settings command and may automatically attach an icon to the display.
 What triggers this behavior is the internal identifier itself rather than the item's displayed text, so changing the displayed text does not avoid it.
 
@@ -576,6 +618,8 @@ Because of that, changing the interval at which analysis results arrive changes 
 
 Tuning items that have a range or a set of steps assume that the default value falls within that range or set of steps.
 Falling outside makes the corresponding slider unable to show its initial position, and makes the "restore defaults" operation write a value outside the range.
+
+`NSWindowController` takes the window's delegate for itself when it is created. A delegate assigned before that is replaced with no diagnostic of any kind, and none of its callbacks arrive; the window still opens and closes normally, so the failure reads as a fault in whatever the callbacks were meant to do. Assign the delegate after the controller exists.
 
 A window without a frame cannot become the key window by default, and has no standard path for the close operation either.
 
@@ -615,6 +659,10 @@ Optional is reserved for items whose absence itself carries meaning — denoting
 
 The output device selection has two independent pieces of state: the persistence as the default to use at the next launch, and the selection actually switched to in the current session.
 Changing the former does not affect the latter, and the latter is session-only and not persisted.
+
+What identifies a resource — the key it is persisted under, and the key it is resolved through — is a symbolic value that does not move with how the resource is presented: a device's UID, a process's bundle identifier. A display name is for display, and the name shown is looked up from the identifier each time rather than stored alongside it. A name is not stable enough to resolve through: it is absent while the thing is hidden, it arrives late across process boundaries, and it changes for reasons that have nothing to do with identity. Where a display name is found in use as a key, it is treated as belonging to the same problem as every other such use rather than as a separate concern.
+
+An identifier that names one of a fixed number of slots carries the slot and nothing else. Whatever a slot happens to start out holding — a title, a curve, a default value — lives in a separate table keyed by that identifier. Giving some slots meaningful names while the rest are left with placeholder ones puts the initial contents inside the identity, and the asymmetry then spreads into every switch and table that has to name them.
 
 ---
 

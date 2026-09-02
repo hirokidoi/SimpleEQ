@@ -184,15 +184,17 @@ final class EQWindowControllerTests: XCTestCase {
         XCTAssertEqual(EQWindowController.heightLimit(currentHeight: 450, scrollOverflow: -200, minHeight: 420), 420)
     }
 
-    // MARK: - wantsDiagnosticsActive(isVisible:isMiniaturized:)
+    // MARK: - wantsWindowDrivenWorkActive(isVisible:isMiniaturized:)
 
     // isVisible/isMiniaturized の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
-    func testWantsDiagnosticsActiveIsTrueOnlyWhenVisibleAndNotMiniaturized() throws {
+    func testWantsWindowDrivenWorkActiveIsTrueOnlyWhenVisibleAndNotMiniaturized() throws {
         for isVisible in [true, false] {
             for isMiniaturized in [true, false] {
                 let expected = isVisible && !isMiniaturized
                 XCTAssertEqual(
-                    EQWindowController.wantsDiagnosticsActive(isVisible: isVisible, isMiniaturized: isMiniaturized),
+                    EQWindowController.wantsWindowDrivenWorkActive(
+                        isVisible: isVisible, isMiniaturized: isMiniaturized
+                    ),
                     expected,
                     "isVisible=\(isVisible) isMiniaturized=\(isMiniaturized)"
                 )

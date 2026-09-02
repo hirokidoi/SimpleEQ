@@ -49,6 +49,35 @@ enum EQLayout {
     /// 収まること。高さは内容が決めるため定数を持たない。
     static let aboutWindowWidth: CGFloat = 450
 
+    /// ミキサーパネルの寸法。幅は Settings と共通。内容の増減で高さを動かすことはしない。
+    enum Mixer {
+        static let windowWidth: CGFloat = settingsWindowWidth
+        /// 開いたときの高さであり、縮められる下限でもある。
+        static let windowMinHeight: CGFloat = 452
+        static let rowHorizontalPadding: CGFloat = 12
+        static let rowVerticalPadding: CGFloat = 8
+        static let rowSpacing: CGFloat = 9
+        static let gripWidth: CGFloat = 13
+        static let iconSize: CGFloat = 22
+        static let nameColumnWidth: CGFloat = 158
+        static let muteButtonSize = CGSize(width: 27, height: 22)
+        static let controlsHeight: CGFloat = 22
+        static let sliderTrackHeight: CGFloat = 4
+        static let sliderKnobDiameter: CGFloat = 14
+        static let valueColumnWidth: CGFloat = 72
+        static let meterWidth: CGFloat = 88
+        static let meterHeight: CGFloat = 12
+        static let meterSegmentCount = 14
+        static let candidateVerticalPadding: CGFloat = 7
+        static let candidatePoolMaxHeight: CGFloat = 172
+        static let removeButtonSize: CGFloat = 22
+
+        static let separatorThickness: CGFloat = 1
+        static var rowHeight: CGFloat { rowVerticalPadding * 2 + iconSize }
+        static var rowPitch: CGFloat { rowHeight + separatorThickness }
+        static var candidateRowPitch: CGFloat { candidateVerticalPadding * 2 + iconSize + separatorThickness }
+    }
+
     /// 文字主体の面 (Settings / Diagnostics / About) の背景。
     static let textPanelBackground = Color(hex: 0x14171e)
 
@@ -59,6 +88,8 @@ enum EQLayout {
     static let topBarHeight: CGFloat = 56
     /// レール幅。
     static let railWidth: CGFloat = 172
+    /// レール下端に横並びで置くボタンのうち、記号ぶんの幅だけ取る側。残りはもう一方が占める。
+    static let railCompactButtonWidth: CGFloat = 40
     /// L/R レベルメーター列の幅。
     static let levelMeterColumnWidth: CGFloat = 52
     /// プリセットボタンの最小高さ (最大2行ぶんで高さ統一・中央寄せ)。

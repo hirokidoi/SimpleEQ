@@ -13,11 +13,17 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     private var diagnostics: DiagnosticsModel!
     private var diagnosticsWindowController: NSWindowController?
     private var aboutWindowController: NSWindowController?
+    private var mixer: MixerModel!
+    private var mixerRenderClock: MixerRenderClock!
+    private var mixerWindowController: NSWindowController?
     /// Diagnostics ウィンドウ専用の delegate。NSWindow.delegate は weak 参照のため、ここで strong に
     /// 保持しないと解放され、delegate 経路が発火しなくなる。
     private var diagnosticsWindowDelegate: DiagnosticsWindowDelegate?
+    private var mixerWindowDelegate: MixerWindowDelegate?
 
-    convenience init(viewModel: EQViewModel, settings: SettingsStore, diagnostics: DiagnosticsModel) {
+    convenience init(
+        viewModel: EQViewModel, settings: SettingsStore, diagnostics: DiagnosticsModel, mixer: MixerModel
+    ) {
         let window = EQMainWindow(
             contentRect: NSRect(origin: .zero, size: EQLayout.windowDefaultSize),
             styleMask: [.borderless],
@@ -33,6 +39,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         self.viewModel = viewModel
         self.settings = settings
         self.diagnostics = diagnostics
+        self.mixer = mixer
+        self.mixerRenderClock = MixerRenderClock(levelStore: mixer.levelStore, viewModel: viewModel)
         window.delegate = self
         applyViewMode(viewModel.viewMode)
 
@@ -62,6 +70,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
                     switch destination {
                     case .settings: self?.showSettings()
                     case .diagnostics: self?.showDiagnostics()
+                    case .mixer: self?.showMixer()
                     }
                 }
             ))
@@ -124,6 +133,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
             let controller = NSWindowController(window: window)
             let hosting = NSHostingView(rootView: SettingsView(
                 viewModel: viewModel,
+                mixer: mixer,
                 onDone: { [weak window] in window?.close() },
                 onScrollOverflowChange: { [weak self, weak window] overflow in
                     self?.applyHeightLimit(
@@ -181,6 +191,49 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// ミキサーウィンドウを開く。Settings と同じ流儀に倣う (幅は固定で高さのみ可変)。
+    /// 位置と高さは EQ ウィンドウと同じく保存する。
+    func showMixer() {
+        if mixerWindowController == nil {
+            let width = EQLayout.Mixer.windowWidth
+            let saved = settings.mixerWindowPlacement
+            let height = max(EQLayout.Mixer.windowMinHeight, CGFloat(saved?.height ?? 0))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "SimpleEQ Mixer"
+            window.isReleasedWhenClosed = false
+            // SwiftUI 側の下限は内容の寸法なので、ここも内容の寸法で揃える
+            // (フレームの寸法で指定すると、タイトルバーのぶんだけ内容が足りなくなる)。
+            window.contentMinSize = NSSize(width: width, height: EQLayout.Mixer.windowMinHeight)
+            // 上限は内容から導かない。導くと編集モードの出し入れで高さが動く。
+            window.contentMaxSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+            if let origin = EQWindowController.restoredOrigin(
+                saved: saved?.origin, size: NSSize(width: width, height: height)
+            ) {
+                window.setFrameOrigin(origin)
+            } else {
+                window.center()
+            }
+            window.contentView = NSHostingView(
+                rootView: MixerView(model: mixer, viewModel: viewModel, clock: mixerRenderClock)
+            )
+            mixerWindowController = NSWindowController(window: window)
+            // NSWindowController は生成時にウィンドウのデリゲートを自分で握るため、その後に設定する。
+            let delegate = MixerWindowDelegate(owner: self)
+            mixerWindowDelegate = delegate
+            window.delegate = delegate
+            applyAlwaysOnTop(viewModel.alwaysOnTop)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        mixerWindowController?.showWindow(nil)
+        mixerWindowController?.window?.makeKeyAndOrderFront(nil)
+        updateMixerRenderActive(isVisible: true, isMiniaturized: false)
+    }
+
     /// About ウィンドウを開く。Settings / Diagnostics と同じ流儀に倣う。寸法は固定 (幅は定数、
     /// 高さは内容が要求する寸法をそのまま採る)。
     func showAbout() {
@@ -229,6 +282,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         settingsWindowController?.window?.level = level
         diagnosticsWindowController?.window?.level = level
         aboutWindowController?.window?.level = level
+        mixerWindowController?.window?.level = level
     }
 
     /// メニューバーからの開閉トグル。可視状態を viewModel へ反映する。
@@ -273,7 +327,17 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         hideSettingsIfOpen()
         hideDiagnosticsIfOpen()
         hideAboutIfOpen()
+        hideMixerIfOpen()
         persistWindowOrigin()
+    }
+
+    /// ミキサーウィンドウが表示中であれば隠す (Settings と同じ扱い)。
+    private func hideMixerIfOpen() {
+        guard let mixerWindow = mixerWindowController?.window, mixerWindow.isVisible else { return }
+        mixerWindow.orderOut(nil)
+        // orderOut は delegate 通知を出さないため、可視状態の反映をここで直接行う。
+        updateMixerRenderActive(isVisible: false, isMiniaturized: false)
+        handleMixerWindowClosed()
     }
 
     /// Settings ウィンドウが表示中であれば隠す。破棄せず隠すだけの流儀に合わせ、close ではなく
@@ -297,6 +361,21 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         aboutWindow.orderOut(nil)
     }
 
+    fileprivate func handleMixerWindowClosed() {
+        mixer.panelDidClose()
+        persistMixerWindowPlacement()
+    }
+
+    /// 現在のミキサーウィンドウの位置と高さを保存する。閉じたときに加えて、
+    /// Cmd+Q 等で終了するケースをカバーするため、アプリの終了処理からも呼ぶ。
+    func persistMixerWindowPlacement() {
+        guard let window = mixerWindowController?.window else { return }
+        settings.mixerWindowPlacement = SettingsStore.WindowPlacement(
+            origin: SettingsStore.WindowOrigin(x: window.frame.origin.x, y: window.frame.origin.y),
+            height: window.contentRect(forFrameRect: window.frame).height
+        )
+    }
+
     /// 現在の EQ ウィンドウ位置を保存する。handleWindowHidden() に加えて、
     /// Cmd+Q 等で終了するケースをカバーするため、アプリの終了処理からも呼ぶ。
     func persistWindowOrigin() {
@@ -318,18 +397,25 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         return NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
     }
 
-    // MARK: - 診断ポーリング (可視性連動)
+    // MARK: - 周期処理 (可視性連動)
 
-    /// Diagnostics ウィンドウの可視・ミニマイズの状態から、診断の定期更新ポーリングを
-    /// 有効にすべきかを決める準純粋関数。
-    static func wantsDiagnosticsActive(isVisible: Bool, isMiniaturized: Bool) -> Bool {
+    /// ウィンドウの可視・ミニマイズの状態から、そのウィンドウのための周期処理を有効にすべきかを
+    /// 決める準純粋関数。診断のポーリングとミキサーの描画クロックが同じ規則で従う。
+    static func wantsWindowDrivenWorkActive(isVisible: Bool, isMiniaturized: Bool) -> Bool {
         isVisible && !isMiniaturized
     }
 
-    /// wantsDiagnosticsActive(isVisible:isMiniaturized:) の結果を診断の保持側へ反映する単一の入口。
+    /// 上の結果を診断の保持側へ反映する単一の入口。
     /// fileprivate なのは同一ファイル内の別型からも呼ぶため。
     fileprivate func updateDiagnosticsActive(isVisible: Bool, isMiniaturized: Bool) {
-        diagnostics.active = EQWindowController.wantsDiagnosticsActive(
+        diagnostics.active = EQWindowController.wantsWindowDrivenWorkActive(
+            isVisible: isVisible, isMiniaturized: isMiniaturized
+        )
+    }
+
+    /// 同じ規則をミキサーの描画クロックへ反映する単一の入口。
+    fileprivate func updateMixerRenderActive(isVisible: Bool, isMiniaturized: Bool) {
+        mixerRenderClock?.active = EQWindowController.wantsWindowDrivenWorkActive(
             isVisible: isVisible, isMiniaturized: isMiniaturized
         )
     }
@@ -392,6 +478,30 @@ final class EQMainWindow: NSWindow {
         guard isCommandW else { return super.performKeyEquivalent(with: event) }
         close()
         return true
+    }
+}
+
+/// ミキサーウィンドウ専用の NSWindowDelegate。可視状態の変化を転送するだけの薄い転送役。
+private final class MixerWindowDelegate: NSObject, NSWindowDelegate {
+    private weak var owner: EQWindowController?
+
+    init(owner: EQWindowController) {
+        self.owner = owner
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        owner?.updateMixerRenderActive(isVisible: false, isMiniaturized: false)
+        owner?.handleMixerWindowClosed()
+    }
+
+    /// isVisible はミニマイズ中も真のまま (macOS の仕様) だが、isMiniaturized が真である以上
+    /// wantsWindowDrivenWorkActive は偽を返す。
+    func windowDidMiniaturize(_ notification: Notification) {
+        owner?.updateMixerRenderActive(isVisible: true, isMiniaturized: true)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        owner?.updateMixerRenderActive(isVisible: true, isMiniaturized: false)
     }
 }
 

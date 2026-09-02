@@ -20,6 +20,12 @@ enum DriverConfig {
 
     static let nameOverrideMaxLength = Int(simpleeq_driver_name_override_max_length())
 
+    static let mixerGainSelector =
+        AudioObjectPropertySelector(simpleeq_mixer_gain_selector())
+
+    /// 制御リースの長さ (秒)。押し込みの間隔はこの値から導く。
+    static let mixerControlLeaseSeconds = simpleeq_mixer_control_lease_seconds()
+
     static var sharedMemoryPath: String {
         String(cString: simpleeq_ring_directory_path()) + "/" + String(cString: simpleeq_ring_file_name())
     }
@@ -648,6 +654,69 @@ final class SharedRingReader {
         )
         metrics.recordDriverVersions(
             driverVersion: driverReportedVersion, layoutVersion: driverReportedLayoutVersion
+        )
+    }
+
+    // --- ミキサーのクライアント表 -------------------------------------------------------
+
+    /// realtime 出力コールバックから呼ぶ。緩和ロードと事前確保済みの器への書き込みだけを行う。
+    /// 文字列 (バンドル ID) はここでは触らない。
+    func foldMixerClients(into store: MixerLevelStore) {
+        store.beginFold(tableGeneration: simpleeq_mixer_load_table_generation_relaxed(mappedBase))
+        for index in 0..<store.slotCount {
+            let slot = UInt32(index)
+            store.foldSlot(
+                index: index,
+                clientID: simpleeq_mixer_load_slot_client_id_acquire(mappedBase, slot),
+                processID: simpleeq_mixer_slot_process_id(mappedBase, slot),
+                outputCycleSeq: simpleeq_mixer_load_slot_output_cycle_seq(mappedBase, slot),
+                clipEventCount: simpleeq_mixer_load_slot_clip_event_count(mappedBase, slot),
+                peak: simpleeq_mixer_load_slot_last_cycle_peak(mappedBase, slot),
+                appliedGain: simpleeq_mixer_load_slot_applied_gain(mappedBase, slot)
+            )
+        }
+    }
+
+    /// 名簿は毎フレームの値ではないため、低頻度の依頼としてオーディオ世界のキュー上から読む。
+    func readMixerRoster() -> [MixerRosterEntry] {
+        let capacity = Int(simpleeq_mixer_bundle_id_max_bytes())
+        var storage = [CChar](repeating: 0, count: capacity)
+        var entries: [MixerRosterEntry] = []
+        for index in 0..<Int(simpleeq_mixer_slot_count()) {
+            let slot = UInt32(index)
+            let clientID = simpleeq_mixer_load_slot_client_id_acquire(mappedBase, slot)
+            guard clientID != 0 else { continue }
+            let bundleID = storage.withUnsafeMutableBufferPointer { buffer -> String in
+                guard let base = buffer.baseAddress else { return "" }
+                _ = simpleeq_mixer_slot_bundle_id(mappedBase, slot, base, capacity)
+                return String(cString: base)
+            }
+            entries.append(MixerRosterEntry(
+                clientID: clientID,
+                processID: simpleeq_mixer_slot_process_id(mappedBase, slot),
+                bundleID: bundleID,
+                // 席を取ってから一度でも ProcessOutput が来たか。
+                active: simpleeq_mixer_load_slot_output_cycle_seq(mappedBase, slot) != 0
+            ))
+        }
+        return entries
+    }
+
+    func readMixerDriverObservation(now: UInt64 = mach_absolute_time()) -> MixerDriverObservation {
+        let slotCount = Int(simpleeq_mixer_slot_count())
+        var slotsInUse = 0
+        for index in 0..<slotCount where simpleeq_mixer_load_slot_client_id_acquire(mappedBase, UInt32(index)) != 0 {
+            slotsInUse += 1
+        }
+        let deadline = simpleeq_mixer_load_control_lease_deadline_host_time(mappedBase)
+        return MixerDriverObservation(
+            slotsInUse: slotsInUse,
+            slotCount: slotCount,
+            // 見たいのは「ドライバが今どう思っているか」なので、アプリ側の最終押し込み時刻からは導かない。
+            leaseRemainingSeconds: deadline == 0 ? nil : Self.seconds(from: now, to: deadline),
+            slotOverflowCount: simpleeq_mixer_slot_overflow_count(mappedBase),
+            neutralizedCount: simpleeq_mixer_neutralized_count(mappedBase),
+            gainEntryDroppedCount: simpleeq_mixer_gain_entry_dropped_count(mappedBase)
         )
     }
 

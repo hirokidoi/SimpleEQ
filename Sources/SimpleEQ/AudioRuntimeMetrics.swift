@@ -59,6 +59,9 @@ final class AudioRuntimeMetrics {
         var presentationDeltaUnexpectedCount: UInt64 = 0
         var writeDeadlineMissedCount: UInt64 = 0
         var silenceFilledGapCount: UInt64 = 0
+        var mixerSlotOverflowCount: UInt64 = 0
+        var mixerNeutralizedCount: UInt64 = 0
+        var mixerGainEntryDroppedCount: UInt64 = 0
     }
 
     private var resetBaseline = ResetBaseline()
@@ -399,6 +402,43 @@ final class AudioRuntimeMetrics {
         driverLayoutVersionStorage.store(UInt64(layoutVersion))
     }
 
+    // MARK: - ミキサー (現在の状態。オーディオ世界の直列キューのみが読み書きする)
+
+    private var rawMixerDriverObservation = MixerDriverObservation()
+    private(set) var mixerCoordinationObservation = MixerCoordinationObservation()
+
+    /// 累計のカウンタは他のドライバ由来の値と同じくリセット時点を起点にする。
+    var mixerDriverObservation: MixerDriverObservation {
+        var observation = rawMixerDriverObservation
+        observation.slotOverflowCount =
+            Self.sinceBaseline(observation.slotOverflowCount, resetBaseline.mixerSlotOverflowCount)
+        observation.neutralizedCount =
+            Self.sinceBaseline(observation.neutralizedCount, resetBaseline.mixerNeutralizedCount)
+        observation.gainEntryDroppedCount =
+            Self.sinceBaseline(observation.gainEntryDroppedCount, resetBaseline.mixerGainEntryDroppedCount)
+        return observation
+    }
+
+    func recordMixerDriverObservation(_ observation: MixerDriverObservation) {
+        resetBaseline.mixerSlotOverflowCount = Self.reanchoredBaseline(
+            storedValue: rawMixerDriverObservation.slotOverflowCount,
+            incomingValue: observation.slotOverflowCount, baseline: resetBaseline.mixerSlotOverflowCount
+        )
+        resetBaseline.mixerNeutralizedCount = Self.reanchoredBaseline(
+            storedValue: rawMixerDriverObservation.neutralizedCount,
+            incomingValue: observation.neutralizedCount, baseline: resetBaseline.mixerNeutralizedCount
+        )
+        resetBaseline.mixerGainEntryDroppedCount = Self.reanchoredBaseline(
+            storedValue: rawMixerDriverObservation.gainEntryDroppedCount,
+            incomingValue: observation.gainEntryDroppedCount, baseline: resetBaseline.mixerGainEntryDroppedCount
+        )
+        rawMixerDriverObservation = observation
+    }
+
+    func recordMixerCoordination(_ observation: MixerCoordinationObservation) {
+        mixerCoordinationObservation = observation
+    }
+
     // MARK: - 出力デバイスの実レート (現在の状態)
 
     private let outputDeviceSampleRateStorage = AtomicUInt64(0)
@@ -508,6 +548,9 @@ final class AudioRuntimeMetrics {
         resetBaseline.presentationDeltaUnexpectedCount = presentationDeltaUnexpectedCountStorage.value
         resetBaseline.writeDeadlineMissedCount = writeDeadlineMissedCountStorage.value
         resetBaseline.silenceFilledGapCount = silenceFilledGapCountStorage.value
+        resetBaseline.mixerSlotOverflowCount = rawMixerDriverObservation.slotOverflowCount
+        resetBaseline.mixerNeutralizedCount = rawMixerDriverObservation.neutralizedCount
+        resetBaseline.mixerGainEntryDroppedCount = rawMixerDriverObservation.gainEntryDroppedCount
         lastResetAt = Date()
     }
 
@@ -560,6 +603,8 @@ final class AudioRuntimeMetrics {
         let ringCapacityFrames: Int
         let peak: Float
         let peakBeforeVolume: Float
+        let mixerDriver: MixerDriverObservation
+        let mixerCoordination: MixerCoordinationObservation
         let lastResetAt: Date?
     }
 
@@ -609,6 +654,8 @@ final class AudioRuntimeMetrics {
             ringCapacityFrames: ringCapacityFrames,
             peak: peak,
             peakBeforeVolume: peakBeforeVolume,
+            mixerDriver: mixerDriverObservation,
+            mixerCoordination: mixerCoordinationObservation,
             lastResetAt: lastResetAt
         )
     }

@@ -4,11 +4,14 @@
 #include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
-#define kSimpleEQRingLayoutVersion ((uint32_t)1)
+#define kSimpleEQRingLayoutVersion ((uint32_t)2)
 
-#define kSimpleEQDriverVersionMajor ((uint16_t)1)
+#define kSimpleEQDriverVersionMajor ((uint16_t)2)
 #define kSimpleEQDriverVersionMinor ((uint16_t)0)
 
 #define kSimpleEQRingMagic ((uint32_t)0x53455152u)
@@ -36,6 +39,99 @@
 
 #define kSimpleEQVolumeMinDB ((float)-64.0)
 #define kSimpleEQVolumeMaxDB ((float)0.0)
+
+//==================================================================================================
+#pragma mark Mixer (client table / per-client gain)
+//==================================================================================================
+
+#define kSimpleEQMixerClientSlotCount ((uint32_t)64)
+
+/// NUL 終端込みのバイト数。
+#define kSimpleEQMixerBundleIDMaxBytes ((size_t)96)
+
+#define kSimpleEQMixerMatchKeyBundlePrefix "bundle:"
+#define kSimpleEQMixerMatchKeyPIDPrefix    "pid:"
+
+/// NUL 終端込みのバイト数。
+#define kSimpleEQMixerMatchKeyMaxBytes \
+    ((size_t)(sizeof(kSimpleEQMixerMatchKeyBundlePrefix) - 1 + kSimpleEQMixerBundleIDMaxBytes))
+
+#define kSimpleEQMixerGainEntryMax ((uint32_t)128)
+
+#define kSimpleEQMixerGainSelector ((uint32_t)'seqG')
+
+#define kSimpleEQMixerControlLeaseSeconds ((double)6.0)
+
+typedef struct
+{
+    _Atomic uint32_t clientID;
+    uint32_t         processID;
+    char             bundleID[kSimpleEQMixerBundleIDMaxBytes];
+    _Atomic uint32_t outputCycleSeq;
+    _Atomic uint32_t clipEventCount;
+    _Atomic uint32_t lastCyclePeakBits;
+    _Atomic uint32_t appliedGainBits;
+} SimpleEQMixerClientSlot;
+
+// float を整数で運ぶのは、_Atomic float の lock-free 性が実装依存で、リアルタイム経路に
+// 暗黙のロックが生じうるため。
+static inline uint32_t SimpleEQMixerFloatToBits(float inValue)
+{
+    uint32_t theBits;
+    memcpy(&theBits, &inValue, sizeof(theBits));
+    return theBits;
+}
+
+static inline float SimpleEQMixerFloatFromBits(uint32_t inBits)
+{
+    float theValue;
+    memcpy(&theValue, &inBits, sizeof(theValue));
+    return theValue;
+}
+
+/// 成功時は outKey を NUL 終端する。失敗時は outKey を空文字にする。
+static inline bool SimpleEQMixerBuildMatchKey(
+    char *outKey, size_t inCapacity, const char *inBundleID, uint32_t inProcessID)
+{
+    if(outKey == NULL || inCapacity == 0) { return false; }
+    outKey[0] = '\0';
+
+    // uint32 の 10 進表記は最長 10 桁。
+    char theDigits[16];
+    const char *thePrefix;
+    const char *theBody;
+    size_t thePrefixLength;
+    size_t theBodyLength;
+
+    size_t theBundleLength = (inBundleID != NULL) ? strlen(inBundleID) : 0;
+    // 切り詰めた鍵を作らない。切り詰めると別アプリが同一の鍵になりうるので、収まらなければ pid へ落とす。
+    bool theUseBundle = (theBundleLength > 0)
+        && ((sizeof(kSimpleEQMixerMatchKeyBundlePrefix) - 1 + theBundleLength + 1) <= kSimpleEQMixerMatchKeyMaxBytes);
+
+    if(theUseBundle)
+    {
+        thePrefix = kSimpleEQMixerMatchKeyBundlePrefix;
+        thePrefixLength = sizeof(kSimpleEQMixerMatchKeyBundlePrefix) - 1;
+        theBody = inBundleID;
+        theBodyLength = theBundleLength;
+    }
+    else
+    {
+        int theWritten = snprintf(theDigits, sizeof(theDigits), "%u", inProcessID);
+        if(theWritten < 0 || (size_t)theWritten >= sizeof(theDigits)) { return false; }
+        thePrefix = kSimpleEQMixerMatchKeyPIDPrefix;
+        thePrefixLength = sizeof(kSimpleEQMixerMatchKeyPIDPrefix) - 1;
+        theBody = theDigits;
+        theBodyLength = (size_t)theWritten;
+    }
+
+    if((thePrefixLength + theBodyLength + 1) > inCapacity) { return false; }
+
+    memcpy(outKey, thePrefix, thePrefixLength);
+    memcpy(outKey + thePrefixLength, theBody, theBodyLength);
+    outKey[thePrefixLength + theBodyLength] = '\0';
+    return true;
+}
 
 typedef struct
 {
@@ -67,6 +163,14 @@ typedef struct
     _Atomic uint64_t silenceFilledGapCount;
 
     uint8_t reserved[32];
+
+    _Atomic uint32_t mixerTableGeneration;
+    /// mach_absolute_time の目盛り。0 = リースなし。
+    _Atomic uint64_t mixerControlLeaseDeadlineHostTime;
+    _Atomic uint64_t mixerSlotOverflowCount;
+    _Atomic uint64_t mixerNeutralizedCount;
+    _Atomic uint64_t mixerGainEntryDroppedCount;
+    SimpleEQMixerClientSlot mixerClients[kSimpleEQMixerClientSlotCount];
 } SimpleEQRingHeader;
 
 #define kSimpleEQRingPageBytes ((uint32_t)16384)

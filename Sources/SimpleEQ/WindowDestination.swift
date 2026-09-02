@@ -5,6 +5,7 @@ import AppKit
 enum WindowDestination {
     case settings
     case diagnostics
+    case mixer
 }
 
 /// 診断への隠し導線。現れる条件をここ 1 箇所で決め、押下時点で読む導線 (プリセットレールの

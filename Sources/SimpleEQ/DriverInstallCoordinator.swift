@@ -89,13 +89,15 @@ final class DriverInstallCoordinator: Sendable {
         )
     }
 
-    /// probe が未検出を返す限り、最大 maxAttempts 回まで wait を挟んで再試行する。
+    /// probe が可用と答えるまで、最大 maxAttempts 回まで wait を挟んで再試行する。
+    /// ドライバを入れ替えた直後は、新しいドライバが共有領域を作り直すまでの間だけ版ずれが観測されうる
+    /// (この経路は今観測した値がひとりでに変わることが期待できる唯一の場所)。
     static func resolveDriverProbeWithRetry(
         maxAttempts: Int, probe: () -> DriverProbe, wait: () -> Void
     ) -> DriverProbe {
         var latest = probe()
         var attempt = 0
-        while latest.availability == .notFound && attempt < maxAttempts {
+        while latest.availability != .ok && attempt < maxAttempts {
             wait()
             latest = probe()
             attempt += 1

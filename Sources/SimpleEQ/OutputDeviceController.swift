@@ -85,21 +85,11 @@ final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
         SimpleEQ.isAirPlayDevice(id, token)
     }
 
-    /// 値そのものの大きさを渡すと弾かれる。
     private func setCustomProperty(
         _ selector: AudioObjectPropertySelector, _ value: CFTypeRef,
         forDeviceID id: AudioDeviceID, _ token: AudioWorldToken
     ) -> Bool {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var boxed = value
-        let size = UInt32(MemoryLayout<CFTypeRef>.size)
-        return withUnsafeMutablePointer(to: &boxed) {
-            AudioObjectSetPropertyData(id, &addr, 0, nil, size, UnsafeMutableRawPointer($0)) == noErr
-        }
+        setDeviceCustomProperty(selector, value, forDeviceID: id, token)
     }
 
     @discardableResult

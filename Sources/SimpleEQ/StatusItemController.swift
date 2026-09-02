@@ -116,6 +116,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
         menu.addItem(modeItem)
         viewModeItem = modeItem
 
+        let mixerItem = NSMenuItem(title: "EQ Mixer", action: #selector(openMixerWindow), keyEquivalent: "")
+        mixerItem.target = self
+        menu.addItem(mixerItem)
+
         // action 名を openSettings にすると OS が標準の設定コマンドと見なして歯車アイコンを添える。
         let settingsItem = NSMenuItem(title: "EQ Settings", action: #selector(openSettingsWindow), keyEquivalent: "")
         settingsItem.target = self
@@ -224,6 +228,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
 
     @objc private func openSettingsWindow() {
         windowController.showSettings()
+    }
+
+    @objc private func openMixerWindow() {
+        windowController.showMixer()
     }
 
     @objc private func openAboutWindow() {

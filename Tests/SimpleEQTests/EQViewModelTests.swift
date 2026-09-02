@@ -1835,6 +1835,27 @@ final class EQViewModelTests: XCTestCase {
         }
     }
 
+    // ミキサーの淡色化はこの導出を同じ地点で読む。アプリ別ゲインは EQ の前段にあるため、
+    // バイパスの状態には一切依存しない。
+    func testSettingsReachAudioIsIndependentOfBypass() {
+        let (vm, _) = makeVMWithEngine(SettingsStore(defaults: defaults))
+        vm.confirmDriverProbe(.versionsUnreadable(.ok))
+        vm.noteStartupActivationSettled()
+        vm.updateProcessingState(.active, activeDevice: nil)
+        XCTAssertTrue(vm.settingsReachAudio)
+
+        vm.bypass = true
+        XCTAssertTrue(vm.settingsReachAudio, "バイパスは届く経路の有無を変えない")
+        XCTAssertFalse(vm.processingInEffect, "前提: バイパス中は EQ の加工が効いていない")
+
+        vm.updateDefaultOutputReachesDriver(false)
+        XCTAssertFalse(vm.settingsReachAudio, "音が届いていないときは落ちる")
+
+        vm.updateDefaultOutputReachesDriver(true)
+        vm.confirmDriverProbe(.versionsUnreadable(.checking))
+        XCTAssertFalse(vm.settingsReachAudio, "確認中も落ちる")
+    }
+
     // 音はアプリを通っており観測は本物であるため、灰色にするかどうかとは別の判定を使う。
     func testVisualizerShowsObservationWhileBypassed() {
         let store = SettingsStore(defaults: defaults)
@@ -2152,9 +2173,9 @@ final class EQViewModelTests: XCTestCase {
     /// フォント・アンチエイリアシングは環境間で変わりうるため、開発機・Xcode バージョンに固有の
     /// 基準値。CI 環境やツールチェインを変えた場合は再採取が必要になりうる。
     private static let goldenRootViewHashLevelMeterShown =
-        "ad2e35db89f37a38a6656df849cc60b9e91983c38c7480d8883012b2d3294d44"
+        "e143d41f9db59354df161b39d8cb64d01763f22b44f8e207958b5e099a57317d"
     private static let goldenRootViewHashLevelMeterHidden =
-        "5576571b135e52f3e26e8348ab40ba2cdf1c3dacabaa69e321f68f1ae0902fae"
+        "a2a1fc51f02f1c92a87ab97c9dc455abc6d1878697e11307305013984e9453ef"
 
     // MARK: - installOrUpdateDriver / uninstallDriver
 
@@ -2221,7 +2242,7 @@ final class EQViewModelTests: XCTestCase {
     }
 
     func testResolveDriverProbeWithRetryRetriesUntilProbeSucceeds() {
-        let probeResults: [DriverProbe] = [.versionsUnreadable(.notFound), .versionsUnreadable(.notFound), .versionsUnreadable(.ok)]
+        let probeResults: [DriverProbe] = [.versionsUnreadable(.notFound), .versionsUnreadable(.versionMismatch), .versionsUnreadable(.ok)]
         var probeIndex = 0
         var waitCount = 0
         let result = DriverInstallCoordinator.resolveDriverProbeWithRetry(
@@ -2234,7 +2255,33 @@ final class EQViewModelTests: XCTestCase {
             wait: { waitCount += 1 }
         )
         XCTAssertEqual(result.availability, .ok)
-        XCTAssertEqual(waitCount, 2, "notFound を 2 回観測した後の 3 回目で成功するため wait は 2 回")
+        XCTAssertEqual(waitCount, 2, "可用でない観測を 2 回した後の 3 回目で成功するため wait は 2 回")
+    }
+
+    /// ドライバを入れ替えた直後は、新しいドライバが共有領域を作り直す前に旧版数のまま残った
+    /// ファイルを読みうる。この経路だけは版ずれでも待つ。
+    func testResolveDriverProbeWithRetryRetriesOnVersionMismatch() {
+        var waitCount = 0
+        let maxAttempts = 5
+        let result = DriverInstallCoordinator.resolveDriverProbeWithRetry(
+            maxAttempts: maxAttempts,
+            probe: { .versionsUnreadable(.versionMismatch) },
+            wait: { waitCount += 1 }
+        )
+        XCTAssertEqual(result.availability, .versionMismatch)
+        XCTAssertEqual(waitCount, maxAttempts)
+    }
+
+    /// 起動経路の条件は変えない (起動時の版ずれは安定した実状態であり、待っても変わらない)。
+    func testLaunchPathStillDoesNotRetryOnVersionMismatch() {
+        var waitCount = 0
+        let result = AudioActivationCoordinator.openRetryingHeaderInvalid(
+            maxAttempts: 5,
+            probe: { .failure(.versionMismatch(found: 1, expected: 2)) },
+            wait: { waitCount += 1 }
+        )
+        guard case .failure(.versionMismatch) = result else { return XCTFail("versionMismatch を期待") }
+        XCTAssertEqual(waitCount, 0)
     }
 
     func testResolveDriverProbeWithRetryGivesUpAfterMaxAttempts() {
@@ -2247,17 +2294,6 @@ final class EQViewModelTests: XCTestCase {
         )
         XCTAssertEqual(result.availability, .notFound)
         XCTAssertEqual(waitCount, maxAttempts)
-    }
-
-    func testResolveDriverProbeWithRetryDoesNotRetryOnVersionMismatch() {
-        var waitCount = 0
-        let result = DriverInstallCoordinator.resolveDriverProbeWithRetry(
-            maxAttempts: 5,
-            probe: { .versionsUnreadable(.versionMismatch) },
-            wait: { waitCount += 1 }
-        )
-        XCTAssertEqual(result.availability, .versionMismatch)
-        XCTAssertEqual(waitCount, 0)
     }
 
     // MARK: - topBarWarningIdentifier (上部バー警告の優先順位)

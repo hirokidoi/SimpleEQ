@@ -8,6 +8,7 @@ protocol ActivatableAudioEngine: AnyObject, Sendable {
 }
 
 extension AudioEngine: ActivatableAudioEngine {}
+extension AudioEngine: MixerAudioBridge {}
 
 struct AudioActivationOutcome: Equatable {
     let processingState: ProcessingState

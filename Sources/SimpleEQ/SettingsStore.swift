@@ -15,6 +15,12 @@ final class SettingsStore {
         var y: Double
     }
 
+    /// 幅を持たないのは、高さだけが可変のウィンドウのために持つため。
+    struct WindowPlacement: Codable, Equatable {
+        var origin: WindowOrigin
+        var height: Double
+    }
+
     private struct PresetOverride: Codable, Equatable {
         var title: String
         var curve: [Double]
@@ -53,6 +59,17 @@ final class SettingsStore {
         var preampDb: Double
         var preampAutoEnabled: Bool
         var preampAutoTargetDb: Double
+        /// ユーザーが並べたミキサーのチャンネル。nil は「まだ一度も設定していない」= 初期セットを
+        /// 撒く合図で、空配列は「ユーザーが全部消した」。
+        var mixerChannels: [MixerChannelEntry]?
+        var mixerWindowPlacement: WindowPlacement?
+    }
+
+    struct MixerChannelEntry: Codable, Equatable {
+        var key: String
+        /// 線形ゲイン (0…1)。
+        var gain: Double
+        var muted: Bool
     }
 
     static let defaultsKey = "SimpleEQ.settings.v1"
@@ -96,7 +113,9 @@ final class SettingsStore {
                 viewMode: .normal,
                 preampDb: 0,
                 preampAutoEnabled: true,
-                preampAutoTargetDb: AutoPreampSpec.targetDbDefault
+                preampAutoTargetDb: AutoPreampSpec.targetDbDefault,
+                mixerChannels: nil,
+                mixerWindowPlacement: nil
             )
         }
     }
@@ -125,7 +144,19 @@ final class SettingsStore {
                 curve: normalizedCurve($0.curve)
             )
         }
+        p.mixerChannels = p.mixerChannels.map(normalizedMixerChannels)
         return p
+    }
+
+    /// 未知の前置きのキーを落とし、重複キーを畳む。
+    static func normalizedMixerChannels(_ entries: [MixerChannelEntry]) -> [MixerChannelEntry] {
+        var seen = Set<String>()
+        return entries.compactMap { entry in
+            guard MixerSpec.isValidKey(entry.key), seen.insert(entry.key).inserted else { return nil }
+            return MixerChannelEntry(
+                key: entry.key, gain: MixerGainScale.normalizedGain(entry.gain), muted: entry.muted
+            )
+        }
     }
 
     private static func clamped(_ value: Double, to range: ClosedRange<Double>) -> Double {
@@ -293,6 +324,11 @@ final class SettingsStore {
         }
     }
 
+    var mixerWindowPlacement: WindowPlacement? {
+        get { readState { $0.mixerWindowPlacement } }
+        set { writeState { $0.mixerWindowPlacement = newValue } }
+    }
+
     var preampDb: Double {
         get { readState { $0.preampDb } }
         set { writeState { $0.preampDb = newValue } }
@@ -311,6 +347,12 @@ final class SettingsStore {
     var viewMode: ViewMode {
         get { readState { $0.viewMode } }
         set { writeState { $0.viewMode = newValue } }
+    }
+
+    /// nil は「まだ一度も設定していない」。初期化はこの値を nil へ戻すことで表す。
+    var mixerChannels: [MixerChannelEntry]? {
+        get { readState { $0.mixerChannels } }
+        set { writeState { $0.mixerChannels = newValue.map(Self.normalizedMixerChannels) } }
     }
 
     func curve(for preset: EQPreset) -> [Double] {

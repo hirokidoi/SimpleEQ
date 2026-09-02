@@ -66,6 +66,36 @@ const float *simpleeq_ring_data_ptr(const void *inHeader);
 float simpleeq_ring_volume_min_db(void);
 float simpleeq_ring_volume_max_db(void);
 
+uint32_t    simpleeq_mixer_slot_count(void);
+size_t      simpleeq_mixer_bundle_id_max_bytes(void);
+size_t      simpleeq_mixer_match_key_max_bytes(void);
+uint32_t    simpleeq_mixer_gain_selector(void);
+const char *simpleeq_mixer_match_key_bundle_prefix(void);
+const char *simpleeq_mixer_match_key_pid_prefix(void);
+double      simpleeq_mixer_control_lease_seconds(void);
+
+uint32_t simpleeq_mixer_load_table_generation_relaxed(const void *inHeader);
+uint64_t simpleeq_mixer_slot_overflow_count(const void *inHeader);
+uint64_t simpleeq_mixer_neutralized_count(const void *inHeader);
+uint64_t simpleeq_mixer_gain_entry_dropped_count(const void *inHeader);
+uint64_t simpleeq_mixer_load_control_lease_deadline_host_time(const void *inHeader);
+
+uint32_t simpleeq_mixer_load_slot_client_id_acquire(const void *inHeader, uint32_t inIndex);
+uint32_t simpleeq_mixer_slot_process_id(const void *inHeader, uint32_t inIndex);
+
+/// outBundleID を必ず NUL 終端し、書いた文字数を返す。スロットの値が終端されていなくても
+/// 容量を越えて読まない。
+size_t simpleeq_mixer_slot_bundle_id(const void *inHeader, uint32_t inIndex,
+                                     char *outBundleID, size_t inCapacity);
+
+uint32_t simpleeq_mixer_load_slot_output_cycle_seq(const void *inHeader, uint32_t inIndex);
+uint32_t simpleeq_mixer_load_slot_clip_event_count(const void *inHeader, uint32_t inIndex);
+float    simpleeq_mixer_load_slot_last_cycle_peak(const void *inHeader, uint32_t inIndex);
+float    simpleeq_mixer_load_slot_applied_gain(const void *inHeader, uint32_t inIndex);
+
+bool simpleeq_mixer_build_match_key(char *outKey, size_t inCapacity,
+                                    const char *inBundleID, uint32_t inProcessID);
+
 const char *simpleeq_driver_device_uid(void);
 const char *simpleeq_driver_device_name(void);
 uint32_t    simpleeq_driver_visibility_override_selector(void);

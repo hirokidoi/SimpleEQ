@@ -59,9 +59,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private lazy var diagnostics: DiagnosticsModel = DiagnosticsModel(engine: engine, audioWorld: audioWorld)
 
+    private lazy var mixerCoordinator = MixerCoordinator(
+        audioWorld: audioWorld, bridge: engine, levelStore: engine.mixerLevelStore
+    )
+    private lazy var mixer: MixerModel = MixerModel(
+        settings: settings, coordinator: mixerCoordinator, levelStore: engine.mixerLevelStore
+    )
+
     private var windowController: EQWindowController?
     private var statusItemController: StatusItemController?
     private var routingVerificationTimer: Timer?
+    private var mixerPassTimer: Timer?
     private var audioWorldHeartbeatTimer: Timer?
     private var audioWorldLastResponse: TimeInterval?
     private var audioWorldHeartbeatWaitingSince: TimeInterval = 0
@@ -134,7 +142,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func presentUI() {
-        let windowController = EQWindowController(viewModel: viewModel, settings: settings, diagnostics: diagnostics)
+        let windowController = EQWindowController(
+            viewModel: viewModel, settings: settings, diagnostics: diagnostics, mixer: mixer
+        )
         self.windowController = windowController
         statusItemController = StatusItemController(
             windowController: windowController, viewModel: viewModel, diagnostics: diagnostics
@@ -142,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.startObservingOutputDevices()
         viewModel.startAutoPreampDerivation()
         startPeriodicRoutingVerification()
+        startMixerCoordination()
         if viewModel.showWindowOnLaunch {
             windowController.show()
         }
@@ -225,10 +236,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         routingVerificationTimer = timer
     }
 
+    /// パネルの可視性から独立して回る (パネルを閉じていてもゲインは効いていなければならない)。
+    /// 名簿の追従とリースの更新をこの 1 本が兼ねるため、更新のためだけの第 2 のタイマは持たない。
+    private func startMixerCoordination() {
+        mixerCoordinator.didUpdate = { [weak self] update in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.mixer.apply(update) } }
+        }
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: MixerCoordinator.passInterval, repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.mixerCoordinator.runPass() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        mixerPassTimer = timer
+        mixerCoordinator.runPass()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         windowController?.persistWindowOrigin()
+        windowController?.persistMixerWindowPlacement()
         routingVerificationTimer?.invalidate()
         routingVerificationTimer = nil
+        mixerPassTimer?.invalidate()
+        mixerPassTimer = nil
         audioWorldHeartbeatTimer?.invalidate()
         audioWorldHeartbeatTimer = nil
         let completed = Self.performCleanExitSequence(

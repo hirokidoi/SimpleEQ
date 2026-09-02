@@ -67,6 +67,9 @@ final class AudioEngine: @unchecked Sendable {
 
     let levelMeter: LevelMeter
 
+    /// アナライザと同じ立ち位置 (単一生産者 = リアルタイムコールバック、単一消費者 = 描画側)。
+    let mixerLevelStore = MixerLevelStore()
+
     /// 可視性の再開は含めない。
     let levelMeterRestartGeneration = AtomicUInt64(0)
 
@@ -78,6 +81,9 @@ final class AudioEngine: @unchecked Sendable {
 
     func refreshDriverObservations(_ token: AudioWorldToken) {
         ringReader?.refreshDriverObservations()
+        if let reader = ringReader {
+            runtimeMetrics.recordMixerDriverObservation(reader.readMixerDriverObservation())
+        }
         runtimeMetrics.recordReaderObserved(ringReader != nil)
     }
 
@@ -403,6 +409,24 @@ final class AudioEngine: @unchecked Sendable {
         preampGain = effectivePreampGain(preampDb: preampDb, bypassed: bypassed)
     }
 
+    // --- ミキサー (調停役からの依頼口) ------------------------------------------
+
+    func readMixerRoster(_ token: AudioWorldToken) -> [MixerRosterEntry] {
+        ringReader?.readMixerRoster() ?? []
+    }
+
+    @discardableResult
+    func writeMixerGainTable(_ table: [String: Double], _ token: AudioWorldToken) -> Bool {
+        guard let id = driverDeviceID else { return false }
+        return setDeviceCustomProperty(
+            DriverConfig.mixerGainSelector, table as CFDictionary, forDeviceID: id, token
+        )
+    }
+
+    func recordMixerCoordination(_ observation: MixerCoordinationObservation) {
+        runtimeMetrics.recordMixerCoordination(observation)
+    }
+
     /// 音に関わる資源に触れないため AudioWorldToken を取らない。
     func applyLevelMeterTuning(
         stereoCaptureEnabled: Bool, attackCoef: Double, releaseCoef: Double,
@@ -680,6 +704,7 @@ final class AudioEngine: @unchecked Sendable {
             dst, frameCount: Int(frames), channels: Int(AudioConfig.channels),
             peakBeforeVolume: peakBeforeVolume, effectiveOutputGain: gain, reader: ringReader
         )
+        ringReader?.foldMixerClients(into: mixerLevelStore)
         return noErr
     }
 

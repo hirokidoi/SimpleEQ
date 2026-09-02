@@ -250,6 +250,26 @@ func writeDeviceMute(_ id: AudioDeviceID, _ value: Bool, _ token: AudioWorldToke
     return AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v) == noErr
 }
 
+// MARK: - カスタムプロパティ
+
+/// 値そのものの大きさを渡すと弾かれる (受け取るのは参照 1 つぶん)。
+@discardableResult
+func setDeviceCustomProperty(
+    _ selector: AudioObjectPropertySelector, _ value: CFTypeRef,
+    forDeviceID id: AudioDeviceID, _ token: AudioWorldToken
+) -> Bool {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var boxed = value
+    let size = UInt32(MemoryLayout<CFTypeRef>.size)
+    return withUnsafeMutablePointer(to: &boxed) {
+        AudioObjectSetPropertyData(id, &addr, 0, nil, size, UnsafeMutableRawPointer($0)) == noErr
+    }
+}
+
 // デバイス側のプロパティ変更であり、アプリ終了後も値が残りうる。
 func setBufferFrameSize(_ device: AudioDeviceID, _ frames: UInt32, _ token: AudioWorldToken) {
     var v = frames

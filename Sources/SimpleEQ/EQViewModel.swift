@@ -77,10 +77,12 @@ final class EQViewModel: ObservableObject {
         case .suspended(let cause): return SuspensionPolicy.allowsSelectionResume(cause)
         }
     }
-    /// EQ の ON/OFF を切り替えられるか。
-    var canToggleBypass: Bool {
+    /// 設定が音へ届く経路があるか。バイパスの状態には依存しない。
+    var settingsReachAudio: Bool {
         topBarWarning == nil && driverAvailability != .checking
     }
+    /// EQ の ON/OFF を切り替えられるか。
+    var canToggleBypass: Bool { settingsReachAudio }
     /// EQ の加工が今この瞬間に音へ効いているか。
     var processingInEffect: Bool { !bypass && canToggleBypass }
     var primingSilenceCountSinceLaunch: UInt64 { engine.runtimeMetrics.primingSilenceCountSinceLaunch }

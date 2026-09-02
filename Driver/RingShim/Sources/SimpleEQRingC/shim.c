@@ -181,6 +181,145 @@ float simpleeq_ring_volume_max_db(void)
     return kSimpleEQVolumeMaxDB;
 }
 
+uint32_t simpleeq_mixer_slot_count(void)
+{
+    return kSimpleEQMixerClientSlotCount;
+}
+
+size_t simpleeq_mixer_bundle_id_max_bytes(void)
+{
+    return kSimpleEQMixerBundleIDMaxBytes;
+}
+
+size_t simpleeq_mixer_match_key_max_bytes(void)
+{
+    return kSimpleEQMixerMatchKeyMaxBytes;
+}
+
+uint32_t simpleeq_mixer_gain_selector(void)
+{
+    return kSimpleEQMixerGainSelector;
+}
+
+const char *simpleeq_mixer_match_key_bundle_prefix(void)
+{
+    return kSimpleEQMixerMatchKeyBundlePrefix;
+}
+
+const char *simpleeq_mixer_match_key_pid_prefix(void)
+{
+    return kSimpleEQMixerMatchKeyPIDPrefix;
+}
+
+double simpleeq_mixer_control_lease_seconds(void)
+{
+    return kSimpleEQMixerControlLeaseSeconds;
+}
+
+uint32_t simpleeq_mixer_load_table_generation_relaxed(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->mixerTableGeneration, memory_order_relaxed);
+}
+
+uint64_t simpleeq_mixer_slot_overflow_count(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->mixerSlotOverflowCount, memory_order_relaxed);
+}
+
+uint64_t simpleeq_mixer_neutralized_count(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->mixerNeutralizedCount, memory_order_relaxed);
+}
+
+uint64_t simpleeq_mixer_gain_entry_dropped_count(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->mixerGainEntryDroppedCount, memory_order_relaxed);
+}
+
+uint64_t simpleeq_mixer_load_control_lease_deadline_host_time(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->mixerControlLeaseDeadlineHostTime, memory_order_acquire);
+}
+
+static const SimpleEQMixerClientSlot *simpleeq_mixer_slot(const void *inHeader, uint32_t inIndex)
+{
+    if(inHeader == NULL || inIndex >= kSimpleEQMixerClientSlotCount) { return NULL; }
+    return &((const SimpleEQRingHeader *)inHeader)->mixerClients[inIndex];
+}
+
+uint32_t simpleeq_mixer_load_slot_client_id_acquire(const void *inHeader, uint32_t inIndex)
+{
+    const SimpleEQMixerClientSlot *slot = simpleeq_mixer_slot(inHeader, inIndex);
+    if(slot == NULL) { return 0; }
+    return atomic_load_explicit(&slot->clientID, memory_order_acquire);
+}
+
+uint32_t simpleeq_mixer_slot_process_id(const void *inHeader, uint32_t inIndex)
+{
+    const SimpleEQMixerClientSlot *slot = simpleeq_mixer_slot(inHeader, inIndex);
+    if(slot == NULL) { return 0; }
+    return slot->processID;
+}
+
+size_t simpleeq_mixer_slot_bundle_id(const void *inHeader, uint32_t inIndex,
+                                     char *outBundleID, size_t inCapacity)
+{
+    if(outBundleID == NULL || inCapacity == 0) { return 0; }
+    outBundleID[0] = '\0';
+
+    const SimpleEQMixerClientSlot *slot = simpleeq_mixer_slot(inHeader, inIndex);
+    if(slot == NULL) { return 0; }
+
+    size_t limit = sizeof(slot->bundleID);
+    if(limit > inCapacity - 1) { limit = inCapacity - 1; }
+
+    size_t length = 0;
+    while(length < limit && slot->bundleID[length] != '\0') { length++; }
+
+    memcpy(outBundleID, slot->bundleID, length);
+    outBundleID[length] = '\0';
+    return length;
+}
+
+uint32_t simpleeq_mixer_load_slot_output_cycle_seq(const void *inHeader, uint32_t inIndex)
+{
+    const SimpleEQMixerClientSlot *slot = simpleeq_mixer_slot(inHeader, inIndex);
+    if(slot == NULL) { return 0; }
+    return atomic_load_explicit(&slot->outputCycleSeq, memory_order_relaxed);
+}
+
+uint32_t simpleeq_mixer_load_slot_clip_event_count(const void *inHeader, uint32_t inIndex)
+{
+    const SimpleEQMixerClientSlot *slot = simpleeq_mixer_slot(inHeader, inIndex);
+    if(slot == NULL) { return 0; }
+    return atomic_load_explicit(&slot->clipEventCount, memory_order_relaxed);
+}
+
+float simpleeq_mixer_load_slot_last_cycle_peak(const void *inHeader, uint32_t inIndex)
+{
+    const SimpleEQMixerClientSlot *slot = simpleeq_mixer_slot(inHeader, inIndex);
+    if(slot == NULL) { return 0.0f; }
+    return SimpleEQMixerFloatFromBits(atomic_load_explicit(&slot->lastCyclePeakBits, memory_order_relaxed));
+}
+
+float simpleeq_mixer_load_slot_applied_gain(const void *inHeader, uint32_t inIndex)
+{
+    const SimpleEQMixerClientSlot *slot = simpleeq_mixer_slot(inHeader, inIndex);
+    if(slot == NULL) { return 0.0f; }
+    return SimpleEQMixerFloatFromBits(atomic_load_explicit(&slot->appliedGainBits, memory_order_relaxed));
+}
+
+bool simpleeq_mixer_build_match_key(char *outKey, size_t inCapacity,
+                                    const char *inBundleID, uint32_t inProcessID)
+{
+    return SimpleEQMixerBuildMatchKey(outKey, inCapacity, inBundleID, inProcessID);
+}
+
 const char *simpleeq_driver_device_uid(void)
 {
     return kSimpleEQDeviceUID;

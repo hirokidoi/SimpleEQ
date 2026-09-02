@@ -240,6 +240,12 @@ static void SimpleEQRing_Init(void)
     atomic_store_explicit(&gSimpleEQRing_Header->writeDeadlineMissedCount, 0, memory_order_relaxed);
     atomic_store_explicit(&gSimpleEQRing_Header->silenceFilledGapCount, 0, memory_order_relaxed);
     memset(gSimpleEQRing_Header->reserved, 0, sizeof(gSimpleEQRing_Header->reserved));
+    atomic_store_explicit(&gSimpleEQRing_Header->mixerTableGeneration, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->mixerControlLeaseDeadlineHostTime, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->mixerSlotOverflowCount, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->mixerNeutralizedCount, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->mixerGainEntryDroppedCount, 0, memory_order_relaxed);
+    memset(gSimpleEQRing_Header->mixerClients, 0, sizeof(gSimpleEQRing_Header->mixerClients));
 
     gSimpleEQRing_Body = SimpleEQRingBody(theMappedMemory);
 
@@ -341,6 +347,361 @@ static void SimpleEQRing_WriteAudio(const float *inInterleaved, UInt32 inFrames,
 
 //==================================================================================================
 #pragma mark -
+#pragma mark SimpleEQ Mixer
+//==================================================================================================
+
+// どちらも実測値。2 つは独立で、片方の根拠をもう片方へ流用しない。
+#define kMixer_GainRampSeconds    ((Float64)0.010)
+#define kMixer_SilenceRampSeconds ((Float64)0.030)
+
+typedef struct
+{
+    char  matchKey[kSimpleEQMixerMatchKeyMaxBytes];
+    float gain;
+} MixerGainEntry;
+
+static pthread_mutex_t gMixer_TableMutex = PTHREAD_MUTEX_INITIALIZER;
+static MixerGainEntry  gMixer_GainTable[kSimpleEQMixerGainEntryMax];
+static UInt32          gMixer_GainTableCount = 0;
+
+static _Atomic uint32_t gMixer_SlotTargetGainBits[kSimpleEQMixerClientSlotCount];
+static float            gMixer_SlotCurrentGain[kSimpleEQMixerClientSlotCount];
+
+static _Atomic uint32_t gMixer_GainRampStepBits    = 0;
+static _Atomic uint32_t gMixer_SilenceRampStepBits = 0;
+
+static Float64 gMixer_HostTicksPerSecond = 0.0;
+
+static void SimpleEQMixer_Init(void)
+{
+    struct mach_timebase_info theTimeBaseInfo;
+    mach_timebase_info(&theTimeBaseInfo);
+    gMixer_HostTicksPerSecond = ((Float64)theTimeBaseInfo.denom / (Float64)theTimeBaseInfo.numer) * 1000000000.0;
+
+    for(uint32_t i = 0; i < kSimpleEQMixerClientSlotCount; i++)
+    {
+        atomic_store_explicit(&gMixer_SlotTargetGainBits[i], SimpleEQMixerFloatToBits(1.0f), memory_order_relaxed);
+        gMixer_SlotCurrentGain[i] = 1.0f;
+    }
+}
+
+static void SimpleEQMixer_RecalculateRampSteps(Float64 inSampleRate)
+{
+    Float64 theGainStep    = 1.0 / (kMixer_GainRampSeconds * inSampleRate);
+    Float64 theSilenceStep = 1.0 / (kMixer_SilenceRampSeconds * inSampleRate);
+    atomic_store_explicit(&gMixer_GainRampStepBits, SimpleEQMixerFloatToBits((float)theGainStep), memory_order_relaxed);
+    atomic_store_explicit(&gMixer_SilenceRampStepBits, SimpleEQMixerFloatToBits((float)theSilenceStep), memory_order_relaxed);
+}
+
+static bool SimpleEQMixer_LeaseIsArmed(SimpleEQRingHeader *inHeader)
+{
+    uint64_t theDeadline = atomic_load_explicit(&inHeader->mixerControlLeaseDeadlineHostTime, memory_order_acquire);
+    if(theDeadline == 0) { return false; }
+    if(mach_absolute_time() < theDeadline) { return true; }
+
+    // 数えるのは非 0 から 0 への交換に成功したときだけ。0 から 0 の交換は毎サイクル成功するため、
+    // 数えると「リース失効で戻した回数」という診断の意味が失われる。
+    uint64_t theExpected = theDeadline;
+    if(atomic_compare_exchange_strong_explicit(&inHeader->mixerControlLeaseDeadlineHostTime,
+                                                &theExpected, 0,
+                                                memory_order_acq_rel, memory_order_relaxed))
+    {
+        atomic_fetch_add_explicit(&inHeader->mixerNeutralizedCount, 1, memory_order_relaxed);
+    }
+    return false;
+}
+
+static float SimpleEQMixer_LookupGain_Locked(const char *inBundleID, uint32_t inProcessID)
+{
+    char theKey[kSimpleEQMixerMatchKeyMaxBytes];
+    if(!SimpleEQMixerBuildMatchKey(theKey, sizeof(theKey), inBundleID, inProcessID)) { return 1.0f; }
+
+    for(UInt32 i = 0; i < gMixer_GainTableCount; i++)
+    {
+        if(strcmp(gMixer_GainTable[i].matchKey, theKey) == 0) { return gMixer_GainTable[i].gain; }
+    }
+    return 1.0f;
+}
+
+static void SimpleEQMixer_AcquireSlot(const AudioServerPlugInClientInfo *inClientInfo)
+{
+    SimpleEQRingHeader *theHeader = gSimpleEQRing_Header;
+    if(theHeader == NULL || inClientInfo == NULL) { return; }
+
+    uint32_t theClientID = (uint32_t)inClientInfo->mClientID;
+
+    char theBundleID[kSimpleEQMixerBundleIDMaxBytes];
+    memset(theBundleID, 0, sizeof(theBundleID));
+    if(inClientInfo->mBundleID != NULL
+       && !CFStringGetCString(inClientInfo->mBundleID, theBundleID, sizeof(theBundleID), kCFStringEncodingUTF8))
+    {
+        // 収まらないバンドル ID は切り詰めず空文字にする。スロットの値を「完全な値か空文字か」の
+        // どちらかに閉じることで、ドライバとアプリが同じ入力から同じ鍵を得ることを構造で保証する。
+        memset(theBundleID, 0, sizeof(theBundleID));
+    }
+
+    pthread_mutex_lock(&gMixer_TableMutex);
+
+    uint32_t theSlotIndex = kSimpleEQMixerClientSlotCount;
+    // 識別値 0 は空きの印なので、0 を名乗るクライアントには席を用意できない。
+    if(theClientID != 0)
+    {
+        for(uint32_t i = 0; i < kSimpleEQMixerClientSlotCount; i++)
+        {
+            if(atomic_load_explicit(&theHeader->mixerClients[i].clientID, memory_order_relaxed) == 0)
+            {
+                theSlotIndex = i;
+                break;
+            }
+        }
+    }
+
+    if(theSlotIndex == kSimpleEQMixerClientSlotCount)
+    {
+        pthread_mutex_unlock(&gMixer_TableMutex);
+        atomic_fetch_add_explicit(&theHeader->mixerSlotOverflowCount, 1, memory_order_relaxed);
+        return;
+    }
+
+    SimpleEQMixerClientSlot *theSlot = &theHeader->mixerClients[theSlotIndex];
+    theSlot->processID = (uint32_t)inClientInfo->mProcessID;
+    memcpy(theSlot->bundleID, theBundleID, sizeof(theSlot->bundleID));
+    // ここで 0 へ戻すことで、「席を取ってから一度でも音を出したか」が outputCycleSeq != 0 だけで読める。
+    atomic_store_explicit(&theSlot->outputCycleSeq, 0, memory_order_relaxed);
+    atomic_store_explicit(&theSlot->clipEventCount, 0, memory_order_relaxed);
+    atomic_store_explicit(&theSlot->lastCyclePeakBits, SimpleEQMixerFloatToBits(0.0f), memory_order_relaxed);
+
+    // リースが立っていない間の目標は 1.0。押し込んだ側が居ないのに保存された表が効くと、
+    // 席を取った瞬間だけ古いゲインが乗る。
+    float theGain = SimpleEQMixer_LeaseIsArmed(theHeader)
+        ? SimpleEQMixer_LookupGain_Locked(theBundleID, theSlot->processID)
+        : 1.0f;
+    // まだ 1 サンプルも出していないクライアントに継ぎ目は無い。ランプを掛けると
+    // 「既定ゲインで始まる窓」を自分で作ることになるので、現在ゲインも目標へ揃える。
+    atomic_store_explicit(&gMixer_SlotTargetGainBits[theSlotIndex], SimpleEQMixerFloatToBits(theGain), memory_order_relaxed);
+    gMixer_SlotCurrentGain[theSlotIndex] = theGain;
+    atomic_store_explicit(&theSlot->appliedGainBits, SimpleEQMixerFloatToBits(theGain), memory_order_relaxed);
+
+    atomic_store_explicit(&theSlot->clientID, theClientID, memory_order_release);
+    atomic_fetch_add_explicit(&theHeader->mixerTableGeneration, 1, memory_order_relaxed);
+
+    pthread_mutex_unlock(&gMixer_TableMutex);
+}
+
+static void SimpleEQMixer_ReleaseSlot(const AudioServerPlugInClientInfo *inClientInfo)
+{
+    SimpleEQRingHeader *theHeader = gSimpleEQRing_Header;
+    if(theHeader == NULL || inClientInfo == NULL) { return; }
+
+    uint32_t theClientID = (uint32_t)inClientInfo->mClientID;
+    if(theClientID == 0) { return; }
+
+    pthread_mutex_lock(&gMixer_TableMutex);
+    for(uint32_t i = 0; i < kSimpleEQMixerClientSlotCount; i++)
+    {
+        SimpleEQMixerClientSlot *theSlot = &theHeader->mixerClients[i];
+        if(atomic_load_explicit(&theSlot->clientID, memory_order_relaxed) == theClientID)
+        {
+            atomic_store_explicit(&theSlot->clientID, 0, memory_order_release);
+            atomic_fetch_add_explicit(&theHeader->mixerTableGeneration, 1, memory_order_relaxed);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&gMixer_TableMutex);
+}
+
+static void SimpleEQMixer_ProcessOutput(UInt32 inClientID, float *ioBuffer, UInt32 inFrameCount)
+{
+    SimpleEQRingHeader *theHeader = gSimpleEQRing_Header;
+    if(theHeader == NULL || ioBuffer == NULL || inFrameCount == 0 || inClientID == 0) { return; }
+
+    // クライアント ID は Host 採番で添字に使えない。
+    uint32_t theSlotIndex = kSimpleEQMixerClientSlotCount;
+    for(uint32_t i = 0; i < kSimpleEQMixerClientSlotCount; i++)
+    {
+        if(atomic_load_explicit(&theHeader->mixerClients[i].clientID, memory_order_acquire) == inClientID)
+        {
+            theSlotIndex = i;
+            break;
+        }
+    }
+    if(theSlotIndex == kSimpleEQMixerClientSlotCount) { return; }
+
+    SimpleEQMixerClientSlot *theSlot = &theHeader->mixerClients[theSlotIndex];
+    size_t theSampleCount = (size_t)inFrameCount * kSimpleEQRingChannelsValue;
+
+    float thePeak = 0.0f;
+    for(size_t i = 0; i < theSampleCount; i++)
+    {
+        float theMagnitude = fabsf(ioBuffer[i]);
+        if(theMagnitude > thePeak) { thePeak = theMagnitude; }
+    }
+    atomic_store_explicit(&theSlot->lastCyclePeakBits, SimpleEQMixerFloatToBits(thePeak), memory_order_relaxed);
+    if(thePeak >= 1.0f)
+    {
+        atomic_fetch_add_explicit(&theSlot->clipEventCount, 1, memory_order_relaxed);
+    }
+
+    // 期限を先に読むことで、リースが見えているときは目標ゲインも見えている。
+    float theTargetGain = 1.0f;
+    if(SimpleEQMixer_LeaseIsArmed(theHeader))
+    {
+        theTargetGain = SimpleEQMixerFloatFromBits(
+            atomic_load_explicit(&gMixer_SlotTargetGainBits[theSlotIndex], memory_order_relaxed));
+    }
+
+    float theCurrentGain = gMixer_SlotCurrentGain[theSlotIndex];
+    bool theSilenceSeam = (theTargetGain <= 0.0f) || (theCurrentGain <= 0.0f);
+    float theStep = SimpleEQMixerFloatFromBits(atomic_load_explicit(
+        theSilenceSeam ? &gMixer_SilenceRampStepBits : &gMixer_GainRampStepBits, memory_order_relaxed));
+
+    for(UInt32 theFrame = 0; theFrame < inFrameCount; theFrame++)
+    {
+        if(theCurrentGain < theTargetGain)
+        {
+            theCurrentGain += theStep;
+            if(theCurrentGain > theTargetGain) { theCurrentGain = theTargetGain; }
+        }
+        else if(theCurrentGain > theTargetGain)
+        {
+            theCurrentGain -= theStep;
+            if(theCurrentGain < theTargetGain) { theCurrentGain = theTargetGain; }
+        }
+
+        float *theSamples = ioBuffer + (size_t)theFrame * kSimpleEQRingChannelsValue;
+        for(UInt32 theChannel = 0; theChannel < kSimpleEQRingChannelsValue; theChannel++)
+        {
+            theSamples[theChannel] *= theCurrentGain;
+        }
+    }
+
+    gMixer_SlotCurrentGain[theSlotIndex] = theCurrentGain;
+    atomic_store_explicit(&theSlot->appliedGainBits, SimpleEQMixerFloatToBits(theCurrentGain), memory_order_relaxed);
+
+    // 0 は「まだ鳴っていない」の印なので、巻き戻っても 0 にしない。
+    uint32_t theNextSeq = atomic_load_explicit(&theSlot->outputCycleSeq, memory_order_relaxed) + 1;
+    if(theNextSeq == 0) { theNextSeq = 1; }
+    atomic_store_explicit(&theSlot->outputCycleSeq, theNextSeq, memory_order_relaxed);
+}
+
+typedef struct
+{
+    MixerGainEntry entries[kSimpleEQMixerGainEntryMax];
+    UInt32         count;
+    UInt64         dropped;
+    bool           hasNonNeutral;
+} MixerGainTableBuild;
+
+static void SimpleEQMixer_GainTableApplier(const void *inKey, const void *inValue, void *inContext)
+{
+    MixerGainTableBuild *theBuild = (MixerGainTableBuild *)inContext;
+
+    if(inKey == NULL || CFGetTypeID(inKey) != CFStringGetTypeID()
+       || inValue == NULL || CFGetTypeID(inValue) != CFNumberGetTypeID()
+       || theBuild->count >= kSimpleEQMixerGainEntryMax)
+    {
+        theBuild->dropped += 1;
+        return;
+    }
+
+    char theKey[kSimpleEQMixerMatchKeyMaxBytes];
+    memset(theKey, 0, sizeof(theKey));
+    if(!CFStringGetCString((CFStringRef)inKey, theKey, sizeof(theKey), kCFStringEncodingUTF8))
+    {
+        theBuild->dropped += 1;
+        return;
+    }
+
+    Float64 theGain = 0.0;
+    if(!CFNumberGetValue((CFNumberRef)inValue, kCFNumberDoubleType, &theGain) || !isfinite(theGain))
+    {
+        theBuild->dropped += 1;
+        return;
+    }
+
+    // 上限が 1.0 であることが「減衰のみ」という要件そのもの。
+    if(theGain < 0.0) { theGain = 0.0; }
+    if(theGain > 1.0) { theGain = 1.0; }
+
+    memcpy(theBuild->entries[theBuild->count].matchKey, theKey, sizeof(theKey));
+    theBuild->entries[theBuild->count].gain = (float)theGain;
+    theBuild->count += 1;
+    if(theGain < 1.0) { theBuild->hasNonNeutral = true; }
+}
+
+static void SimpleEQMixer_ApplyGainTable(CFDictionaryRef inTable)
+{
+    SimpleEQRingHeader *theHeader = gSimpleEQRing_Header;
+    if(theHeader == NULL) { return; }
+
+    MixerGainTableBuild theBuild;
+    memset(&theBuild, 0, sizeof(theBuild));
+    CFDictionaryApplyFunction(inTable, SimpleEQMixer_GainTableApplier, &theBuild);
+
+    pthread_mutex_lock(&gMixer_TableMutex);
+
+    memcpy(gMixer_GainTable, theBuild.entries, sizeof(gMixer_GainTable));
+    gMixer_GainTableCount = theBuild.count;
+
+    for(uint32_t i = 0; i < kSimpleEQMixerClientSlotCount; i++)
+    {
+        SimpleEQMixerClientSlot *theSlot = &theHeader->mixerClients[i];
+        if(atomic_load_explicit(&theSlot->clientID, memory_order_acquire) == 0) { continue; }
+
+        float theGain = SimpleEQMixer_LookupGain_Locked(theSlot->bundleID, theSlot->processID);
+        atomic_store_explicit(&gMixer_SlotTargetGainBits[i], SimpleEQMixerFloatToBits(theGain), memory_order_relaxed);
+    }
+
+    pthread_mutex_unlock(&gMixer_TableMutex);
+
+    if(theBuild.dropped > 0)
+    {
+        atomic_fetch_add_explicit(&theHeader->mixerGainEntryDroppedCount, theBuild.dropped, memory_order_relaxed);
+    }
+
+    if(theBuild.hasNonNeutral)
+    {
+        // 目標ゲインを全部書き終えてから release でリースを張る。リースが見えているのに目標ゲインが
+        // 古い、という観測を作らない。
+        uint64_t theDeadline = mach_absolute_time()
+            + (uint64_t)(kSimpleEQMixerControlLeaseSeconds * gMixer_HostTicksPerSecond);
+        atomic_store_explicit(&theHeader->mixerControlLeaseDeadlineHostTime, theDeadline, memory_order_release);
+    }
+    else
+    {
+        atomic_store_explicit(&theHeader->mixerControlLeaseDeadlineHostTime, 0, memory_order_release);
+    }
+}
+
+static CFDictionaryRef SimpleEQMixer_CopyGainTable(void)
+{
+    MixerGainEntry theEntries[kSimpleEQMixerGainEntryMax];
+    UInt32 theCount;
+
+    pthread_mutex_lock(&gMixer_TableMutex);
+    theCount = gMixer_GainTableCount;
+    memcpy(theEntries, gMixer_GainTable, sizeof(theEntries));
+    pthread_mutex_unlock(&gMixer_TableMutex);
+
+    CFMutableDictionaryRef theTable = CFDictionaryCreateMutable(NULL, (CFIndex)theCount,
+                                                                &kCFTypeDictionaryKeyCallBacks,
+                                                                &kCFTypeDictionaryValueCallBacks);
+    if(theTable == NULL) { return NULL; }
+
+    for(UInt32 i = 0; i < theCount; i++)
+    {
+        CFStringRef theKey = CFStringCreateWithCString(NULL, theEntries[i].matchKey, kCFStringEncodingUTF8);
+        Float64 theGain = (Float64)theEntries[i].gain;
+        CFNumberRef theValue = CFNumberCreate(NULL, kCFNumberDoubleType, &theGain);
+        if(theKey != NULL && theValue != NULL) { CFDictionarySetValue(theTable, theKey, theValue); }
+        if(theKey != NULL) { CFRelease(theKey); }
+        if(theValue != NULL) { CFRelease(theValue); }
+    }
+    return theTable;
+}
+
+//==================================================================================================
+#pragma mark -
 #pragma mark Helpers
 //==================================================================================================
 
@@ -387,6 +748,7 @@ static void RecalculateTicksPerFrame_Locked(void)
     pthread_mutex_lock(&gDevice_IOMutex);
     gDevice_AdjustedTicksPerFrame = theHostTicksPerFrame * (1.0 - gDriftCompositionPpm * 1e-6);
     pthread_mutex_unlock(&gDevice_IOMutex);
+    SimpleEQMixer_RecalculateRampSteps(gDevice_SampleRate);
 }
 
 typedef Boolean (*ObjectPredicate)(const struct ObjectInfo *inInfo, AudioObjectPropertyScope inScope);
@@ -606,6 +968,7 @@ static OSStatus SimpleEQAudio_Initialize(AudioServerPlugInDriverRef inDriver, Au
 
     gPlugIn_Host = inHost;
 
+    SimpleEQMixer_Init();
     SimpleEQRing_Init();
 
     gBox_Name = CFSTR("SimpleEQ Audio Box");
@@ -638,20 +1001,24 @@ Done:
 
 static OSStatus SimpleEQAudio_AddDeviceClient(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, const AudioServerPlugInClientInfo* inClientInfo)
 {
-    #pragma unused(inClientInfo)
     OSStatus theAnswer = 0;
     FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_AddDeviceClient: bad driver reference");
     FailWithAction(inDeviceObjectID != kObjectID_Device, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_AddDeviceClient: bad device ID");
+
+    SimpleEQMixer_AcquireSlot(inClientInfo);
+
 Done:
     return theAnswer;
 }
 
 static OSStatus SimpleEQAudio_RemoveDeviceClient(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, const AudioServerPlugInClientInfo* inClientInfo)
 {
-    #pragma unused(inClientInfo)
     OSStatus theAnswer = 0;
     FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_RemoveDeviceClient: bad driver reference");
     FailWithAction(inDeviceObjectID != kObjectID_Device, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_RemoveDeviceClient: bad device ID");
+
+    SimpleEQMixer_ReleaseSlot(inClientInfo);
+
 Done:
     return theAnswer;
 }
@@ -1367,6 +1734,14 @@ Done:
 
 #define kAudioDevicePropertyCustom_NameOverride ((AudioObjectPropertySelector)kSimpleEQNameOverrideSelector)
 
+static const AudioServerPlugInCustomPropertyInfo kDevice_CustomPropertyList[] = {
+    { kAudioDevicePropertyCustom_VisibilityOverride, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
+    { kAudioDevicePropertyCustom_NameOverride,       kAudioServerPlugInCustomPropertyDataTypeCFString,       kAudioServerPlugInCustomPropertyDataTypeNone },
+    { kSimpleEQDriftCompositionSelector,             kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
+    { kSimpleEQMixerGainSelector,                    kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
+};
+static const UInt32 kDevice_CustomPropertyListBytes = sizeof(kDevice_CustomPropertyList);
+
 static Boolean SimpleEQAudio_HasDeviceProperty(AudioServerPlugInDriverRef inDriver, AudioObjectID inObjectID, pid_t inClientProcessID, const AudioObjectPropertyAddress* inAddress)
 {
     #pragma unused(inClientProcessID)
@@ -1401,6 +1776,7 @@ static Boolean SimpleEQAudio_HasDeviceProperty(AudioServerPlugInDriverRef inDriv
         case kAudioDevicePropertyCustom_VisibilityOverride:
         case kAudioDevicePropertyCustom_NameOverride:
         case kSimpleEQDriftCompositionSelector:
+        case kSimpleEQMixerGainSelector:
             theAnswer = true;
             break;
 
@@ -1465,6 +1841,7 @@ static OSStatus SimpleEQAudio_IsDevicePropertySettable(AudioServerPlugInDriverRe
         case kAudioDevicePropertyCustom_VisibilityOverride:
         case kAudioDevicePropertyCustom_NameOverride:
         case kSimpleEQDriftCompositionSelector:
+        case kSimpleEQMixerGainSelector:
             *outIsSettable = true;
             break;
 
@@ -1517,10 +1894,11 @@ static OSStatus SimpleEQAudio_GetDevicePropertyDataSize(AudioServerPlugInDriverR
         case kAudioDevicePropertyAvailableNominalSampleRates: *outDataSize = kDevice_SampleRatesSize * sizeof(AudioValueRange); break;
         case kAudioDevicePropertyIsHidden: *outDataSize = sizeof(UInt32); break;
         case kAudioDevicePropertyIcon: *outDataSize = sizeof(CFURLRef); break;
-        case kAudioObjectPropertyCustomPropertyInfoList: *outDataSize = sizeof(AudioServerPlugInCustomPropertyInfo) * 3; break;
+        case kAudioObjectPropertyCustomPropertyInfoList: *outDataSize = kDevice_CustomPropertyListBytes; break;
         case kAudioDevicePropertyCustom_VisibilityOverride: *outDataSize = sizeof(CFPropertyListRef); break;
         case kAudioDevicePropertyCustom_NameOverride: *outDataSize = sizeof(CFStringRef); break;
         case kSimpleEQDriftCompositionSelector: *outDataSize = sizeof(CFPropertyListRef); break;
+        case kSimpleEQMixerGainSelector: *outDataSize = sizeof(CFPropertyListRef); break;
         case kAudioDevicePropertyPreferredChannelsForStereo: *outDataSize = 2 * sizeof(UInt32); break;
         case kAudioDevicePropertyPreferredChannelLayout:
             *outDataSize = offsetof(AudioChannelLayout, mChannelDescriptions) + (kNumber_Of_Channels * sizeof(AudioChannelDescription));
@@ -1714,20 +2092,9 @@ static OSStatus SimpleEQAudio_GetDevicePropertyData(AudioServerPlugInDriverRef i
             break;
 
         case kAudioObjectPropertyCustomPropertyInfoList:
-            FailWithAction(inDataSize < sizeof(AudioServerPlugInCustomPropertyInfo) * 3, theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kAudioObjectPropertyCustomPropertyInfoList");
-            {
-                AudioServerPlugInCustomPropertyInfo *theInfo = (AudioServerPlugInCustomPropertyInfo*)outData;
-                theInfo[0].mSelector = kAudioDevicePropertyCustom_VisibilityOverride;
-                theInfo[0].mPropertyDataType = kAudioServerPlugInCustomPropertyDataTypeCFPropertyList;
-                theInfo[0].mQualifierDataType = kAudioServerPlugInCustomPropertyDataTypeNone;
-                theInfo[1].mSelector = kAudioDevicePropertyCustom_NameOverride;
-                theInfo[1].mPropertyDataType = kAudioServerPlugInCustomPropertyDataTypeCFString;
-                theInfo[1].mQualifierDataType = kAudioServerPlugInCustomPropertyDataTypeNone;
-                theInfo[2].mSelector = kSimpleEQDriftCompositionSelector;
-                theInfo[2].mPropertyDataType = kAudioServerPlugInCustomPropertyDataTypeCFPropertyList;
-                theInfo[2].mQualifierDataType = kAudioServerPlugInCustomPropertyDataTypeNone;
-            }
-            *outDataSize = sizeof(AudioServerPlugInCustomPropertyInfo) * 3;
+            FailWithAction(inDataSize < kDevice_CustomPropertyListBytes, theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kAudioObjectPropertyCustomPropertyInfoList");
+            memcpy(outData, kDevice_CustomPropertyList, kDevice_CustomPropertyListBytes);
+            *outDataSize = kDevice_CustomPropertyListBytes;
             break;
 
         case kAudioDevicePropertyCustom_VisibilityOverride:
@@ -1755,6 +2122,12 @@ static OSStatus SimpleEQAudio_GetDevicePropertyData(AudioServerPlugInDriverRef i
                 pthread_mutex_unlock(&gPlugIn_StateMutex);
                 *((CFPropertyListRef*)outData) = CFNumberCreate(NULL, kCFNumberDoubleType, &theValue);
             }
+            *outDataSize = sizeof(CFPropertyListRef);
+            break;
+
+        case kSimpleEQMixerGainSelector:
+            FailWithAction(inDataSize < sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kSimpleEQMixerGainSelector");
+            *((CFPropertyListRef*)outData) = SimpleEQMixer_CopyGainTable();
             *outDataSize = sizeof(CFPropertyListRef);
             break;
 
@@ -1903,6 +2276,14 @@ static OSStatus SimpleEQAudio_SetDevicePropertyData(AudioServerPlugInDriverRef i
                 }
                 pthread_mutex_unlock(&gPlugIn_StateMutex);
             }
+            break;
+
+        case kSimpleEQMixerGainSelector:
+            FailWithAction(inDataSize != sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_SetDevicePropertyData: wrong size for kSimpleEQMixerGainSelector");
+            FailWithAction(*((const CFPropertyListRef*)inData) == NULL || CFGetTypeID(*((const CFPropertyListRef*)inData)) != CFDictionaryGetTypeID(), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQMixerGainSelector expects a CFDictionaryRef");
+            // 変更を告知しない。リースの更新で同じ表が周期的に押し込まれるため、告知すると
+            // 中身が変わらないまま通知だけが撒かれ続ける。
+            SimpleEQMixer_ApplyGainTable((CFDictionaryRef)(*((const CFPropertyListRef*)inData)));
             break;
 
         default:
@@ -2729,7 +3110,10 @@ static OSStatus SimpleEQAudio_WillDoIOOperation(AudioServerPlugInDriverRef inDri
     FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_WillDoIOOperation: bad driver reference");
     FailWithAction(inDeviceObjectID != kObjectID_Device, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_WillDoIOOperation: bad device ID");
 
-    bool willDo = (inOperationID == kAudioServerPlugInIOOperationWriteMix);
+    // MixOutput は宣言しない。宣言するとそのサイクルの以降の出力オペレーションが起きず、
+    // WriteMix が来なくなる (実測で確認済みの唯一の条件)。
+    bool willDo = (inOperationID == kAudioServerPlugInIOOperationWriteMix)
+               || (inOperationID == kAudioServerPlugInIOOperationProcessOutput);
 
     if(outWillDo != NULL) { *outWillDo = willDo; }
     if(outWillDoInPlace != NULL) { *outWillDoInPlace = true; }
@@ -2750,7 +3134,7 @@ Done:
 
 static OSStatus SimpleEQAudio_DoIOOperation(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, AudioObjectID inStreamObjectID, UInt32 inClientID, UInt32 inOperationID, UInt32 inIOBufferFrameSize, const AudioServerPlugInIOCycleInfo* inIOCycleInfo, void* ioMainBuffer, void* ioSecondaryBuffer)
 {
-    #pragma unused(inClientID, ioSecondaryBuffer, inDeviceObjectID)
+    #pragma unused(ioSecondaryBuffer, inDeviceObjectID)
     OSStatus theAnswer = 0;
 
     FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_DoIOOperation: bad driver reference");
@@ -2764,6 +3148,12 @@ static OSStatus SimpleEQAudio_DoIOOperation(AudioServerPlugInDriverRef inDriver,
                         Done, "SimpleEQAudio_DoIOOperation: overload, missed the WriteMix deadline");
 
         SimpleEQRing_WriteAudio((const float*)ioMainBuffer, inIOBufferFrameSize, inIOCycleInfo->mOutputTime.mSampleTime);
+    }
+    else if(inOperationID == kAudioServerPlugInIOOperationProcessOutput)
+    {
+        // WriteMix にある締切超過のスキップをここには設けない。スキップするとその区間だけ
+        // 減衰されない音が出るので、遅れても掛けるほうが実害が小さい。
+        SimpleEQMixer_ProcessOutput(inClientID, (float*)ioMainBuffer, inIOBufferFrameSize);
     }
 
 Done:

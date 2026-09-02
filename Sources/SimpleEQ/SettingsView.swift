@@ -6,12 +6,14 @@ import SwiftUI
 /// @Published プロパティへ直結するため、操作は即座に反映される。
 struct SettingsView: View {
     @ObservedObject var viewModel: EQViewModel
+    @ObservedObject var mixer: MixerModel
     var onDone: () -> Void
     /// スクロールが要らなくなる高さをウィンドウ側が上限に置けるよう、内容の超過量を知らせる。
     var onScrollOverflowChange: (CGFloat) -> Void
 
     @State private var loginItemEnabled = LoginItem.isEnabled
     @State private var showingResetPresetsConfirmation = false
+    @State private var showingResetMixerConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +24,7 @@ struct SettingsView: View {
                     gainSection
                     deviceSection
                     presetsSection
+                    mixerSection
                     visualizerSection
                 }
                 .padding(.horizontal, 24)
@@ -201,6 +204,31 @@ struct SettingsView: View {
                 title: "プレビュー追従速度", subtitle: "プリセット hover 時のカーブ追従", level: $viewModel.handlePreviewLevel,
                 scale: EQLayout.Tuning.handlePreview
             )
+        }
+    }
+
+    // MARK: - Mixer
+
+    private var mixerSection: some View {
+        PanelSection("Mixer") {
+            settingsRow(title: "ミキサーの初期化", subtitle: "現在登録されているチャンネルをすべて削除して初期状態に戻す") {
+                Button {
+                    showingResetMixerConfirmation = true
+                } label: {
+                    Text("初期化実行")
+                        .font(.system(size: 13))
+                        .foregroundColor(EQLayout.Palette.faint)
+                        .frame(maxWidth: 100)
+                        .padding(.vertical, 10)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(EQLayout.Palette.buttonLine, lineWidth: 1))
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .destructiveConfirmationAlert(
+                    "ミキサーを初期化しますか？", isPresented: $showingResetMixerConfirmation,
+                    confirmTitle: "初期化", onConfirm: mixer.resetToInitialState
+                )
+            }
         }
     }
 

@@ -99,6 +99,36 @@ enum DiagnosticsReport {
                     readerValue(s, framesText(s.maxOccupancyFrames, s)),
                 ]
             ),
+            DiagnosticsRow(
+                title: "アプリ別ゲイン", subtitle: "全チャンネル / ゲイン変更あり",
+                values: [
+                    "\(s.mixerCoordination.channelCount) / \(s.mixerCoordination.nonNeutralChannelCount)",
+                ]
+            ),
+            DiagnosticsRow(
+                title: "接続中のクライアント", subtitle: "登録数 / 上限",
+                values: [readerValue(s, "\(s.mixerDriver.slotsInUse) / \(s.mixerDriver.slotCount)")]
+            ),
+            DiagnosticsRow(
+                title: "アプリの特定", subtitle: "非公開 API / 親プロセス / 自プロセス / 未特定",
+                values: [
+                    [
+                        s.mixerCoordination.resolvedByPrivateAPICount,
+                        s.mixerCoordination.resolvedByParentCount,
+                        s.mixerCoordination.resolvedAsProcessCount,
+                        s.mixerCoordination.unresolvedCount,
+                    ].map(String.init).joined(separator: " / "),
+                ]
+            ),
+            // 壊れ方が静かなので、シンボルが引けたかどうかそのものを出す。
+            DiagnosticsRow(
+                title: "特定に使える手段",
+                values: [s.mixerCoordination.privateAPIAvailable ? "非公開 API + 親プロセス" : "親プロセスのみ"]
+            ),
+            DiagnosticsRow(
+                title: "ゲイン制御のリース", subtitle: "残り時間",
+                values: [readerValue(s, leaseText(s.mixerDriver.leaseRemainingSeconds))]
+            ),
         ])
     }
 
@@ -214,6 +244,18 @@ enum DiagnosticsReport {
                     countText(s.writeDeadlineMissedCount) + " / " + countText(s.silenceFilledGapCount),
                 ]
             ),
+            DiagnosticsRow(
+                title: "ミキサーへの登録失敗", subtitle: "ゲインが効かないクライアントが出た回数",
+                values: [countText(s.mixerDriver.slotOverflowCount)]
+            ),
+            DiagnosticsRow(
+                title: "リース失効によるゲイン解除", subtitle: "SimpleEQ が更新を止めた回数",
+                values: [countText(s.mixerDriver.neutralizedCount)]
+            ),
+            DiagnosticsRow(
+                title: "ゲインの受け渡し失敗", subtitle: "ドライバが受け取れなかった件数",
+                values: ["\(s.mixerDriver.gainEntryDroppedCount) 件"]
+            ),
         ])
     }
 
@@ -290,6 +332,12 @@ enum DiagnosticsReport {
     private static func framesText(_ frames: Int, _ s: AudioRuntimeMetrics.Snapshot) -> String {
         let ms = OccupancyPolicy.formattedMilliseconds(frames: frames, sampleRate: s.appliedSampleRate)
         return "\(frames) frames (\(ms) ms)"
+    }
+
+    /// リースの残り時間。丸めが秒未満まで要るため、経過時間の書式とは別に持つ。
+    private static func leaseText(_ seconds: Double?) -> String {
+        guard let seconds else { return "制御なし" }
+        return String(format: "%.1f s", max(0, seconds))
     }
 
     /// レートは未取得のとき 0 が入るため、数値をそのまま見せず未取得と分かる形にする。
