@@ -143,6 +143,31 @@ final class MixerCoordinatorTests: XCTestCase {
         XCTAssertTrue(update.identities.isEmpty)
     }
 
+    /// SimpleEQ 自身も、自分のドライバのクライアントとして席を取ることがある。
+    func testSelfIsNeverOffered() {
+        coordinator = MixerCoordinator(
+            audioWorld: AudioWorld(queue: DispatchQueue(label: "MixerCoordinatorTests.selfAudioWorld")),
+            bridge: bridge,
+            levelStore: levelStore,
+            resolver: MixerAppResolver(environment: MixerAppResolver.Environment(
+                responsibleForPID: { $0 },
+                parentPID: { _ in nil },
+                executablePath: { _ in Self.playerPath },
+                bundleInfo: { _ in MixerAppResolver.BundleInfo(bundleID: "com.example.player", displayName: "Player") }
+            )),
+            selfChannelKey: Self.playerKey,
+            queue: DispatchQueue(label: "MixerCoordinatorTests.selfCoordinator"),
+            now: { [clock = clock!] in clock.now }
+        )
+        coordinator.didUpdate = { [sink = sink!] update in sink.receive(update) }
+
+        bridge.roster = [entry(clientID: 1, pid: 501, bundleID: "com.example.player", active: true)]
+        let update = waitForUpdate { bumpRosterRevision(generation: 1); coordinator.runPass() }
+        XCTAssertTrue(update.identities.isEmpty)
+        XCTAssertTrue(update.playingKeys.isEmpty)
+        XCTAssertTrue(update.clientIDsByChannelKey.isEmpty)
+    }
+
     func testUnresolvableClientIsNeverOffered() {
         bridge.roster = [entry(clientID: 1, pid: 999, bundleID: "com.example.ghost", active: true)]
         let update = waitForUpdate { bumpRosterRevision(generation: 1); coordinator.runPass() }

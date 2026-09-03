@@ -96,6 +96,7 @@ final class MixerCoordinator: @unchecked Sendable {
     private let bridge: MixerAudioBridge
     private let levelStore: MixerLevelStore
     private let resolver: MixerAppResolver
+    private let selfChannelKey: String?
     private let now: @Sendable () -> TimeInterval
 
     // 以下はすべて queue 上だけが読み書きする。
@@ -115,6 +116,7 @@ final class MixerCoordinator: @unchecked Sendable {
         bridge: MixerAudioBridge,
         levelStore: MixerLevelStore,
         resolver: MixerAppResolver = MixerAppResolver(environment: .live()),
+        selfChannelKey: String? = Bundle.main.bundleIdentifier.map(MixerSpec.bundleKey),
         queue: DispatchQueue = DispatchQueue(label: "com.simpleeq.mixer", qos: .utility),
         now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }
     ) {
@@ -122,6 +124,7 @@ final class MixerCoordinator: @unchecked Sendable {
         self.bridge = bridge
         self.levelStore = levelStore
         self.resolver = resolver
+        self.selfChannelKey = selfChannelKey
         self.queue = queue
         self.now = now
     }
@@ -160,13 +163,18 @@ final class MixerCoordinator: @unchecked Sendable {
             let pid = pid_t(bitPattern: entry.processID)
             let resolution = resolutions[pid] ?? resolver.resolve(pid: pid)
             resolutions[pid] = resolution
-            guard entry.active, let key = resolution.channelKey, let identity = resolution.identity else { continue }
+            guard entry.active, let key = channelKey(forProcess: entry.processID),
+                  let identity = resolution.identity else { continue }
             identities[key] = identity
         }
     }
 
+    /// 自分自身は行にしない。SimpleEQ が出す音は全アプリの音そのもので、他の行と並べても
+    /// 意味を持たない。
     private func channelKey(forProcess processID: UInt32) -> String? {
-        resolutions[pid_t(bitPattern: processID)]?.channelKey
+        guard let key = resolutions[pid_t(bitPattern: processID)]?.channelKey,
+              key != selfChannelKey else { return nil }
+        return key
     }
 
     private func reconcile() {

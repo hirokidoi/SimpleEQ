@@ -28,10 +28,13 @@ final class MixerRenderClock {
     var isRunning: Bool { timer != nil }
 
     /// 見えているかどうかを受ける。行の出入りだけでは止まらない。
-    var active = true {
+    /// 偽で始まるため、はじめて見えた回も 2 回目以降と同じ経路を通る。
+    var active = false {
         didSet {
             guard active != oldValue else { return }
-            active ? start() : stop()
+            guard active else { return stop() }
+            discardValuesAccumulatedWhileStopped()
+            start()
         }
     }
 
@@ -65,6 +68,7 @@ final class MixerRenderClock {
     private func start() {
         guard active, views.count > 0 else { return }
         guard timer == nil || appliedFps != viewModel.visualizerFps else { return }
+        if timer == nil { discardValuesAccumulatedWhileStopped() }
         stop()
         appliedFps = viewModel.visualizerFps
         let timer = Timer.scheduledTimer(withTimeInterval: 1 / viewModel.visualizerFps, repeats: true) { [weak self] _ in
@@ -80,7 +84,14 @@ final class MixerRenderClock {
         appliedFps = nil
     }
 
-    private func tick() {
+    /// 止まっている間もピークは溜まり、クリップの数も進む。
+    private func discardValuesAccumulatedWhileStopped() {
+        levelStore.takeSamples(into: &samples)
+        for index in samples.indices { lastClipCounts[index] = samples[index].clipEventCount }
+        for view in views.allObjects { view.resetDisplayedLevel() }
+    }
+
+    func tick() {
         start()
         levelStore.takeSamples(into: &samples)
         slotIndexByClientID.removeAll(keepingCapacity: true)
@@ -111,7 +122,7 @@ final class MixerRowLayerView: NSView {
     private var segments: [CALayer] = []
 
     private var position: Double
-    private var smoothedRatio: Double = 0
+    private(set) var smoothedRatio: Double = 0
     /// 段の幾何はレイアウトが変わったときだけ決まる。毎フレーム組み立て直さない。
     private var segmentGrid: EQLayout.SegmentGrid?
     private weak var clock: MixerRenderClock?
@@ -276,6 +287,15 @@ final class MixerRowLayerView: NSView {
             )
         }
         applyMeter(ratio: smoothedRatio, clipped: false)
+    }
+
+    /// 残しておくと、次のフレームが届くまで止まる前の高さを見せてしまう。
+    func resetDisplayedLevel() {
+        smoothedRatio = 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        applyMeter(ratio: 0, clipped: false)
+        CATransaction.commit()
     }
 
     func applyFrame(clock: MixerRenderClock) {
