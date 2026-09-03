@@ -727,22 +727,12 @@ final class SettingsStoreTests: XCTestCase {
         let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
         XCTAssertNil(json["mixerChannels"], "前提: この項目を持たない保存データであること")
-        XCTAssertNil(json["mixerWindowPlacement"], "前提: この項目を持たない保存データであること")
 
         let store = SettingsStore(defaults: defaults)
         XCTAssertNil(store.mixerChannels, "不在は「まだ一度も設定していない」")
-        XCTAssertNil(store.mixerWindowPlacement)
         XCTAssertEqual(store.gains, gains, "他の項目が既定へ戻らない")
         XCTAssertEqual(store.preset, .slot3)
         XCTAssertTrue(store.bypass)
-    }
-
-    func testMixerWindowPlacementRoundTripsAcrossInstances() {
-        let placement = SettingsStore.WindowPlacement(
-            origin: SettingsStore.WindowOrigin(x: 120, y: 340), height: 700
-        )
-        SettingsStore(defaults: defaults).mixerWindowPlacement = placement
-        XCTAssertEqual(SettingsStore(defaults: defaults).mixerWindowPlacement, placement)
     }
 
     /// 空配列は「ユーザーが全部消した」であり、初回判定には使わない。

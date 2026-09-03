@@ -26,10 +26,9 @@ final class MixerModelTests: XCTestCase {
     private func identity(_ name: String) -> MixerAppIdentity { MixerAppIdentity(displayName: name) }
 
     private func update(
-        identities: [String: MixerAppIdentity], playing: Set<String> = [],
-        clientIDs: [String: [UInt32]] = [:]
+        identities: [String: MixerAppIdentity], clientIDs: [String: [UInt32]] = [:]
     ) -> MixerCoordinatorUpdate {
-        MixerCoordinatorUpdate(identities: identities, playingKeys: playing, clientIDsByChannelKey: clientIDs)
+        MixerCoordinatorUpdate(identities: identities, clientIDsByChannelKey: clientIDs)
     }
 
     // MARK: - 初期セット
@@ -78,69 +77,174 @@ final class MixerModelTests: XCTestCase {
         let a = MixerSpec.bundleKey("com.example.a")
         let b = MixerSpec.bundleKey("com.example.b")
 
-        model.apply(update(identities: [a: identity("A"), b: identity("B")], playing: [a]))
+        model.apply(update(identities: [a: identity("A"), b: identity("B")]))
         XCTAssertEqual(model.candidates.map(\.key).sorted(), [a, b].sorted())
-        XCTAssertEqual(model.candidates.first { $0.key == a }?.playing, true)
 
-        model.add(key: a)
+        model.setShown(true)
+        model.beginEditing()
+        model.toggleCheck(key: a)
+        model.endEditing()
         XCTAssertEqual(model.candidates.map(\.key), [b], "チャンネルになったキーは候補から外れる")
 
-        model.remove(key: a)
+        model.beginEditing()
+        model.toggleCheck(key: a)
+        model.endEditing()
         XCTAssertEqual(model.candidates.map(\.key).sorted(), [a, b].sorted(), "外した行は候補へ戻る")
     }
 
-    /// パネルを開いていない間も辞書は貯まるため、開いた直後から正しい候補が出る。
-    func testCandidatesArriveWithoutThePanelHavingBeenOpened() {
+    /// 面を出していない間も辞書は貯まるため、出した直後から正しい候補が出る。
+    func testCandidatesArriveWithoutTheMixerHavingBeenShown() {
         let settings = SettingsStore(defaults: defaults)
         settings.mixerChannels = []
         let model = makeModel(settings)
         let key = MixerSpec.bundleKey("com.example.a")
 
         model.apply(update(identities: [key: identity("A")]))
-        model.editing = true
         XCTAssertEqual(model.candidates.map(\.key), [key])
     }
 
-    /// 開き直したときに編集モードが残らない。
-    func testClosingThePanelLeavesEditMode() {
-        let settings = SettingsStore(defaults: defaults)
-        settings.mixerChannels = []
-        let model = makeModel(settings)
+    // MARK: - 編集モード
 
-        model.editing = true
-        model.panelDidClose()
-        XCTAssertFalse(model.editing)
+    private func makeShownModel(_ settings: SettingsStore) -> MixerModel {
+        let model = makeModel(settings)
+        model.setShown(true)
+        return model
     }
 
-    func testChannelLimitStopsFurtherAdditions() {
+    /// 抜けるまで一覧も永続化も動かない。
+    func testNothingIsAppliedUntilEditingEnds() {
         let settings = SettingsStore(defaults: defaults)
-        settings.mixerChannels = (0..<MixerSpec.maxChannelCount).map {
-            SettingsStore.MixerChannelEntry(key: MixerSpec.bundleKey("com.example.\($0)"), gain: 1, muted: false)
-        }
-        let model = makeModel(settings)
-        XCTAssertFalse(model.canAddChannel)
+        let key = MixerSpec.bundleKey("com.example.a")
+        settings.mixerChannels = [SettingsStore.MixerChannelEntry(key: key, gain: 1, muted: false)]
+        let model = makeShownModel(settings)
 
-        model.add(key: MixerSpec.bundleKey("com.example.extra"))
-        XCTAssertEqual(model.channels.count, MixerSpec.maxChannelCount)
+        model.beginEditing()
+        model.toggleCheck(key: key)
+        XCTAssertEqual(model.channels.map(\.key), [key])
+        XCTAssertEqual(settings.mixerChannels?.map(\.key), [key])
 
-        model.remove(key: MixerSpec.bundleKey("com.example.0"))
-        XCTAssertTrue(model.canAddChannel)
+        model.endEditing()
+        XCTAssertTrue(model.channels.isEmpty)
+        XCTAssertEqual(settings.mixerChannels?.isEmpty, true)
     }
 
-    // MARK: - 行の操作と永続化
-
-    func testReorderIsPersistedAsTheOrderTheUserPut() {
+    /// 残るのはチェックの入っている行で、並びは編集モードで置いたとおり。
+    func testEndingEditingKeepsCheckedRowsInTheOrderTheyWerePut() {
         let settings = SettingsStore(defaults: defaults)
         let keys = ["a", "b", "c"].map { MixerSpec.bundleKey("com.example.\($0)") }
         settings.mixerChannels = keys.map {
             SettingsStore.MixerChannelEntry(key: $0, gain: 1, muted: false)
         }
-        let model = makeModel(settings)
+        let model = makeShownModel(settings)
 
-        model.move(fromKey: keys[2], toKey: keys[0])
+        model.beginEditing()
+        model.moveEditRow(fromKey: keys[2], toKey: keys[0])
+        model.endEditing()
         XCTAssertEqual(model.channels.map(\.key), [keys[2], keys[0], keys[1]])
         XCTAssertEqual(settings.mixerChannels?.map(\.key), [keys[2], keys[0], keys[1]])
     }
+
+    /// 残した行の音量とミュートは編集モードを通っても変わらない。
+    func testCheckedRowKeepsItsSettings() throws {
+        let settings = SettingsStore(defaults: defaults)
+        let key = MixerSpec.bundleKey("com.example.a")
+        settings.mixerChannels = [SettingsStore.MixerChannelEntry(key: key, gain: 0.5, muted: true)]
+        let model = makeShownModel(settings)
+        // 保存の段へ丸められた値がそのまま残ることを見る (丸めた先の値は決め打ちしない)。
+        let gainBefore = try XCTUnwrap(model.channels.first?.gain)
+
+        model.beginEditing()
+        model.endEditing()
+        XCTAssertEqual(model.channels.first?.gain, gainBefore)
+        XCTAssertEqual(model.channels.first?.muted, true)
+    }
+
+    /// 外した行の音量とミュートは残さない。
+    func testUncheckedRowLosesItsSettings() {
+        let settings = SettingsStore(defaults: defaults)
+        let key = MixerSpec.bundleKey("com.example.a")
+        settings.mixerChannels = [SettingsStore.MixerChannelEntry(key: key, gain: 0.5, muted: true)]
+        let model = makeShownModel(settings)
+        model.apply(update(identities: [key: identity("A")]))
+
+        model.beginEditing()
+        model.toggleCheck(key: key)
+        model.endEditing()
+
+        model.beginEditing()
+        model.toggleCheck(key: key)
+        model.endEditing()
+        XCTAssertEqual(model.channels.first?.gain, MixerGainScale.unityGain)
+        XCTAssertEqual(model.channels.first?.muted, false)
+    }
+
+    /// 編集モードの間は候補の顔ぶれを差し替えない。
+    func testCandidatesAreFrozenWhileEditing() {
+        let settings = SettingsStore(defaults: defaults)
+        settings.mixerChannels = []
+        let model = makeShownModel(settings)
+        let a = MixerSpec.bundleKey("com.example.a")
+        let b = MixerSpec.bundleKey("com.example.b")
+
+        model.apply(update(identities: [a: identity("A")]))
+        model.beginEditing()
+        XCTAssertEqual(model.editRows.map(\.key), [a])
+
+        model.apply(update(identities: [a: identity("A"), b: identity("B")]))
+        XCTAssertEqual(model.editRows.map(\.key), [a], "編集モードの間は増えない")
+        XCTAssertEqual(model.candidates.map(\.key), [a])
+
+        model.endEditing()
+        model.beginEditing()
+        XCTAssertEqual(model.editRows.map(\.key).sorted(), [a, b].sorted(), "抜けてから入り直せば増える")
+    }
+
+    func testChannelLimitStopsFurtherChecks() {
+        let settings = SettingsStore(defaults: defaults)
+        settings.mixerChannels = (0..<MixerSpec.maxChannelCount).map {
+            SettingsStore.MixerChannelEntry(key: MixerSpec.bundleKey("com.example.\($0)"), gain: 1, muted: false)
+        }
+        let model = makeShownModel(settings)
+        let extra = MixerSpec.bundleKey("com.example.extra")
+        model.apply(update(identities: [extra: identity("Extra")]))
+
+        model.beginEditing()
+        XCTAssertFalse(model.canCheckMore)
+        model.toggleCheck(key: extra)
+        XCTAssertEqual(model.editRows.filter(\.checked).count, MixerSpec.maxChannelCount)
+
+        model.toggleCheck(key: MixerSpec.bundleKey("com.example.0"))
+        XCTAssertTrue(model.canCheckMore)
+        model.toggleCheck(key: extra)
+        XCTAssertTrue(model.editRows.first { $0.key == extra }?.checked == true)
+    }
+
+    /// 面を降ろす操作は確定を通って編集モードを終える。
+    func testEndingTheSurfaceCommitsThroughTheSameEntry() {
+        let settings = SettingsStore(defaults: defaults)
+        let key = MixerSpec.bundleKey("com.example.a")
+        settings.mixerChannels = [SettingsStore.MixerChannelEntry(key: key, gain: 1, muted: false)]
+        let model = makeShownModel(settings)
+
+        model.beginEditing()
+        model.toggleCheck(key: key)
+        model.setShown(false)
+        XCTAssertFalse(model.editing)
+        XCTAssertFalse(model.shown)
+        XCTAssertTrue(model.channels.isEmpty, "降ろす操作でも確定する")
+    }
+
+    /// 面が出ていなければ編集モードへ入らない。
+    func testEditingRequiresTheSurfaceToBeShown() {
+        let settings = SettingsStore(defaults: defaults)
+        settings.mixerChannels = []
+        let model = makeModel(settings)
+
+        model.beginEditing()
+        XCTAssertFalse(model.editing)
+    }
+
+    // MARK: - 行の操作と永続化
 
     /// ドラッグ中の値は確定するまで行へ書かない (音への反映だけ先に行う)。
     func testGainIsWrittenToTheChannelOnlyOnCommit() {

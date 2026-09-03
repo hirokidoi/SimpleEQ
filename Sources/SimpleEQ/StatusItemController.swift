@@ -116,7 +116,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
         menu.addItem(modeItem)
         viewModeItem = modeItem
 
-        let mixerItem = NSMenuItem(title: "EQ Mixer", action: #selector(openMixerWindow), keyEquivalent: "")
+        let mixerItem = NSMenuItem(title: "EQ Mixer", action: #selector(openMixer), keyEquivalent: "")
         mixerItem.target = self
         menu.addItem(mixerItem)
 
@@ -230,7 +230,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
         windowController.showSettings()
     }
 
-    @objc private func openMixerWindow() {
+    @objc private func openMixer() {
         windowController.showMixer()
     }
 

@@ -20,7 +20,7 @@ enum MixerAppDirectory {
             return MixerAppIdentity(displayName: name, iconFilePath: url.path)
         }
         guard let name = MixerSpec.processName(inKey: key) else { return nil }
-        return MixerAppIdentity(displayName: name, subtitle: "バンドルがありません")
+        return MixerAppIdentity(displayName: name, subtitle: "No bundle")
     }
 }
 
@@ -43,14 +43,25 @@ final class MixerModel: ObservableObject {
     struct Candidate: Identifiable, Equatable {
         let key: String
         let identity: MixerAppIdentity
-        let playing: Bool
+
+        var id: String { key }
+    }
+
+    /// 編集モードの行。登録済みと候補を 1 本に並べ、チェックの有無だけで区別する。
+    struct EditRow: Identifiable, Equatable {
+        let key: String
+        var checked: Bool
+        var identity: MixerAppIdentity?
 
         var id: String { key }
     }
 
     @Published private(set) var channels: [Channel] = []
     @Published private(set) var candidates: [Candidate] = []
-    @Published var editing = false
+    @Published private(set) var shown = false
+    @Published private(set) var editing = false
+    /// 編集モードの間だけ持つ作業リスト。
+    @Published private(set) var editRows: [EditRow] = []
 
     /// メーターが読む、チャンネルキーごとのクライアント識別値。動くのは席が増減したときだけ。
     @Published private(set) var clientIDsByChannelKey: [String: [UInt32]] = [:]
@@ -61,14 +72,14 @@ final class MixerModel: ObservableObject {
     private let coordinator: MixerCoordinator?
     /// 候補プールの母集合 (調停役が持つ辞書の写し)。
     private var resolvedIdentities: [String: MixerAppIdentity] = [:]
-    private var playingKeys: Set<String> = []
     /// 鳴っていないチャンネルの素性。行の集合が変わったときだけ引く。
     private var directoryIdentities: [String: MixerAppIdentity?] = [:]
     private var iconCache: [String: NSImage] = [:]
     /// ドラッグ中の値。確定するまで channels へは書かない。
     private var draggingGains: [String: Double] = [:]
 
-    var canAddChannel: Bool { channels.count < MixerSpec.maxChannelCount }
+    /// これ以上チェックを増やせるか。
+    var canCheckMore: Bool { editRows.filter(\.checked).count < MixerSpec.maxChannelCount }
 
     init(settings: SettingsStore, coordinator: MixerCoordinator?, levelStore: MixerLevelStore) {
         self.settings = settings
@@ -84,46 +95,67 @@ final class MixerModel: ObservableObject {
     /// ドラッグ中も届くため、値が動いた回だけ代入する。
     func apply(_ update: MixerCoordinatorUpdate) {
         resolvedIdentities = update.identities
-        playingKeys = update.playingKeys
         if clientIDsByChannelKey != update.clientIDsByChannelKey {
             clientIDsByChannelKey = update.clientIDsByChannelKey
         }
         refreshIdentities()
-        rebuildCandidates()
+        // 編集モードの間は顔ぶれを差し替えない。狙っていた行が動く。
+        if !editing { rebuildCandidates() }
     }
 
-    /// パネルを開いたときの起動契機。周期と同じ 1 パスを呼ぶだけで、専用の経路を作らない。
-    func panelDidAppear() {
-        coordinator?.runPass()
+    // MARK: - 面の出し入れと編集モード
+
+    func toggleShown() {
+        setShown(!shown)
     }
 
-    /// 閉じた時点を編集モードの終わりにする。
-    func panelDidClose() {
+    func setShown(_ on: Bool) {
+        guard shown != on else { return }
+        if !on { endEditing() }
+        shown = on
+        // 周期と同じ 1 パスを呼ぶだけで、専用の経路を作らない。
+        if on { coordinator?.runPass() }
+    }
+
+    func beginEditing() {
+        guard shown, !editing else { return }
+        editRows = channels.map { EditRow(key: $0.key, checked: true, identity: $0.identity) }
+            + candidates.map { EditRow(key: $0.key, checked: false, identity: $0.identity) }
+        editing = true
+    }
+
+    /// 編集モードを降りる唯一の口。確定はここだけが行う。
+    func endEditing() {
+        guard editing else { return }
+        var existing: [String: Channel] = [:]
+        for channel in channels { existing[channel.key] = channel }
+        channels = editRows.filter(\.checked).map {
+            existing[$0.key] ?? Channel(
+                key: $0.key, gain: MixerGainScale.unityGain, muted: false, identity: $0.identity
+            )
+        }
+        let kept = Set(channels.map(\.key))
+        draggingGains = draggingGains.filter { kept.contains($0.key) }
+        editRows = []
         editing = false
+        persistAndPush()
+    }
+
+    func toggleCheck(key: String) {
+        guard let index = editRows.firstIndex(where: { $0.key == key }) else { return }
+        guard editRows[index].checked || canCheckMore else { return }
+        editRows[index].checked.toggle()
+    }
+
+    func moveEditRow(fromKey: String, toKey: String) {
+        guard fromKey != toKey,
+              let from = editRows.firstIndex(where: { $0.key == fromKey }),
+              let to = editRows.firstIndex(where: { $0.key == toKey }) else { return }
+        let moved = editRows.remove(at: from)
+        editRows.insert(moved, at: to)
     }
 
     // MARK: - チャンネルの操作
-
-    func add(key: String) {
-        guard canAddChannel, !channels.contains(where: { $0.key == key }) else { return }
-        channels.append(Channel(key: key, gain: MixerGainScale.unityGain, muted: false, identity: identity(for: key)))
-        persistAndPush()
-    }
-
-    func remove(key: String) {
-        channels.removeAll { $0.key == key }
-        draggingGains.removeValue(forKey: key)
-        persistAndPush()
-    }
-
-    func move(fromKey: String, toKey: String) {
-        guard fromKey != toKey,
-              let from = channels.firstIndex(where: { $0.key == fromKey }),
-              let to = channels.firstIndex(where: { $0.key == toKey }) else { return }
-        let moved = channels.remove(at: from)
-        channels.insert(moved, at: to)
-        persistAndPush()
-    }
 
     func toggleMute(key: String) {
         guard let index = channels.firstIndex(where: { $0.key == key }) else { return }
@@ -158,6 +190,7 @@ final class MixerModel: ObservableObject {
 
     /// まだ設定していない状態へ戻すことで、起動時と同じ経路を走らせる。
     func resetToInitialState() {
+        endEditing()
         settings.mixerChannels = nil
         draggingGains.removeAll()
         loadChannels()
@@ -209,7 +242,7 @@ final class MixerModel: ObservableObject {
         let taken = Set(channels.map(\.key))
         let rebuilt = resolvedIdentities
             .filter { !taken.contains($0.key) }
-            .map { Candidate(key: $0.key, identity: $0.value, playing: playingKeys.contains($0.key)) }
+            .map { Candidate(key: $0.key, identity: $0.value) }
             .sorted { $0.identity.displayName.localizedCaseInsensitiveCompare($1.identity.displayName) == .orderedAscending }
         if candidates != rebuilt { candidates = rebuilt }
     }

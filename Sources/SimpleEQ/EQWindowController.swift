@@ -15,11 +15,16 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     private var aboutWindowController: NSWindowController?
     private var mixer: MixerModel!
     private var mixerRenderClock: MixerRenderClock!
-    private var mixerWindowController: NSWindowController?
     /// Diagnostics ウィンドウ専用の delegate。NSWindow.delegate は weak 参照のため、ここで strong に
     /// 保持しないと解放され、delegate 経路が発火しなくなる。
     private var diagnosticsWindowDelegate: DiagnosticsWindowDelegate?
-    private var mixerWindowDelegate: MixerWindowDelegate?
+    /// 周期処理の駆動条件が使う可視状態。表示・非表示の各所はここだけを動かす。
+    private var windowIsVisible = false {
+        didSet {
+            guard windowIsVisible != oldValue else { return }
+            updateDrivenWork()
+        }
+    }
 
     convenience init(
         viewModel: EQViewModel, settings: SettingsStore, diagnostics: DiagnosticsModel, mixer: MixerModel
@@ -42,7 +47,16 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         self.mixer = mixer
         self.mixerRenderClock = MixerRenderClock(levelStore: mixer.levelStore, viewModel: viewModel)
         window.delegate = self
+        window.onCancel = { [weak mixer] in mixer?.endEditing() }
         applyViewMode(viewModel.viewMode)
+
+        // 駆動条件はミキサーの状態が動くたびに導き直す。@Published は変更前に流すため、
+        // モデルを読み直さず流れてきた値を使う。
+        mixer.$shown.combineLatest(mixer.$editing)
+            .sink { [weak self] shown, editing in
+                MainActor.assumeIsolated { self?.applyDrivenWork(shown: shown, editing: editing) }
+            }
+            .store(in: &cancellables)
 
         applyAlwaysOnTop(viewModel.alwaysOnTop)
         viewModel.$alwaysOnTop
@@ -66,11 +80,12 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         case .normal:
             FirstMouseHostingView(rootView: RootView(
                 viewModel: viewModel,
+                mixer: mixer,
+                mixerClock: mixerRenderClock,
                 onOpenWindow: { [weak self] destination in
                     switch destination {
                     case .settings: self?.showSettings()
                     case .diagnostics: self?.showDiagnostics()
-                    case .mixer: self?.showMixer()
                     }
                 }
             ))
@@ -88,6 +103,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 
     private func applyViewMode(_ newMode: ViewMode) {
         guard let window, appliedViewMode != newMode else { return }
+        // コンパクトビューには面を置く場所が無い。
+        if newMode == .compact { mixer.setShown(false) }
         let previousMode = appliedViewMode
         if let previousMode { persistWindowOrigin(for: previousMode) }
         appliedViewMode = newMode
@@ -191,47 +208,11 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// ミキサーウィンドウを開く。Settings と同じ流儀に倣う (幅は固定で高さのみ可変)。
-    /// 位置と高さは EQ ウィンドウと同じく保存する。
+    /// メニューバーからのミキサーの導線。ノーマルビューでなければ切り替えてから出す。
     func showMixer() {
-        if mixerWindowController == nil {
-            let width = EQLayout.Mixer.windowWidth
-            let saved = settings.mixerWindowPlacement
-            let height = max(EQLayout.Mixer.windowMinHeight, CGFloat(saved?.height ?? 0))
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "SimpleEQ Mixer"
-            window.isReleasedWhenClosed = false
-            // SwiftUI 側の下限は内容の寸法なので、ここも内容の寸法で揃える
-            // (フレームの寸法で指定すると、タイトルバーのぶんだけ内容が足りなくなる)。
-            window.contentMinSize = NSSize(width: width, height: EQLayout.Mixer.windowMinHeight)
-            // 上限は内容から導かない。導くと編集モードの出し入れで高さが動く。
-            window.contentMaxSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-            if let origin = EQWindowController.restoredOrigin(
-                saved: saved?.origin, size: NSSize(width: width, height: height)
-            ) {
-                window.setFrameOrigin(origin)
-            } else {
-                window.center()
-            }
-            window.contentView = NSHostingView(
-                rootView: MixerView(model: mixer, viewModel: viewModel, clock: mixerRenderClock)
-            )
-            mixerWindowController = NSWindowController(window: window)
-            // NSWindowController は生成時にウィンドウのデリゲートを自分で握るため、その後に設定する。
-            let delegate = MixerWindowDelegate(owner: self)
-            mixerWindowDelegate = delegate
-            window.delegate = delegate
-            applyAlwaysOnTop(viewModel.alwaysOnTop)
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        mixerWindowController?.showWindow(nil)
-        mixerWindowController?.window?.makeKeyAndOrderFront(nil)
-        updateMixerRenderActive(isVisible: true, isMiniaturized: false)
+        viewModel.viewMode = .normal
+        show()
+        mixer.setShown(true)
     }
 
     /// About ウィンドウを開く。Settings / Diagnostics と同じ流儀に倣う。寸法は固定 (幅は定数、
@@ -282,7 +263,6 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         settingsWindowController?.window?.level = level
         diagnosticsWindowController?.window?.level = level
         aboutWindowController?.window?.level = level
-        mixerWindowController?.window?.level = level
     }
 
     /// メニューバーからの開閉トグル。可視状態を viewModel へ反映する。
@@ -300,7 +280,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         guard let window = window else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        setVisualizerActive(true)
+        windowIsVisible = true
         promptDriverInstallIfNeeded()
     }
 
@@ -318,26 +298,14 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         handleWindowHidden()
     }
 
-    private func setVisualizerActive(_ active: Bool) {
-        viewModel.visualizerActive = active
-    }
-
     private func handleWindowHidden() {
-        setVisualizerActive(false)
+        windowIsVisible = false
+        // 次に開いたときはビジュアライザから始める。
+        mixer.setShown(false)
         hideSettingsIfOpen()
         hideDiagnosticsIfOpen()
         hideAboutIfOpen()
-        hideMixerIfOpen()
         persistWindowOrigin()
-    }
-
-    /// ミキサーウィンドウが表示中であれば隠す (Settings と同じ扱い)。
-    private func hideMixerIfOpen() {
-        guard let mixerWindow = mixerWindowController?.window, mixerWindow.isVisible else { return }
-        mixerWindow.orderOut(nil)
-        // orderOut は delegate 通知を出さないため、可視状態の反映をここで直接行う。
-        updateMixerRenderActive(isVisible: false, isMiniaturized: false)
-        handleMixerWindowClosed()
     }
 
     /// Settings ウィンドウが表示中であれば隠す。破棄せず隠すだけの流儀に合わせ、close ではなく
@@ -359,21 +327,6 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     private func hideAboutIfOpen() {
         guard let aboutWindow = aboutWindowController?.window, aboutWindow.isVisible else { return }
         aboutWindow.orderOut(nil)
-    }
-
-    fileprivate func handleMixerWindowClosed() {
-        mixer.panelDidClose()
-        persistMixerWindowPlacement()
-    }
-
-    /// 現在のミキサーウィンドウの位置と高さを保存する。閉じたときに加えて、
-    /// Cmd+Q 等で終了するケースをカバーするため、アプリの終了処理からも呼ぶ。
-    func persistMixerWindowPlacement() {
-        guard let window = mixerWindowController?.window else { return }
-        settings.mixerWindowPlacement = SettingsStore.WindowPlacement(
-            origin: SettingsStore.WindowOrigin(x: window.frame.origin.x, y: window.frame.origin.y),
-            height: window.contentRect(forFrameRect: window.frame).height
-        )
     }
 
     /// 現在の EQ ウィンドウ位置を保存する。handleWindowHidden() に加えて、
@@ -400,7 +353,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - 周期処理 (可視性連動)
 
     /// ウィンドウの可視・ミニマイズの状態から、そのウィンドウのための周期処理を有効にすべきかを
-    /// 決める準純粋関数。診断のポーリングとミキサーの描画クロックが同じ規則で従う。
+    /// 決める準純粋関数。
     static func wantsWindowDrivenWorkActive(isVisible: Bool, isMiniaturized: Bool) -> Bool {
         isVisible && !isMiniaturized
     }
@@ -413,11 +366,27 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    /// 同じ規則をミキサーの描画クロックへ反映する単一の入口。
-    fileprivate func updateMixerRenderActive(isVisible: Bool, isMiniaturized: Bool) {
-        mixerRenderClock?.active = EQWindowController.wantsWindowDrivenWorkActive(
-            isVisible: isVisible, isMiniaturized: isMiniaturized
+    /// 可視状態とミキサーの状態から 2 つの駆動条件を導く純粋関数。
+    static func drivenWork(
+        windowIsVisible: Bool, mixerShown: Bool, editing: Bool
+    ) -> (visualizer: Bool, mixerMeters: Bool) {
+        (
+            visualizer: windowIsVisible && !mixerShown,
+            mixerMeters: windowIsVisible && mixerShown && !editing
         )
+    }
+
+    /// 上の結果を駆動側へ反映する単一の入口。
+    private func applyDrivenWork(shown: Bool, editing: Bool) {
+        let wants = EQWindowController.drivenWork(
+            windowIsVisible: windowIsVisible, mixerShown: shown, editing: editing
+        )
+        viewModel.visualizerActive = wants.visualizer
+        mixerRenderClock?.active = wants.mixerMeters
+    }
+
+    private func updateDrivenWork() {
+        applyDrivenWork(shown: mixer.shown, editing: mixer.editing)
     }
 
     /// ドライバ未検出の間は EQ ウィンドウを開くたびにインストールを促す (TopBar の警告チップとは
@@ -469,6 +438,9 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 }
 
 final class EQMainWindow: NSWindow {
+    /// Esc の行き先。
+    var onCancel: (() -> Void)?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
@@ -479,29 +451,9 @@ final class EQMainWindow: NSWindow {
         close()
         return true
     }
-}
 
-/// ミキサーウィンドウ専用の NSWindowDelegate。可視状態の変化を転送するだけの薄い転送役。
-private final class MixerWindowDelegate: NSObject, NSWindowDelegate {
-    private weak var owner: EQWindowController?
-
-    init(owner: EQWindowController) {
-        self.owner = owner
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        owner?.updateMixerRenderActive(isVisible: false, isMiniaturized: false)
-        owner?.handleMixerWindowClosed()
-    }
-
-    /// isVisible はミニマイズ中も真のまま (macOS の仕様) だが、isMiniaturized が真である以上
-    /// wantsWindowDrivenWorkActive は偽を返す。
-    func windowDidMiniaturize(_ notification: Notification) {
-        owner?.updateMixerRenderActive(isVisible: true, isMiniaturized: true)
-    }
-
-    func windowDidDeminiaturize(_ notification: Notification) {
-        owner?.updateMixerRenderActive(isVisible: true, isMiniaturized: false)
+    override func cancelOperation(_ sender: Any?) {
+        onCancel?()
     }
 }
 

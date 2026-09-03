@@ -15,12 +15,6 @@ final class SettingsStore {
         var y: Double
     }
 
-    /// 幅を持たないのは、高さだけが可変のウィンドウのために持つため。
-    struct WindowPlacement: Codable, Equatable {
-        var origin: WindowOrigin
-        var height: Double
-    }
-
     private struct PresetOverride: Codable, Equatable {
         var title: String
         var curve: [Double]
@@ -62,7 +56,6 @@ final class SettingsStore {
         /// ユーザーが並べたミキサーのチャンネル。nil は「まだ一度も設定していない」= 初期セットを
         /// 撒く合図で、空配列は「ユーザーが全部消した」。
         var mixerChannels: [MixerChannelEntry]?
-        var mixerWindowPlacement: WindowPlacement?
     }
 
     struct MixerChannelEntry: Codable, Equatable {
@@ -114,8 +107,7 @@ final class SettingsStore {
                 preampDb: 0,
                 preampAutoEnabled: true,
                 preampAutoTargetDb: AutoPreampSpec.targetDbDefault,
-                mixerChannels: nil,
-                mixerWindowPlacement: nil
+                mixerChannels: nil
             )
         }
     }
@@ -322,11 +314,6 @@ final class SettingsStore {
                 $0.windowOrigin = origin
             }
         }
-    }
-
-    var mixerWindowPlacement: WindowPlacement? {
-        get { readState { $0.mixerWindowPlacement } }
-        set { writeState { $0.mixerWindowPlacement = newValue } }
     }
 
     var preampDb: Double {

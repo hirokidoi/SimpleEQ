@@ -20,15 +20,46 @@ final class MixerRenderClockTests: XCTestCase {
         try await super.tearDown()
     }
 
-    private func makeClock(levelStore: MixerLevelStore = MixerLevelStore(slotCount: 4)) -> MixerRenderClock {
+    private func makeViewModel() -> EQViewModel {
         let settings = SettingsStore(defaults: defaults)
-        let viewModel = EQViewModel(
+        return EQViewModel(
             engine: AudioEngine(),
             settings: settings,
             outputController: OutputDeviceController(settings: settings, targetDeviceUID: "test-driver-uid"),
             audioWorld: makeTestAudioWorld()
         )
-        return MixerRenderClock(levelStore: levelStore, viewModel: viewModel)
+    }
+
+    private func makeClock(levelStore: MixerLevelStore = MixerLevelStore(slotCount: 4)) -> MixerRenderClock {
+        MixerRenderClock(levelStore: levelStore, viewModel: makeViewModel())
+    }
+
+    /// 行のメーターの平滑化は、ビジュアライザの調整から切り離して持つ。
+    /// 既定値と一致していると追従しても気づけないため、どちらの段も定数と違う側へ寄せて確かめる。
+    func testSmoothingIsHeldApartFromTheVisualizerSetting() throws {
+        let viewModel = makeViewModel()
+        let apart = try XCTUnwrap(
+            (1...EQLayout.Tuning.attack.values.count).first {
+                EQLayout.Tuning.attack.value(at: $0) != EQLayout.Mixer.meterAttack
+                    && EQLayout.Tuning.release.value(at: $0) != EQLayout.Mixer.meterRelease
+            }
+        )
+        viewModel.attackLevel = apart
+        viewModel.releaseLevel = apart
+        XCTAssertNotEqual(viewModel.attackCoef, EQLayout.Mixer.meterAttack, "前提: 設定側が定数と違う値であること")
+        XCTAssertNotEqual(viewModel.releaseCoef, EQLayout.Mixer.meterRelease, "前提: 設定側が定数と違う値であること")
+
+        let clock = MixerRenderClock(levelStore: MixerLevelStore(slotCount: 4), viewModel: viewModel)
+        XCTAssertEqual(clock.attackCoef, EQLayout.Mixer.meterAttack)
+        XCTAssertEqual(clock.releaseCoef, EQLayout.Mixer.meterRelease)
+    }
+
+    /// 刻みは上限で頭打ちにし、それより遅い設定のときはその設定より速く回さない。
+    func testClockIsCappedButNeverFasterThanTheVisualizer() {
+        let cap = EQLayout.Mixer.meterFpsCap
+        XCTAssertEqual(MixerRenderClock.fps(visualizerFps: cap * 2), cap)
+        XCTAssertEqual(MixerRenderClock.fps(visualizerFps: cap), cap)
+        XCTAssertEqual(MixerRenderClock.fps(visualizerFps: cap / 2), cap / 2)
     }
 
     /// ウィンドウを閉じてもビューはウィンドウに載ったままなので、行の出入りだけでは止まらない。

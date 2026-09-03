@@ -49,15 +49,19 @@ enum EQLayout {
     /// 収まること。高さは内容が決めるため定数を持たない。
     static let aboutWindowWidth: CGFloat = 450
 
-    /// ミキサーパネルの寸法。幅は Settings と共通。内容の増減で高さを動かすことはしない。
+    /// ミキサーの寸法。面はビジュアライザ領域を覆い、行はその中央に置く列へ収める。
     enum Mixer {
-        static let windowWidth: CGFloat = settingsWindowWidth
-        /// 開いたときの高さであり、縮められる下限でもある。
-        static let windowMinHeight: CGFloat = 452
+        /// 行を収める列の左右に取る余白。列の幅はこれを引いた残り。
+        static let columnHorizontalInset: CGFloat = 50
+        /// 列の上下に取る余白。
+        static let columnVerticalInset: CGFloat = 36
         static let rowHorizontalPadding: CGFloat = 12
         static let rowVerticalPadding: CGFloat = 8
         static let rowSpacing: CGFloat = 9
         static let gripWidth: CGFloat = 13
+        static let checkboxColumnWidth: CGFloat = 16
+        static let checkboxSize: CGFloat = 14
+        static let checkboxCornerRadius: CGFloat = 3
         static let iconSize: CGFloat = 22
         static let nameColumnWidth: CGFloat = 158
         static let muteButtonSize = CGSize(width: 27, height: 22)
@@ -65,17 +69,26 @@ enum EQLayout {
         static let sliderTrackHeight: CGFloat = 4
         static let sliderKnobDiameter: CGFloat = 14
         static let valueColumnWidth: CGFloat = 72
-        static let meterWidth: CGFloat = 88
-        static let meterHeight: CGFloat = 12
-        static let meterSegmentCount = 14
-        static let candidateVerticalPadding: CGFloat = 7
-        static let candidatePoolMaxHeight: CGFloat = 172
-        static let removeButtonSize: CGFloat = 22
+        static let meterWidth: CGFloat = 132
+        static let meterHeight: CGFloat = 14
+        static let meterSegmentCount = 21
+
+        /// 編集モードで、ポインタが載っている行の下地。
+        static let rowHoverFill = Color.white.opacity(0.05)
+
+        /// 並べ替えの開始とみなす移動量 (設計値)。これ未満はチェックの切り替えとして扱う。
+        static let reorderMinimumDrag: CGFloat = 3
+
+        /// 行のメーターを描き直す頻度の上限 (fps)。これより速く描き直しても見た目が変わらない。
+        static let meterFpsCap: Double = 15
+
+        /// 行のメーターの平滑化。1 回の更新あたりの係数 (設計値)。立ち上がりは平滑化しない。
+        static let meterAttack: Double = 1
+        static let meterRelease: Double = 0.33
 
         static let separatorThickness: CGFloat = 1
         static var rowHeight: CGFloat { rowVerticalPadding * 2 + iconSize }
         static var rowPitch: CGFloat { rowHeight + separatorThickness }
-        static var candidateRowPitch: CGFloat { candidateVerticalPadding * 2 + iconSize + separatorThickness }
     }
 
     /// 文字主体の面 (Settings / Diagnostics / About) の背景。
@@ -447,6 +460,14 @@ enum EQLayout {
         static let powerOffTrack = Color(hex: 0x2a2e38)
         /// プリセット選択時グラデーションの青成分。
         static let presetActiveBlue = Color(hex: 0x2f6bff)
+
+        /// 編集モードにいることを示すボタンの背景グラデーション。
+        static var editingButtonGradient: LinearGradient {
+            LinearGradient(
+                colors: [Color.white.opacity(0.18), Color.white.opacity(0.07)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+        }
 
         /// 選択中のボタン (プリセット・Settings のレベル選択等) に共通の背景グラデーション。
         static var activeButtonGradient: LinearGradient {

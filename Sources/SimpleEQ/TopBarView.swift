@@ -71,9 +71,7 @@ struct TopBarView: View {
             brandMark.padding(Self.brandMarkHitInset).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-        }
+        .pointerStyle(.link)
     }
 
     private var brandText: some View {

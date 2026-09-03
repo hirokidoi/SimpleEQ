@@ -23,8 +23,8 @@ final class MixerRenderClock {
         lastClipCounts = Array(repeating: 0, count: levelStore.slotCount)
     }
 
-    var attackCoef: Double { viewModel.attackCoef }
-    var releaseCoef: Double { viewModel.releaseCoef }
+    var attackCoef: Double { EQLayout.Mixer.meterAttack }
+    var releaseCoef: Double { EQLayout.Mixer.meterRelease }
     var isRunning: Bool { timer != nil }
 
     /// 見えているかどうかを受ける。行の出入りだけでは止まらない。
@@ -65,13 +65,20 @@ final class MixerRenderClock {
 
     private var appliedFps: Double?
 
+    private var fps: Double { Self.fps(visualizerFps: viewModel.visualizerFps) }
+
+    /// ビジュアライザより速くは回さず、上限も超えない。
+    static func fps(visualizerFps: Double) -> Double {
+        min(visualizerFps, EQLayout.Mixer.meterFpsCap)
+    }
+
     private func start() {
         guard active, views.count > 0 else { return }
-        guard timer == nil || appliedFps != viewModel.visualizerFps else { return }
+        guard timer == nil || appliedFps != fps else { return }
         if timer == nil { discardValuesAccumulatedWhileStopped() }
         stop()
-        appliedFps = viewModel.visualizerFps
-        let timer = Timer.scheduledTimer(withTimeInterval: 1 / viewModel.visualizerFps, repeats: true) { [weak self] _ in
+        appliedFps = fps
+        let timer = Timer.scheduledTimer(withTimeInterval: 1 / fps, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)

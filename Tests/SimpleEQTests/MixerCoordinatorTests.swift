@@ -127,13 +127,12 @@ final class MixerCoordinatorTests: XCTestCase {
         bridge.roster = [entry(clientID: 1, pid: 501, bundleID: "com.example.player", active: true)]
         var update = waitForUpdate { bumpRosterRevision(generation: 1); coordinator.runPass() }
         XCTAssertNotNil(update.identities[Self.playerKey])
-        XCTAssertTrue(update.playingKeys.contains(Self.playerKey))
         XCTAssertEqual(update.clientIDsByChannelKey[Self.playerKey], [1])
 
         bridge.roster = []
         update = waitForUpdate { bumpRosterRevision(generation: 2); coordinator.runPass() }
         XCTAssertNotNil(update.identities[Self.playerKey], "席が消えてもセッション中は候補に残る")
-        XCTAssertFalse(update.playingKeys.contains(Self.playerKey))
+        XCTAssertTrue(update.clientIDsByChannelKey.isEmpty, "席が消えればメーターの引き先も消える")
     }
 
     /// 席を取っただけで鳴っていないクライアントは行の母集合に入らない。
@@ -164,7 +163,6 @@ final class MixerCoordinatorTests: XCTestCase {
         bridge.roster = [entry(clientID: 1, pid: 501, bundleID: "com.example.player", active: true)]
         let update = waitForUpdate { bumpRosterRevision(generation: 1); coordinator.runPass() }
         XCTAssertTrue(update.identities.isEmpty)
-        XCTAssertTrue(update.playingKeys.isEmpty)
         XCTAssertTrue(update.clientIDsByChannelKey.isEmpty)
     }
 

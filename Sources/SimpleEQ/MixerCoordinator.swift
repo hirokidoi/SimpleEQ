@@ -12,8 +12,6 @@ struct MixerChannelSnapshot: Equatable, Sendable {
 struct MixerCoordinatorUpdate: Sendable {
     /// 候補プールの母集合 (セッション中に一度でも音を出したもの)。
     let identities: [String: MixerAppIdentity]
-    /// 今 ProcessOutput が来ているチャンネルキー。
-    let playingKeys: Set<String>
     /// メーターが読む、チャンネルキーごとのクライアント識別値。
     let clientIDsByChannelKey: [String: [UInt32]]
 }
@@ -83,7 +81,7 @@ enum MixerPushPolicy {
 }
 
 /// ミキサーの調停役。名簿の追従・アプリの特定・ゲイン表の押し込みを、自前の直列キュー 1 本で回す。
-/// パネルの開閉に関係なく生きる (ゲインはパネルが閉じていても効いていなければならない)。
+/// 面の出し入れに関係なく生きる (ゲインは面が出ていなくても効いていなければならない)。
 final class MixerCoordinator: @unchecked Sendable {
 
     /// 周期も更新間隔もリース長から導く (両者が一致していなければならない値のため)。
@@ -233,15 +231,13 @@ final class MixerCoordinator: @unchecked Sendable {
     }
 
     private func publish() {
-        var playingKeys: Set<String> = []
         var clientIDsByChannelKey: [String: [UInt32]] = [:]
         for entry in roster {
             guard let key = channelKey(forProcess: entry.processID) else { continue }
             clientIDsByChannelKey[key, default: []].append(entry.clientID)
-            if entry.active { playingKeys.insert(key) }
         }
         didUpdate?(MixerCoordinatorUpdate(
-            identities: identities, playingKeys: playingKeys, clientIDsByChannelKey: clientIDsByChannelKey
+            identities: identities, clientIDsByChannelKey: clientIDsByChannelKey
         ))
     }
 }

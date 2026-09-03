@@ -201,4 +201,27 @@ final class EQWindowControllerTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - drivenWork(windowIsVisible:mixerShown:editing:)
+
+    // 3 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
+    func testDrivenWorkFollowsVisibilityAndTheMixerState() {
+        for windowIsVisible in [true, false] {
+            for mixerShown in [true, false] {
+                for editing in [true, false] {
+                    let wants = EQWindowController.drivenWork(
+                        windowIsVisible: windowIsVisible, mixerShown: mixerShown, editing: editing
+                    )
+                    let label = "visible=\(windowIsVisible) shown=\(mixerShown) editing=\(editing)"
+                    XCTAssertEqual(wants.visualizer, windowIsVisible && !mixerShown, "ビジュアライザ \(label)")
+                    XCTAssertEqual(
+                        wants.mixerMeters, windowIsVisible && mixerShown && !editing, "行のメーター \(label)"
+                    )
+                    XCTAssertFalse(
+                        wants.visualizer && wants.mixerMeters, "両方が同時に回ることはない \(label)"
+                    )
+                }
+            }
+        }
+    }
 }

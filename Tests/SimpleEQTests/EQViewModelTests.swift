@@ -167,6 +167,11 @@ final class EQViewModelTests: XCTestCase {
         return OutputDeviceController(settings: settings, targetDeviceUID: "test-driver-uid")
     }
 
+    /// 描画の駆動を確かめる回では面を出さないため、ミキサーは行を持たない状態で足りる。
+    private func makeMixer(settings: SettingsStore) -> MixerModel {
+        MixerModel(settings: settings, coordinator: nil, levelStore: MixerLevelStore(slotCount: 4))
+    }
+
     func testProcessingStateReflectsInitParam() {
         let store = SettingsStore(defaults: defaults)
         let vm = EQViewModel(
@@ -1917,7 +1922,9 @@ final class EQViewModelTests: XCTestCase {
         // fps が低いほど 1 発火あたりの実時間が長くなり、同じ期待発火数を緩い時間精度で満たせる。
         vm.visualizerFps = EQLayout.Tuning.visualizerFpsChoices.min()!
 
-        let hosting = NSHostingView(rootView: RootView(viewModel: vm, onOpenWindow: { _ in }))
+        let hosting = NSHostingView(rootView: RootView(
+            viewModel: vm, mixer: makeMixer(settings: store), mixerClock: nil, onOpenWindow: { _ in }
+        ))
         hosting.frame = CGRect(origin: .zero, size: EQLayout.windowDefaultSize)
         let window = NSWindow(
             contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false
@@ -1962,7 +1969,9 @@ final class EQViewModelTests: XCTestCase {
             LevelMeter.Snapshot(levels: levels, peaks: levels, stereo: silentStereoSnapshot), vm: vm, engine: engine
         )
 
-        let hosting = NSHostingView(rootView: RootView(viewModel: vm, onOpenWindow: { _ in }))
+        let hosting = NSHostingView(rootView: RootView(
+            viewModel: vm, mixer: makeMixer(settings: store), mixerClock: nil, onOpenWindow: { _ in }
+        ))
         hosting.frame = CGRect(origin: .zero, size: EQLayout.windowDefaultSize)
         let window = NSWindow(
             contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false
@@ -2000,7 +2009,9 @@ final class EQViewModelTests: XCTestCase {
         vm.confirmDriverProbe(.versionsUnreadable(.ok))
         vm.updateProcessingState(.active, activeDevice: nil)
 
-        let hosting = NSHostingView(rootView: RootView(viewModel: vm, onOpenWindow: { _ in }))
+        let hosting = NSHostingView(rootView: RootView(
+            viewModel: vm, mixer: makeMixer(settings: store), mixerClock: nil, onOpenWindow: { _ in }
+        ))
         hosting.frame = CGRect(origin: .zero, size: EQLayout.windowDefaultSize)
         let window = NSWindow(
             contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false
@@ -2043,7 +2054,9 @@ final class EQViewModelTests: XCTestCase {
         vm.confirmDriverProbe(.versionsUnreadable(.ok))
         vm.updateProcessingState(.active, activeDevice: nil)
 
-        let hosting = NSHostingView(rootView: RootView(viewModel: vm, onOpenWindow: { _ in }))
+        let hosting = NSHostingView(rootView: RootView(
+            viewModel: vm, mixer: makeMixer(settings: store), mixerClock: nil, onOpenWindow: { _ in }
+        ))
         hosting.frame = CGRect(origin: .zero, size: EQLayout.windowDefaultSize)
         let window = NSWindow(
             contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false
@@ -2122,7 +2135,9 @@ final class EQViewModelTests: XCTestCase {
         vm.tick(now: Date(timeIntervalSinceReferenceDate: 0))
         vm.visualizerActive = false
 
-        let hosting = NSHostingView(rootView: RootView(viewModel: vm, onOpenWindow: { _ in }))
+        let hosting = NSHostingView(rootView: RootView(
+            viewModel: vm, mixer: makeMixer(settings: store), mixerClock: nil, onOpenWindow: { _ in }
+        ))
         hosting.frame = CGRect(origin: .zero, size: EQLayout.windowDefaultSize)
         hosting.layoutSubtreeIfNeeded()
 
@@ -2173,9 +2188,9 @@ final class EQViewModelTests: XCTestCase {
     /// フォント・アンチエイリアシングは環境間で変わりうるため、開発機・Xcode バージョンに固有の
     /// 基準値。CI 環境やツールチェインを変えた場合は再採取が必要になりうる。
     private static let goldenRootViewHashLevelMeterShown =
-        "e143d41f9db59354df161b39d8cb64d01763f22b44f8e207958b5e099a57317d"
+        "6be19fc757fcbf3ba0456f5c71d7151431885df802ca3cd5ee6b05d6e5ed49fd"
     private static let goldenRootViewHashLevelMeterHidden =
-        "a2a1fc51f02f1c92a87ab97c9dc455abc6d1878697e11307305013984e9453ef"
+        "5c85b392431b07a91fb7e05ceb4729ee3e1b8675ca7212191467177f657a58ea"
 
     // MARK: - installOrUpdateDriver / uninstallDriver
 

@@ -236,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         routingVerificationTimer = timer
     }
 
-    /// パネルの可視性から独立して回る (パネルを閉じていてもゲインは効いていなければならない)。
+    /// 面の可視性から独立して回る (面が出ていなくてもゲインは効いていなければならない)。
     /// 名簿の追従とリースの更新をこの 1 本が兼ねるため、更新のためだけの第 2 のタイマは持たない。
     private func startMixerCoordination() {
         mixerCoordinator.didUpdate = { [weak self] update in
@@ -254,7 +254,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         windowController?.persistWindowOrigin()
-        windowController?.persistMixerWindowPlacement()
         routingVerificationTimer?.invalidate()
         routingVerificationTimer = nil
         mixerPassTimer?.invalidate()
