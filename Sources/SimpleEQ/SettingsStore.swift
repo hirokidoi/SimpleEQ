@@ -56,6 +56,7 @@ final class SettingsStore {
         /// ユーザーが並べたミキサーのチャンネル。nil は「まだ一度も設定していない」= 初期セットを
         /// 撒く合図で、空配列は「ユーザーが全部消した」。
         var mixerChannels: [MixerChannelEntry]?
+        var handleRevealGesture: HandleRevealGesture
     }
 
     struct MixerChannelEntry: Codable, Equatable {
@@ -107,7 +108,8 @@ final class SettingsStore {
                 preampDb: 0,
                 preampAutoEnabled: true,
                 preampAutoTargetDb: AutoPreampSpec.targetDbDefault,
-                mixerChannels: nil
+                mixerChannels: nil,
+                handleRevealGesture: .default
             )
         }
     }
@@ -334,6 +336,11 @@ final class SettingsStore {
     var viewMode: ViewMode {
         get { readState { $0.viewMode } }
         set { writeState { $0.viewMode = newValue } }
+    }
+
+    var handleRevealGesture: HandleRevealGesture {
+        get { readState { $0.handleRevealGesture } }
+        set { writeState { $0.handleRevealGesture = newValue } }
     }
 
     /// nil は「まだ一度も設定していない」。初期化はこの値を nil へ戻すことで表す。

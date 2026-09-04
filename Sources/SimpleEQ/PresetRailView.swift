@@ -137,7 +137,7 @@ struct PresetRailView: View {
         }
         .pointerStyle(.link)
         .simultaneousGesture(
-            LongPressGesture(minimumDuration: EQLayout.presetSaveLongPressDuration)
+            LongPressGesture(minimumDuration: EQLayout.longPressDuration)
                 .onEnded { _ in
                     // 保存するのは今のゲインカーブであり、それが見えない状態では保存させない。
                     guard !mixer.shown else { return }
@@ -190,7 +190,7 @@ struct PresetRailView: View {
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
-            LongPressGesture(minimumDuration: EQLayout.presetSaveLongPressDuration)
+            LongPressGesture(minimumDuration: EQLayout.longPressDuration)
                 .onEnded { _ in
                     swallowMixerClick = true
                     if mixer.editing {

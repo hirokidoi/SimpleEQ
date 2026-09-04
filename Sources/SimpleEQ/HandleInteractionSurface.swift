@@ -22,6 +22,7 @@ struct HandleInteractionSurface: ViewModifier {
         content
             .contentShape(Rectangle())
             .gesture(dragGesture)
+            .simultaneousGesture(revealLongPressGesture)
             .simultaneousGesture(doubleClickGesture)
             .onContinuousHover(coordinateSpace: .local) { phase in
                 switch phase {
@@ -38,13 +39,13 @@ struct HandleInteractionSurface: ViewModifier {
     private func updateCursor(at location: CGPoint) {
         let kind = EQPlotCursor.kind(
             processingInEffect: viewModel.processingInEffect,
-            handleGrabbable: viewModel.handlesRevealed,
+            handlesRevealed: viewModel.handlesRevealed,
             distanceToHandle: distanceToHandle(location)
         )
         switch kind {
         case .arrow: NSCursor.arrow.set()
         case .grabHandle: NSCursor.resizeUpDown.set()
-        case .clickToReveal: NSCursor.pointingHand.set()
+        case .pressToReveal: NSCursor.pointingHand.set()
         }
     }
 
@@ -70,6 +71,14 @@ struct HandleInteractionSurface: ViewModifier {
             }
     }
 
+    private var revealLongPressGesture: some Gesture {
+        LongPressGesture(minimumDuration: EQLayout.longPressDuration)
+            .onEnded { _ in
+                guard viewModel.processingInEffect else { return }
+                viewModel.revealHandles()
+            }
+    }
+
     private var doubleClickGesture: some Gesture {
         SpatialTapGesture(count: 2, coordinateSpace: .local)
             .onEnded { _ in
@@ -79,17 +88,22 @@ struct HandleInteractionSurface: ViewModifier {
     }
 }
 
-/// EQ 描画域のカーソルの出し分け。
+/// EQ 描画域のハンドルの当たり判定とカーソルの出し分け。
 enum EQPlotCursor {
-    enum Kind { case arrow, grabHandle, clickToReveal }
+    enum Kind { case arrow, grabHandle, pressToReveal }
 
     static func isOnHandle(distanceToHandle: CGFloat) -> Bool {
         distanceToHandle <= EQLayout.handleHitTolerance
     }
 
-    static func kind(processingInEffect: Bool, handleGrabbable: Bool, distanceToHandle: CGFloat) -> Kind {
+    /// 見えていないハンドルは掴めない。掴む操作はすべてここを読む。
+    static func grabbable(handlesRevealed: Bool, distanceToHandle: CGFloat) -> Bool {
+        handlesRevealed && isOnHandle(distanceToHandle: distanceToHandle)
+    }
+
+    static func kind(processingInEffect: Bool, handlesRevealed: Bool, distanceToHandle: CGFloat) -> Kind {
         guard processingInEffect else { return .arrow }
-        let onHandle = handleGrabbable && isOnHandle(distanceToHandle: distanceToHandle)
-        return onHandle ? .grabHandle : .clickToReveal
+        return grabbable(handlesRevealed: handlesRevealed, distanceToHandle: distanceToHandle)
+            ? .grabHandle : .pressToReveal
     }
 }

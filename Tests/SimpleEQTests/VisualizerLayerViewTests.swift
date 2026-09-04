@@ -830,7 +830,7 @@ final class VisualizerHostViewTests: XCTestCase {
         let band = 4
         for db: Double in [10, -10] {
             let vm = makeVM()
-            vm.noteCanvasPointerDown()
+            vm.revealHandles()
             vm.updateDrag(band: band, db: db)
             for k in 0...200 { vm.tick(now: Date(timeIntervalSinceReferenceDate: Double(k) * 0.016)) }
             XCTAssertEqual(vm.handleAlpha, 1, "前提: ハンドルが完全に見えていること db=\(db)")
@@ -865,7 +865,7 @@ final class VisualizerHostViewTests: XCTestCase {
     func testGainRangeOverlayHidesAtTheExactZeroDbRowBoundaryCoincidenceAtShippedWindowSize() {
         let band = 4
         let vm = makeVM()
-        vm.noteCanvasPointerDown()
+        vm.revealHandles()
         vm.updateDrag(band: band, db: 0)
         for k in 0...200 { vm.tick(now: Date(timeIntervalSinceReferenceDate: Double(k) * 0.016)) }
         XCTAssertEqual(vm.handleAlpha, 1, "前提: ハンドルが完全に見えていること")
@@ -982,7 +982,7 @@ final class VisualizerHostViewTests: XCTestCase {
         let vm = makeVM()
         vm.updateDrag(band: 0, db: 4)
         vm.endDrag()
-        vm.noteCanvasPointerDown()
+        vm.revealHandles()
         let t0 = Date(timeIntervalSinceReferenceDate: 200)
         vm.tick(now: t0)
         vm.tick(now: t0.addingTimeInterval(0.016))
@@ -1002,7 +1002,7 @@ final class VisualizerHostViewTests: XCTestCase {
     func testPreampOverlayTracksTheHandleAlphaWhilePartiallyFadedIn() {
         let vm = makeVM()
         vm.overridePreamp(db: 4)
-        vm.noteCanvasPointerDown()
+        vm.revealHandles()
         let t0 = Date(timeIntervalSinceReferenceDate: 200)
         vm.tick(now: t0)
         vm.tick(now: t0.addingTimeInterval(0.016))
@@ -1202,7 +1202,7 @@ final class VisualizerHostViewTests: XCTestCase {
         defer { window.orderOut(nil) }
         let frame = window.frame
 
-        vm.noteCanvasPointerDown()
+        vm.revealHandles()
         hostView.pinPointer(toScreenPoint: NSPoint(x: frame.minX + 10, y: frame.maxY - 10))
         pumpRunLoopUntil({ false }, timeout: 0.2)
         XCTAssertTrue(vm.handlesRevealed, "描画領域の中のポインタでは表示を保つこと")
@@ -1212,7 +1212,7 @@ final class VisualizerHostViewTests: XCTestCase {
         pumpRunLoopUntil({ !vm.handlesRevealed })
         XCTAssertFalse(vm.handlesRevealed, "描画領域より下のポインタでは表示を落とすこと")
 
-        vm.noteCanvasPointerDown()
+        vm.revealHandles()
         hostView.pinPointer(toScreenPoint: NSPoint(x: frame.minX - 200, y: frame.maxY - 10))
         pumpRunLoopUntil({ !vm.handlesRevealed })
         XCTAssertFalse(vm.handlesRevealed, "ウィンドウ外のポインタでは表示を落とすこと")
@@ -1225,7 +1225,7 @@ final class VisualizerHostViewTests: XCTestCase {
         defer { window.orderOut(nil) }
         let frame = window.frame
 
-        vm.noteCanvasPointerDown()
+        vm.revealHandles()
         hostView.pinPointer(toScreenPoint: NSPoint(x: frame.minX - 200, y: frame.minY + 10), buttonDown: true)
         pumpRunLoopUntil({ false }, timeout: 0.3)
         XCTAssertTrue(vm.handlesRevealed)

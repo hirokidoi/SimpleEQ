@@ -34,6 +34,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertNil(store.outputDeviceUID, file: file, line: line)
         XCTAssertEqual(store.visualizerFps, EQLayout.Tuning.visualizerFpsDefault, file: file, line: line)
         XCTAssertEqual(store.attackLevel, EQLayout.Tuning.attack.defaultLevel, file: file, line: line)
+        XCTAssertEqual(store.handleRevealGesture, .longPress, file: file, line: line)
     }
 
     func testDefaultsAreFlatPresetAndNoRestoreState() {
@@ -157,6 +158,31 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(SettingsStore(defaults: defaults).viewMode, .normal)
     }
 
+    func testHandleRevealGestureDefaultsToTheLongPress() {
+        XCTAssertEqual(SettingsStore(defaults: defaults).handleRevealGesture, .longPress)
+    }
+
+    func testHandleRevealGestureRoundTrip() {
+        let store = SettingsStore(defaults: defaults)
+        store.handleRevealGesture = .click
+        XCTAssertEqual(SettingsStore(defaults: defaults).handleRevealGesture, .click)
+    }
+
+    // この項目を持たない保存データを読むと、構造体まるごとの復号に失敗し全項目が既定値へ戻ること。
+    func testLoadingDataWithoutHandleRevealGestureResetsAllSettingsToDefaults() throws {
+        let store = SettingsStore(defaults: defaults)
+        store.alwaysOnTop = true
+        store.showWindowOnLaunch = true
+        store.handleRevealGesture = .click
+
+        let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        XCTAssertNotNil(json.removeValue(forKey: "handleRevealGesture"), "前提: 保存データにこの項目が載っていること")
+        defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
+
+        assertResetToDefaults(SettingsStore(defaults: defaults))
+    }
+
     // 出力デバイス UID の既定は未設定 (nil)。
     func testOutputDeviceUIDDefaultsToNil() {
         let store = SettingsStore(defaults: defaults)
@@ -241,7 +267,8 @@ final class SettingsStoreTests: XCTestCase {
             "preampDb": 0.0,
             "viewMode": ViewMode.normal.rawValue,
             "preampAutoEnabled": true,
-            "preampAutoTargetDb": AutoPreampSpec.targetDbDefault
+            "preampAutoTargetDb": AutoPreampSpec.targetDbDefault,
+            "handleRevealGesture": HandleRevealGesture.default.rawValue
         ]
         overrides.forEach { payload[$0.key] = $0.value }
         let data = try! JSONSerialization.data(withJSONObject: payload)

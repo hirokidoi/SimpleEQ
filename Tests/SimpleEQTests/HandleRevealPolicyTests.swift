@@ -14,4 +14,13 @@ final class HandleRevealPolicyTests: XCTestCase {
     func testDropsOnlyWhenTheButtonIsUpAndThePointerIsOutside() {
         XCTAssertFalse(HandleRevealPolicy.staysRevealed(pointerButtonDown: false, pointerInsideCanvas: false))
     }
+
+    func testPressRevealsOnlyForTheClickGesture() {
+        XCTAssertTrue(HandleRevealPolicy.revealsOnPress(.click))
+        XCTAssertFalse(HandleRevealPolicy.revealsOnPress(.longPress))
+    }
+
+    func testDefaultIsTheLongPress() {
+        XCTAssertEqual(HandleRevealGesture.default, .longPress)
+    }
 }

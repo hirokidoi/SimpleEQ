@@ -39,7 +39,7 @@ enum EQLayout {
     /// Settings ウィンドウの高さの下限。
     static let settingsWindowMinHeight: CGFloat = 460
     /// Settings ウィンドウを開いたときの高さ。
-    static let settingsWindowDefaultHeight: CGFloat = 820
+    static let settingsWindowDefaultHeight: CGFloat = 880
 
     /// Diagnostics ウィンドウの幅 (固定)。値の桁が揃って読めるよう Settings と同じ幅に合わせる。
     static let diagnosticsWindowWidth: CGFloat = settingsWindowWidth
@@ -120,8 +120,8 @@ enum EQLayout {
     static let levelMeterColumnWidth: CGFloat = 52
     /// プリセットボタンの最小高さ (最大2行ぶんで高さ統一・中央寄せ)。
     static let presetButtonMinHeight: CGFloat = 56
-    /// プリセットボタン長押しで保存ダイアログを開くまでの時間 (秒)。
-    static let presetSaveLongPressDuration: Double = 0.5
+    /// 長押しが成立するまでの時間 (秒)。
+    static let longPressDuration: Double = 0.5
     /// プリセットタイトルの最大幅。全角 = 2・半角 = 1 として計算し、全角20文字・半角40文字
     /// 相当を上限とする (ASCII のみを半角とみなす簡易換算)。
     static let presetTitleMaxWidth: Int = 40

@@ -1583,6 +1583,7 @@ final class EQViewModelTests: XCTestCase {
     func testCanvasPressRevealsHandlesAndPointerLeavingWhileTheButtonIsUpHidesThem() {
         let store = SettingsStore(defaults: defaults)
         let vm = makeVM(store)
+        vm.handleRevealGesture = .click
 
         vm.noteCanvasPointerDown()
         XCTAssertTrue(vm.handlesRevealed, "キャンバス内の押下で表示が ON になること")
@@ -1597,13 +1598,34 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertFalse(vm.handlesRevealed, "ボタンを離していてキャンバス外なら OFF にすること")
     }
 
+    func testCanvasPressDoesNotRevealHandlesWhileTheLongPressIsTheChosenGesture() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        XCTAssertEqual(vm.handleRevealGesture, .longPress, "前提: 既定は長押しであること")
+
+        vm.noteCanvasPointerDown()
+        XCTAssertFalse(vm.handlesRevealed, "押下しただけでは表示を ON にしないこと")
+
+        vm.revealHandles()
+        XCTAssertTrue(vm.handlesRevealed, "長押しの成立で表示が ON になること")
+    }
+
+    func testHandleRevealGestureRoundTripsThroughTheStore() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+
+        vm.handleRevealGesture = .click
+        XCTAssertEqual(store.handleRevealGesture, .click)
+        XCTAssertEqual(makeVM(SettingsStore(defaults: defaults)).handleRevealGesture, .click)
+    }
+
     func testHandleAlphaStaysVisibleWhileDraggingPreamp() {
         let store = SettingsStore(defaults: defaults)
         let vm = makeVM(store)
         vm.confirmDriverProbe(.versionsUnreadable(.ok))
         let t0 = Date(timeIntervalSinceReferenceDate: 4000)
 
-        vm.noteCanvasPointerDown()
+        vm.revealHandles()
         vm.updatePreampDrag(db: -4)
         for k in 0..<240 { vm.tick(now: t0.addingTimeInterval(Double(k) * 0.016)) }
 

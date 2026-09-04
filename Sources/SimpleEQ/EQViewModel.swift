@@ -36,6 +36,12 @@ final class EQViewModel: ObservableObject {
             settings.viewMode = viewMode
         }
     }
+    @Published var handleRevealGesture: HandleRevealGesture {
+        didSet {
+            guard oldValue != handleRevealGesture else { return }
+            settings.handleRevealGesture = handleRevealGesture
+        }
+    }
     /// L/R レベルメーターの表示/非表示。
     @Published var showLevelMeter: Bool {
         didSet {
@@ -345,6 +351,7 @@ final class EQViewModel: ObservableObject {
         alwaysOnTop = settings.alwaysOnTop
         showWindowOnLaunch = settings.showWindowOnLaunch
         viewMode = settings.viewMode
+        handleRevealGesture = settings.handleRevealGesture
         showLevelMeter = settings.showLevelMeter
         self.driverProbe = .versionsUnreadable(driverAvailability)
         self.processingState = processingState
@@ -491,6 +498,11 @@ final class EQViewModel: ObservableObject {
     }
 
     func noteCanvasPointerDown() {
+        guard HandleRevealPolicy.revealsOnPress(handleRevealGesture) else { return }
+        revealHandles()
+    }
+
+    func revealHandles() {
         handlesRevealed = true
     }
 

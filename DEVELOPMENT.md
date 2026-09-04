@@ -648,6 +648,8 @@ A shadow is drawn outside the layout bounds of what casts it and does not enlarg
 
 The shape of the pointer over a surface whose answer does not move is declared on that surface, not set by hand when a hover notification arrives: a shape set by hand is left behind by the press that follows. Where the answer depends on where the pointer is, there is nothing to declare, and it is set afresh on each report of the position instead.
 
+Everything that acts on a handle — grabbing it, and the double click that returns it to its default — answers only while that handle is shown, and reads the same condition the pointer's shape does. What brings the handles into view is a choice between a press and a press held, because a surface that answers a stray press is where a stray press does damage.
+
 Whether the pointer is still inside the visualizer is read from its position, not from the notifications that report it leaving. Both the hover reporting of the UI framework and a tracking region installed by hand announce a departure while the pointer is still inside that area. Keeping the handles visible while the pointer stays there is therefore driven by reading the position. The preset rail still goes by the notifications, where a spurious departure costs one lost preview.
 
 Where elements inside one container fade on separate schedules, the alpha is carried by each layer rather than by the container. It is the alpha alone that moves out of the container; what else the container carries, the compositing order among it, stays where it is.
@@ -659,8 +661,8 @@ Where elements inside one container fade on separate schedules, the alpha is car
 Settings persistence takes the form of encoding and decoding a single structure as a whole.
 Decoding fails for the entire structure if even one non-Optional property is missing, and in that case every item returns to its default.
 There is no intermediate state in which only some items return to their defaults.
-Because of that, a change that adds a non-Optional item to the format of already-saved data carries with it, by itself, the behavior that "reading saved data in the old format returns every item to its default".
-Optional is reserved for items whose absence itself carries meaning — denoting, for instance, that nothing has been saved yet or that a value should keep following automatically. An item that merely has a default value does not take this form.
+An item added to the format therefore takes the Optional form, its absence being read as that item's default, unless discarding what is already saved is itself the decision: a non-Optional addition takes the curve, the presets, the mixer's channels and the window positions along with it, for the sake of the one item it adds.
+Optional is also the form for an item whose absence is the value — that nothing has been settled yet, or that a value should keep following automatically.
 
 The output device selection has two independent pieces of state: the persistence as the default to use at the next launch, and the selection actually switched to in the current session.
 Changing the former does not affect the latter, and the latter is session-only and not persisted.

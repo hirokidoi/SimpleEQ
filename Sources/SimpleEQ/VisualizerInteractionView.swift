@@ -55,8 +55,11 @@ struct VisualizerInteractionView: View {
         canvas.distanceToHandle(at: location, gains: viewModel.gains, preampDb: viewModel.preampDb)
     }
 
-    private func isOnHandle(at location: CGPoint, _ canvas: CanvasGeometry) -> Bool {
-        EQPlotCursor.isOnHandle(distanceToHandle: distanceToHandle(at: location, canvas))
+    private func grabbable(at location: CGPoint, _ canvas: CanvasGeometry) -> Bool {
+        EQPlotCursor.grabbable(
+            handlesRevealed: viewModel.handlesRevealed,
+            distanceToHandle: distanceToHandle(at: location, canvas)
+        )
     }
 
     private func notePress(at location: CGPoint, _ canvas: CanvasGeometry) {
@@ -71,12 +74,12 @@ struct VisualizerInteractionView: View {
     }
 
     private func resetTarget(at location: CGPoint, _ canvas: CanvasGeometry) -> ResetTarget? {
-        guard isOnHandle(at: location, canvas) else { return nil }
+        guard grabbable(at: location, canvas) else { return nil }
         return canvas.isInMeter(location) ? .preamp : .band(canvas.bandIndex(at: location))
     }
 
     private func makeDragTarget(at start: CGPoint, _ canvas: CanvasGeometry) -> DragTarget {
-        let onHandle = isOnHandle(at: start, canvas)
+        let onHandle = grabbable(at: start, canvas)
         guard !canvas.isInMeter(start) else { return .preamp(grabbed: onHandle) }
         return .eqBands(lockedBand: onHandle ? canvas.bandIndex(at: start) : nil)
     }

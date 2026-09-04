@@ -142,6 +142,19 @@ struct SettingsView: View {
             ) { EQLayout.formatSignedDb($0) }
             .disabled(!viewModel.preampAutoEnabled || !viewModel.processingInEffect)
             .opacity(viewModel.preampAutoEnabled && viewModel.processingInEffect ? 1 : EQLayout.disabledOpacity)
+
+            settingsRow(
+                title: "ゲインカーブ編集トリガー",
+                subtitle: "ビジュアライザ上にゲイン設定用ハンドルを出すための操作を選択"
+            ) {
+                HStack(spacing: 5) {
+                    ForEach(HandleRevealGesture.allCases, id: \.self) { gesture in
+                        choiceButton(gesture.title, isActive: viewModel.handleRevealGesture == gesture) {
+                            viewModel.handleRevealGesture = gesture
+                        }
+                    }
+                }
+            }
         }
     }
 
