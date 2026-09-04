@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// UI レイアウト・タイミング・配色の定数。レイアウトを支配する寸法・タイミング・配色は
@@ -55,6 +56,8 @@ enum EQLayout {
         static let columnHorizontalInset: CGFloat = 50
         /// 列の上下に取る余白。
         static let columnVerticalInset: CGFloat = 36
+        /// コンパクトビューで、行を収める列の四辺に取る余白。この帯がウィンドウ移動を受ける。
+        static let compactColumnInset: CGFloat = 20
         static let rowHorizontalPadding: CGFloat = 12
         static let rowVerticalPadding: CGFloat = 8
         static let rowSpacing: CGFloat = 9
@@ -72,6 +75,16 @@ enum EQLayout {
         static let meterWidth: CGFloat = 132
         static let meterHeight: CGFloat = 14
         static let meterSegmentCount = 21
+
+        /// スクロールバーが行の右端へ重なるのを避けるために空ける幅。OS の実寸を採る。
+        /// 内容に重ねて描く流儀 (overlay) の幅で固定する。幅を自分で占める流儀では右の空きが二重になる。
+        static var scrollerGutter: CGFloat {
+            MainActor.assumeIsolated {
+                NSScroller.scrollerWidth(for: .regular, scrollerStyle: .overlay)
+            }
+        }
+        /// コンパクトビューの行の右端。行数によって右端が動かないよう、常に空ける。
+        static var compactRowTrailingPadding: CGFloat { rowHorizontalPadding + scrollerGutter }
 
         /// 編集モードで、ポインタが載っている行の下地。
         static let rowHoverFill = Color.white.opacity(0.05)
@@ -91,7 +104,7 @@ enum EQLayout {
         static var rowPitch: CGFloat { rowHeight + separatorThickness }
     }
 
-    /// 文字主体の面 (Settings / Diagnostics / About) の背景。
+    /// 文字主体の面の背景。
     static let textPanelBackground = Color(hex: 0x14171e)
 
     /// 操作できない要素を減光する際の共通の不透明度。

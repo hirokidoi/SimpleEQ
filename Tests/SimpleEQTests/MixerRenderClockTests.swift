@@ -20,6 +20,24 @@ final class MixerRenderClockTests: XCTestCase {
         try await super.tearDown()
     }
 
+    // dB 値とメーターを持つ行は、その左で終わる。持たない行は右端まで伸びる
+    // (どちらもノブの半径ぶんは残す)。
+    func testSliderReachesTheEdgeOnlyWhereThereIsNoLevelBesideIt() {
+        let boundsMaxX: CGFloat = 400
+        let valueMinX: CGFloat = 250
+
+        let withLevel = MixerRowLayerView.sliderTrailingX(
+            showsLevel: true, valueMinX: valueMinX, boundsMaxX: boundsMaxX
+        )
+        XCTAssertLessThan(withLevel, valueMinX, "dB 値の左で終わること")
+
+        let withoutLevel = MixerRowLayerView.sliderTrailingX(
+            showsLevel: false, valueMinX: valueMinX, boundsMaxX: boundsMaxX
+        )
+        XCTAssertGreaterThan(withoutLevel, valueMinX, "隣に何も無ければ dB 値の位置を越えて伸びること")
+        XCTAssertLessThan(withoutLevel, boundsMaxX, "ノブが右端からはみ出さないこと")
+    }
+
     private func makeViewModel() -> EQViewModel {
         let settings = SettingsStore(defaults: defaults)
         return EQViewModel(
@@ -65,7 +83,7 @@ final class MixerRenderClockTests: XCTestCase {
     /// ウィンドウを閉じてもビューはウィンドウに載ったままなので、行の出入りだけでは止まらない。
     func testClockFollowsVisibilityWhileTheRowsStayAttached() {
         let clock = makeClock()
-        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, clock: clock)
+        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: clock)
         clock.add(view)
         clock.active = true
         XCTAssertTrue(clock.isRunning)
@@ -80,13 +98,13 @@ final class MixerRenderClockTests: XCTestCase {
     /// 見えていない間に行が付いても回り出さない。
     func testRowsAddedWhileInactiveDoNotStartTheClock() {
         let clock = makeClock()
-        clock.add(MixerRowLayerView(gain: 1, muted: false, enabled: true, clock: clock))
+        clock.add(MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: clock))
         XCTAssertFalse(clock.isRunning)
     }
 
     func testClockStopsWhenTheLastRowLeaves() {
         let clock = makeClock()
-        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, clock: clock)
+        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: clock)
         clock.active = true
         clock.add(view)
         clock.remove(view)
@@ -97,7 +115,7 @@ final class MixerRenderClockTests: XCTestCase {
 
     /// 行は弱参照で持たれるため、止めて動かし直す間の生存を明示する。
     private func resumeAfterFolding(clock: MixerRenderClock, store: MixerLevelStore) {
-        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, clock: clock)
+        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: clock)
         withExtendedLifetime(view) {
             clock.add(view)
             clock.active = true
@@ -146,7 +164,7 @@ final class MixerRenderClockTests: XCTestCase {
     func testRowsReattachedWhileVisibleAlsoDiscard() {
         let store = MixerLevelStore(slotCount: 4)
         let clock = makeClock(levelStore: store)
-        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, clock: clock)
+        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: clock)
         withExtendedLifetime(view) {
             clock.active = true
             clock.add(view)
@@ -172,7 +190,7 @@ final class MixerRenderClockTests: XCTestCase {
     func testRowHeightHeldFromBeforeIsClearedWhenVisibleAgain() {
         let store = MixerLevelStore(slotCount: 4)
         let clock = makeClock(levelStore: store)
-        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, clock: clock)
+        let view = MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: clock)
         withExtendedLifetime(view) {
             clock.active = true
             clock.add(view)

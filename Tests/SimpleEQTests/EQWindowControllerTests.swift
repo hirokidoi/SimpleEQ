@@ -202,26 +202,46 @@ final class EQWindowControllerTests: XCTestCase {
         }
     }
 
-    // MARK: - drivenWork(windowIsVisible:mixerShown:editing:)
+    // MARK: - drivenWork(windowIsVisible:viewMode:mixerShown:editing:)
 
-    // 3 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
+    // 4 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
     func testDrivenWorkFollowsVisibilityAndTheMixerState() {
         for windowIsVisible in [true, false] {
-            for mixerShown in [true, false] {
-                for editing in [true, false] {
-                    let wants = EQWindowController.drivenWork(
-                        windowIsVisible: windowIsVisible, mixerShown: mixerShown, editing: editing
-                    )
-                    let label = "visible=\(windowIsVisible) shown=\(mixerShown) editing=\(editing)"
-                    XCTAssertEqual(wants.visualizer, windowIsVisible && !mixerShown, "ビジュアライザ \(label)")
-                    XCTAssertEqual(
-                        wants.mixerMeters, windowIsVisible && mixerShown && !editing, "行のメーター \(label)"
-                    )
-                    XCTAssertFalse(
-                        wants.visualizer && wants.mixerMeters, "両方が同時に回ることはない \(label)"
-                    )
+            for viewMode in ViewMode.allCases {
+                for mixerShown in [true, false] {
+                    for editing in [true, false] {
+                        let wants = EQWindowController.drivenWork(
+                            windowIsVisible: windowIsVisible, viewMode: viewMode,
+                            mixerShown: mixerShown, editing: editing
+                        )
+                        let label =
+                            "visible=\(windowIsVisible) mode=\(viewMode) shown=\(mixerShown) editing=\(editing)"
+                        XCTAssertEqual(wants.visualizer, windowIsVisible && !mixerShown, "ビジュアライザ \(label)")
+                        XCTAssertEqual(
+                            wants.mixerMeters,
+                            windowIsVisible && mixerShown && !editing && viewMode == .normal,
+                            "行のメーター \(label)"
+                        )
+                        XCTAssertFalse(
+                            wants.visualizer && wants.mixerMeters, "両方が同時に回ることはない \(label)"
+                        )
+                    }
                 }
             }
         }
+    }
+
+    // コンパクトの面は行にメーターを持たないため、面が出ていても駆動しない。
+    func testCompactMixerDrivesNeitherTheVisualizerNorTheRowMeters() {
+        let compact = EQWindowController.drivenWork(
+            windowIsVisible: true, viewMode: .compact, mixerShown: true, editing: false
+        )
+        XCTAssertFalse(compact.mixerMeters, "コンパクトの面では行のメーターを回さない")
+        XCTAssertFalse(compact.visualizer, "面が出ている間はビジュアライザも回さない")
+
+        let normal = EQWindowController.drivenWork(
+            windowIsVisible: true, viewMode: .normal, mixerShown: true, editing: false
+        )
+        XCTAssertTrue(normal.mixerMeters, "ノーマルの面では回す")
     }
 }

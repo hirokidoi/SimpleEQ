@@ -100,4 +100,20 @@ final class MixerGainScaleTests: XCTestCase {
         XCTAssertEqual(MixerGainScale.text(forGain: pow(10, -12.0 / 20)), "-12.0 dB")
         XCTAssertEqual(MixerGainScale.text(forGain: pow(10, -1.5 / 20)), "-1.5 dB")
     }
+
+    // 無音の表記が出るのはゲインが 0 のときだけ。行がミュートかどうかは表記に関わらない。
+    func testSilenceIsSpelledOutOnlyAtZeroGain() {
+        var examined = 0
+        for position in stride(from: 0.05, through: 1.0, by: 0.05) {
+            let gain = MixerGainScale.gain(atPosition: position)
+            guard gain > MixerGainScale.silentGain else { continue }
+            examined += 1
+            XCTAssertNotEqual(
+                MixerGainScale.text(forGain: gain), MixerGainScale.silentText,
+                "位置 \(position) は音が出る値なので無音の表記にしない"
+            )
+        }
+        // 読み飛ばしだけで終わると、何も確かめずに通る。
+        XCTAssertGreaterThan(examined, 15, "音が出る位置を実際に見ていること")
+    }
 }

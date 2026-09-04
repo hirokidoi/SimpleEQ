@@ -5,6 +5,20 @@ final class EQLayoutTests: XCTestCase {
     private let scale = EQLayout.Tuning.LevelScale(values: [10, 20, 30], defaultLevel: 2)
     private var levels: [Double] { scale.values }
 
+    // コンパクトの行の右端は、スクロールバーの内側に入らない位置まで下がっていること。
+    // 実装式を書き写すと式を変えたときに期待値も一緒に動くため、満たすべき条件の側から書く。
+    func testCompactRowLeavesRoomForTheScroller() {
+        XCTAssertGreaterThan(EQLayout.Mixer.scrollerGutter, 0, "OS がスクロールバーの実寸を返すこと")
+        XCTAssertGreaterThan(
+            EQLayout.Mixer.compactRowTrailingPadding, EQLayout.Mixer.scrollerGutter,
+            "スクロールバーの幅より広く空け、行の右端がバーの下に入らないこと"
+        )
+        XCTAssertGreaterThan(
+            EQLayout.Mixer.compactRowTrailingPadding, EQLayout.Mixer.rowHorizontalPadding,
+            "通常の行の余白より広いこと"
+        )
+    }
+
     // fixture の段数を実際の項目とわざと違える (同じ数だと特定の数をベタ書きした実装でも通ってしまうため)。
     func testFixtureLevelCountDiffersFromShippedScales() {
         for shipped in [EQLayout.Tuning.attack, EQLayout.Tuning.release, EQLayout.Tuning.handleFade, EQLayout.Tuning.handlePreview] {

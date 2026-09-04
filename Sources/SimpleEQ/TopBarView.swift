@@ -7,6 +7,8 @@ import SwiftUI
 /// 異常時にのみ現れる。
 struct TopBarView: View {
     @ObservedObject var viewModel: EQViewModel
+    /// 右クリックメニューの Mixer 項目は表示状態で文言が変わるため、観測して受ける。
+    @ObservedObject var mixer: MixerModel
     /// 警告チップからは Settings だけを開く (原因を取り除く出口がそこにあるため)。
     var onOpenWindow: (WindowDestination) -> Void
 
@@ -40,15 +42,7 @@ struct TopBarView: View {
             Rectangle().fill(EQLayout.Palette.line).frame(height: 1)
         }
         .contextMenu {
-            ForEach(WindowContextMenu.items(viewModel: viewModel, hideWindow: { hostWindow?.close() })) { item in
-                Group {
-                    switch item.kind {
-                    case .action(let perform): Button(item.title, action: perform)
-                    case .toggle(let isOn): Toggle(item.title, isOn: isOn)
-                    }
-                }
-                .modifier(CommandShortcut(key: item.commandKey))
-            }
+            WindowContextMenuItems(viewModel: viewModel, mixer: mixer, hideWindow: { hostWindow?.close() })
         }
         .background(WindowAccessor(window: $hostWindow).frame(width: 0, height: 0))
     }
@@ -225,19 +219,6 @@ private struct TopBarChrome: ViewModifier {
                     .onEnded { _ in anchor.clear() }
             )
             .onDisappear { anchor.clear() }
-    }
-}
-
-private struct CommandShortcut: ViewModifier {
-    let key: Character?
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if let key {
-            content.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
-        } else {
-            content
-        }
     }
 }
 

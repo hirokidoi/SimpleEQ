@@ -52,9 +52,11 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 
         // 駆動条件はミキサーの状態が動くたびに導き直す。@Published は変更前に流すため、
         // モデルを読み直さず流れてきた値を使う。
-        mixer.$shown.combineLatest(mixer.$editing)
-            .sink { [weak self] shown, editing in
-                MainActor.assumeIsolated { self?.applyDrivenWork(shown: shown, editing: editing) }
+        viewModel.$viewMode.combineLatest(mixer.$shown, mixer.$editing)
+            .sink { [weak self] viewMode, shown, editing in
+                MainActor.assumeIsolated {
+                    self?.applyDrivenWork(viewMode: viewMode, shown: shown, editing: editing)
+                }
             }
             .store(in: &cancellables)
 
@@ -90,7 +92,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
                 }
             ))
         case .compact:
-            NSHostingView(rootView: CompactRootView(viewModel: viewModel))
+            FirstMouseHostingView(rootView: CompactRootView(viewModel: viewModel, mixer: mixer))
         }
     }
 
@@ -103,8 +105,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 
     private func applyViewMode(_ newMode: ViewMode) {
         guard let window, appliedViewMode != newMode else { return }
-        // コンパクトビューには面を置く場所が無い。
-        if newMode == .compact { mixer.setShown(false) }
+        // コンパクトビューは編集モードを描けないので、面は残して編集モードだけ降ろす。
+        if newMode == .compact { mixer.endEditing() }
         let previousMode = appliedViewMode
         if let previousMode { persistWindowOrigin(for: previousMode) }
         appliedViewMode = newMode
@@ -208,11 +210,12 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// メニューバーからのミキサーの導線。ノーマルビューでなければ切り替えてから出す。
-    func showMixer() {
-        viewModel.viewMode = .normal
-        show()
-        mixer.setShown(true)
+    /// メニューバーからのミキサーの導線。ビューモードには触らない。
+    /// 出す側では前面へ持ってくる。背面のまま面だけ差し替えると、操作しても何も起きないように見える。
+    func toggleMixer() {
+        let willShow = !mixer.shown
+        if willShow { show() }
+        mixer.setShown(willShow)
     }
 
     /// About ウィンドウを開く。Settings / Diagnostics と同じ流儀に倣う。寸法は固定 (幅は定数、
@@ -366,27 +369,28 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    /// 可視状態とミキサーの状態から 2 つの駆動条件を導く純粋関数。
+    /// 可視状態とビューモードとミキサーの状態から 2 つの駆動条件を導く純粋関数。
+    /// コンパクトビューのミキサーは行にメーターを持たない。
     static func drivenWork(
-        windowIsVisible: Bool, mixerShown: Bool, editing: Bool
+        windowIsVisible: Bool, viewMode: ViewMode, mixerShown: Bool, editing: Bool
     ) -> (visualizer: Bool, mixerMeters: Bool) {
         (
             visualizer: windowIsVisible && !mixerShown,
-            mixerMeters: windowIsVisible && mixerShown && !editing
+            mixerMeters: windowIsVisible && mixerShown && !editing && viewMode == .normal
         )
     }
 
     /// 上の結果を駆動側へ反映する単一の入口。
-    private func applyDrivenWork(shown: Bool, editing: Bool) {
+    private func applyDrivenWork(viewMode: ViewMode, shown: Bool, editing: Bool) {
         let wants = EQWindowController.drivenWork(
-            windowIsVisible: windowIsVisible, mixerShown: shown, editing: editing
+            windowIsVisible: windowIsVisible, viewMode: viewMode, mixerShown: shown, editing: editing
         )
         viewModel.visualizerActive = wants.visualizer
         mixerRenderClock?.active = wants.mixerMeters
     }
 
     private func updateDrivenWork() {
-        applyDrivenWork(shown: mixer.shown, editing: mixer.editing)
+        applyDrivenWork(viewMode: viewModel.viewMode, shown: mixer.shown, editing: mixer.editing)
     }
 
     /// ドライバ未検出の間は EQ ウィンドウを開くたびにインストールを促す (TopBar の警告チップとは

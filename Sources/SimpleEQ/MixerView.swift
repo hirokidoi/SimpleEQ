@@ -21,10 +21,9 @@ struct MixerView: View {
     /// 設定が音へ届く経路があるか。EQ のバイパスとは連動しない (アプリ別ゲインは EQ の前段)。
     private var reachesAudio: Bool { viewModel.settingsReachAudio }
 
-    /// 一覧へ出すには何をすればよいか。0 件の面と編集モードの案内が同じ言い方を使う。
-    private static let addHint = "To add an app, play audio in it."
     /// 編集モードでしか使えない操作を、その場で言う。
-    private static let editHintText = "Checked apps stay in the mixer. Drag to reorder. \(addHint)"
+    private static let editHintText =
+        "Checked apps stay in the mixer. Drag to reorder. \(MixerRowParts.addHint)"
 
     var body: some View {
         ScrollView {
@@ -86,41 +85,21 @@ struct MixerView: View {
     // MARK: - 0 件
 
     private var emptyState: some View {
-        VStack(spacing: 6) {
-            Text("No channels")
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundColor(EQLayout.Palette.dim)
-            Text(Self.addHint)
-                .font(.system(size: 11.5))
-                .foregroundColor(EQLayout.Palette.faint)
-            Button { model.beginEditing() } label: {
-                Text("Add")
-                    .font(.system(size: 12))
-                    .foregroundColor(EQLayout.Palette.cyan)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 6)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(EQLayout.Palette.cyan.opacity(0.45), lineWidth: 1)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 6))
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 12)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 44)
+        MixerEmptyState { model.beginEditing() }
+            .padding(.vertical, 44)
     }
 
     // MARK: - 通常の行
 
     private func row(_ channel: MixerModel.Channel) -> some View {
         HStack(spacing: EQLayout.Mixer.rowSpacing) {
-            icon(channel.identity)
-            nameLabel(channel.identity, width: EQLayout.Mixer.nameColumnWidth)
-            muteButton(channel)
-            MixerRowControls(model: model, channel: channel, enabled: reachesAudio, clock: clock)
-                .frame(height: EQLayout.Mixer.controlsHeight)
+            MixerRowIcon(model: model, identity: channel.identity)
+            MixerRowName(identity: channel.identity, width: EQLayout.Mixer.nameColumnWidth)
+            MixerMuteButton(model: model, channel: channel)
+            MixerRowControls(
+                model: model, channel: channel, enabled: reachesAudio, showsLevel: true, clock: clock
+            )
+            .frame(height: EQLayout.Mixer.controlsHeight)
             ResetDotButton { model.resetToDefault(key: channel.key) }
                 .opacity(channel.isDefault ? 0 : 1)
                 .disabled(channel.isDefault)
@@ -131,20 +110,6 @@ struct MixerView: View {
         .opacity(reachesAudio ? 1 : EQLayout.disabledOpacity)
         .disabled(!reachesAudio)
         .contextMenu { editMenuItem }
-    }
-
-    private func muteButton(_ channel: MixerModel.Channel) -> some View {
-        Button { model.toggleMute(key: channel.key) } label: {
-            Image(systemName: channel.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                .font(.system(size: 10))
-                .foregroundColor(channel.muted ? EQLayout.Palette.faint : EQLayout.Palette.text)
-                .frame(width: EQLayout.Mixer.muteButtonSize.width, height: EQLayout.Mixer.muteButtonSize.height)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(channel.muted ? 0.02 : 0.06)))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(EQLayout.Palette.buttonLine, lineWidth: 1))
-                .contentShape(RoundedRectangle(cornerRadius: 5))
-        }
-        .buttonStyle(.plain)
-        .help(channel.muted ? "Unmute" : "Mute")
     }
 
     // MARK: - 編集モードの行
@@ -164,8 +129,8 @@ struct MixerView: View {
                     .font(.system(size: 11))
                     .foregroundColor(EQLayout.Palette.faint)
                     .frame(width: EQLayout.Mixer.gripWidth)
-                icon(row.identity)
-                nameLabel(row.identity, width: nil)
+                MixerRowIcon(model: model, identity: row.identity)
+                MixerRowName(identity: row.identity, width: nil)
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
@@ -243,42 +208,5 @@ struct MixerView: View {
         guard !model.editRows.isEmpty else { return nil }
         let index = Int((y / EQLayout.Mixer.rowPitch).rounded(.down))
         return min(max(0, index), model.editRows.count - 1)
-    }
-
-    // MARK: - 行の共通部品
-
-    @ViewBuilder
-    private func icon(_ identity: MixerAppIdentity?) -> some View {
-        if let image = model.icon(for: identity) {
-            Image(nsImage: image)
-                .resizable()
-                .frame(width: EQLayout.Mixer.iconSize, height: EQLayout.Mixer.iconSize)
-        } else {
-            Text("?")
-                .font(.system(size: 11))
-                .foregroundColor(EQLayout.Palette.faint)
-                .frame(width: EQLayout.Mixer.iconSize, height: EQLayout.Mixer.iconSize)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5).strokeBorder(
-                        EQLayout.Palette.faint, style: StrokeStyle(lineWidth: 1, dash: [2, 2])
-                    )
-                )
-        }
-    }
-
-    private func nameLabel(_ identity: MixerAppIdentity?, width: CGFloat?) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(identity?.displayName ?? "")
-                .font(.system(size: 12.5))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            if let subtitle = identity?.subtitle {
-                Text(subtitle)
-                    .font(.system(size: 10))
-                    .foregroundColor(EQLayout.Palette.faint)
-                    .lineLimit(1)
-            }
-        }
-        .frame(width: width, alignment: .leading)
     }
 }

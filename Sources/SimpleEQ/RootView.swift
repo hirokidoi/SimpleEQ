@@ -10,7 +10,7 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBarView(viewModel: viewModel, onOpenWindow: onOpenWindow)
+            TopBarView(viewModel: viewModel, mixer: mixer, onOpenWindow: onOpenWindow)
             HStack(spacing: 0) {
                 // L/R レベルメーター表示が OFF の間は、その列のビューを HStack から
                 // 除去することで EQ 本体が広がる。

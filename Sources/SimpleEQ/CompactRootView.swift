@@ -4,6 +4,7 @@ import SwiftUI
 /// コンパクトビューの画面。
 struct CompactRootView: View {
     @ObservedObject var viewModel: EQViewModel
+    @ObservedObject var mixer: MixerModel
 
     @Environment(\.displayScale) private var displayScale
 
@@ -11,7 +12,16 @@ struct CompactRootView: View {
 
     private static let labeledBands = Set(stride(from: 1, to: EQSpec.bandCount, by: 2))
 
+    @ViewBuilder
     var body: some View {
+        if mixer.shown {
+            CompactMixerView(model: mixer, viewModel: viewModel)
+        } else {
+            visualizer
+        }
+    }
+
+    private var visualizer: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
                 VisualizerLayerView(viewModel: viewModel, compact: true)
@@ -29,7 +39,7 @@ struct CompactRootView: View {
         ))
         .background(RoundedRectangle(cornerRadius: EQLayout.windowCornerRadius).fill(EQLayout.Palette.bg))
         .overlay {
-            WindowDragArea(viewModel: viewModel) { viewModel.viewMode = .normal }
+            WindowDragArea(viewModel: viewModel, mixer: mixer) { viewModel.viewMode = .normal }
         }
     }
 

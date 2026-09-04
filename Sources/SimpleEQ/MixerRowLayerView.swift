@@ -133,11 +133,21 @@ final class MixerRowLayerView: NSView {
     /// 段の幾何はレイアウトが変わったときだけ決まる。毎フレーム組み立て直さない。
     private var segmentGrid: EQLayout.SegmentGrid?
     private weak var clock: MixerRenderClock?
+    /// dB 値とメーターを持つか。行の種類は生成後に変わらない。
+    private let showsLevel: Bool
 
-    init(gain: Double, muted: Bool, enabled: Bool, clock: MixerRenderClock?) {
+    /// ミュート中の減光。行の要素はまとめて同じだけ落とす。
+    private var mutedDimming: Double { muted ? Self.mutedOpacity : 1 }
+
+    private static let mutedOpacity: Double = 0.4
+    private static let knobColor = NSColor.white.cgColor
+    private static let mutedKnobColor = NSColor(EQLayout.Palette.faint).cgColor
+
+    init(gain: Double, muted: Bool, enabled: Bool, showsLevel: Bool, clock: MixerRenderClock?) {
         self.position = MixerGainScale.position(ofGain: gain)
         self.muted = muted
         self.enabled = enabled
+        self.showsLevel = showsLevel
         self.clock = clock
         super.init(frame: .zero)
         wantsLayer = true
@@ -154,6 +164,9 @@ final class MixerRowLayerView: NSView {
     /// 操作できない間はポインタもフォーカスも通さない。
     override func hitTest(_ point: NSPoint) -> NSView? { enabled ? super.hitTest(point) : nil }
 
+    /// 非アクティブなウィンドウの初回クリックを操作として受ける。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { clock?.remove(self) } else { clock?.add(self) }
@@ -163,16 +176,18 @@ final class MixerRowLayerView: NSView {
         guard let root = layer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         for layer in [track, fill, knob] {
             layer.actions = VisualizerHostView.disabledLayerActions
             root.addSublayer(layer)
         }
         track.backgroundColor = NSColor(white: 1, alpha: 0.09).cgColor
         fill.backgroundColor = NSColor(EQLayout.Palette.cyan).cgColor
-        knob.backgroundColor = NSColor.white.cgColor
         knob.cornerRadius = EQLayout.Mixer.sliderKnobDiameter / 2
         track.cornerRadius = EQLayout.Mixer.sliderTrackHeight / 2
         fill.cornerRadius = EQLayout.Mixer.sliderTrackHeight / 2
+
+        guard showsLevel else { return }
 
         valueText.actions = VisualizerHostView.disabledLayerActions
         valueText.alignmentMode = .right
@@ -188,7 +203,6 @@ final class MixerRowLayerView: NSView {
             root.addSublayer(segment)
             return segment
         }
-        CATransaction.commit()
     }
 
     private let valueFontSize: CGFloat = 12
@@ -233,10 +247,19 @@ final class MixerRowLayerView: NSView {
         )
     }
 
-    /// 左端はノブの半径ぶん空ける。位置 0 のノブが隣の要素へはみ出さない。
+    /// 左端はノブの半径ぶん空ける。位置 0 のノブが隣の要素へはみ出さない。右端も同じ理由で空ける。
+    static func sliderTrailingX(showsLevel: Bool, valueMinX: CGFloat, boundsMaxX: CGFloat) -> CGFloat {
+        showsLevel
+            ? valueMinX - EQLayout.Mixer.rowSpacing
+            : boundsMaxX - EQLayout.Mixer.sliderKnobDiameter / 2
+    }
+
     private var sliderRect: CGRect {
         let originX = EQLayout.Mixer.sliderKnobDiameter / 2
-        let width = max(0, valueRect.minX - EQLayout.Mixer.rowSpacing - originX)
+        let trailingX = MixerRowLayerView.sliderTrailingX(
+            showsLevel: showsLevel, valueMinX: valueRect.minX, boundsMaxX: bounds.maxX
+        )
+        let width = max(0, trailingX - originX)
         return CGRect(x: originX, y: 0, width: width, height: bounds.height)
     }
 
@@ -245,7 +268,7 @@ final class MixerRowLayerView: NSView {
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
 
-        let dimmed = muted ? 0.4 : 1
+        let dimmed = Float(mutedDimming)
         let slider = sliderRect
         let trackY = (bounds.height - EQLayout.Mixer.sliderTrackHeight) / 2
         track.frame = CGRect(x: slider.minX, y: trackY, width: slider.width, height: EQLayout.Mixer.sliderTrackHeight)
@@ -255,16 +278,18 @@ final class MixerRowLayerView: NSView {
             y: (bounds.height - EQLayout.Mixer.sliderKnobDiameter) / 2,
             width: EQLayout.Mixer.sliderKnobDiameter, height: EQLayout.Mixer.sliderKnobDiameter
         )
-        track.opacity = Float(dimmed)
-        fill.opacity = Float(dimmed)
-        knob.opacity = Float(dimmed)
+        track.opacity = dimmed
+        fill.opacity = dimmed
+        // ノブは下のバーと重なるため、透かすと重なった面が見える。色を替えて落とす。
+        knob.backgroundColor = muted ? Self.mutedKnobColor : Self.knobColor
+
+        guard showsLevel else { return }
 
         valueText.frame = valueRect
         valueText.contentsScale = pixelGrid.scale
-        valueText.string = muted
-            ? MixerGainScale.mutedText
-            : MixerGainScale.text(forGain: MixerGainScale.gain(atPosition: position))
-        valueText.opacity = Float(dimmed)
+        // ミュート中も値を出す。無音のまま値を仕込んで解除する使い方で、置いた値が読める。
+        valueText.string = MixerGainScale.text(forGain: MixerGainScale.gain(atPosition: position))
+        valueText.opacity = dimmed
 
         applySegmentGeometry()
     }
@@ -287,6 +312,7 @@ final class MixerRowLayerView: NSView {
                 continue
             }
             segment.isHidden = false
+            segment.opacity = Float(mutedDimming)
             let span = grid.rowY(index)
             segment.frame = CGRect(
                 x: rect.minX + (rect.width - span.bottom), y: rect.minY,
@@ -373,11 +399,13 @@ struct MixerRowControls: NSViewRepresentable {
     @ObservedObject var model: MixerModel
     let channel: MixerModel.Channel
     let enabled: Bool
+    let showsLevel: Bool
     let clock: MixerRenderClock?
 
     func makeNSView(context: Context) -> MixerRowLayerView {
         let view = MixerRowLayerView(
-            gain: channel.gain, muted: channel.muted, enabled: enabled, clock: clock
+            gain: channel.gain, muted: channel.muted, enabled: enabled, showsLevel: showsLevel,
+            clock: clock
         )
         view.onGainChange = { model.updateGainDuringDrag($0, for: channel.key) }
         view.onGainCommit = { model.commitGain(for: channel.key) }

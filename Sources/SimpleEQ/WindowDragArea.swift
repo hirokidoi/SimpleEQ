@@ -3,10 +3,17 @@ import SwiftUI
 
 struct WindowDragArea: NSViewRepresentable {
     let viewModel: EQViewModel
+    let mixer: MixerModel
+    /// 偽にすると右クリックに応じない。NSView 自身のメニューはその領域で必ず勝つため、
+    /// 外側が付けたメニューへ通したい面はこちらを黙らせる。
+    var showsContextMenu = true
     var onDoubleClick: () -> Void
 
     func makeNSView(context: Context) -> WindowDragView {
-        WindowDragView(viewModel: viewModel, onDoubleClick: onDoubleClick)
+        WindowDragView(
+            viewModel: viewModel, mixer: mixer, showsContextMenu: showsContextMenu,
+            onDoubleClick: onDoubleClick
+        )
     }
 
     func updateNSView(_ nsView: WindowDragView, context: Context) {
@@ -20,10 +27,17 @@ enum WindowDragClick {
 
 final class WindowDragView: NSView {
     private let viewModel: EQViewModel
+    private let mixer: MixerModel
+    private let showsContextMenu: Bool
     var onDoubleClick: () -> Void
 
-    init(viewModel: EQViewModel, onDoubleClick: @escaping () -> Void) {
+    init(
+        viewModel: EQViewModel, mixer: MixerModel, showsContextMenu: Bool,
+        onDoubleClick: @escaping () -> Void
+    ) {
         self.viewModel = viewModel
+        self.mixer = mixer
+        self.showsContextMenu = showsContextMenu
         self.onDoubleClick = onDoubleClick
         super.init(frame: .zero)
     }
@@ -44,8 +58,12 @@ final class WindowDragView: NSView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        guard showsContextMenu else { return nil }
         let menu = NSMenu()
-        for item in WindowContextMenu.items(viewModel: viewModel, hideWindow: { [weak self] in self?.window?.close() }) {
+        let items = WindowContextMenu.items(
+            viewModel: viewModel, mixer: mixer, hideWindow: { [weak self] in self?.window?.close() }
+        )
+        for item in items {
             let menuItem = NSMenuItem(title: item.title, action: #selector(invoke(_:)), keyEquivalent: "")
             menuItem.setCommandShortcut(item.commandKey)
             menuItem.target = self

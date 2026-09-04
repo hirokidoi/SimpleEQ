@@ -130,8 +130,7 @@ enum MixerGainScale {
         return pow(10, snappedDb(db) / 20)
     }
 
-    static let silentText = "−∞"
-    static let mutedText = "——"
+    static let silentText = "——"
 
     /// 0.1 の帯を持つため小数第一位まで出す。桁が固定されることで値の幅もぶれない。
     static func text(forGain gain: Double) -> String {

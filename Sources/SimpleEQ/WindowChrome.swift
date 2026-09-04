@@ -15,6 +15,15 @@ enum AlwaysOnTopMenu {
     static let title = "常に最前面に表示"
 }
 
+enum MixerVisibilityMenu {
+    static let showTitle = "EQ Mixer を表示"
+    static let closeTitle = "EQ Mixer を閉じる"
+
+    static func toggle(isShown: Bool) -> String {
+        isShown ? closeTitle : showTitle
+    }
+}
+
 @MainActor
 enum WindowContextMenu {
     enum Kind {
@@ -29,7 +38,9 @@ enum WindowContextMenu {
         var commandKey: Character?
     }
 
-    static func items(viewModel: EQViewModel, hideWindow: @escaping () -> Void) -> [Item] {
+    static func items(
+        viewModel: EQViewModel, mixer: MixerModel, hideWindow: @escaping () -> Void
+    ) -> [Item] {
         [
             Item(
                 id: 0, title: WindowVisibilityMenu.hideTitle, kind: .action(hideWindow),
@@ -42,7 +53,42 @@ enum WindowContextMenu {
             Item(id: 2, title: viewModel.viewMode.toggled.switchActionTitle, kind: .action {
                 viewModel.viewMode = viewModel.viewMode.toggled
             }),
+            Item(id: 3, title: MixerVisibilityMenu.toggle(isShown: mixer.shown), kind: .action {
+                mixer.toggleShown()
+            }),
         ]
+    }
+}
+
+/// WindowContextMenu の項目を SwiftUI のメニューとして並べる。
+struct WindowContextMenuItems: View {
+    let viewModel: EQViewModel
+    let mixer: MixerModel
+    let hideWindow: () -> Void
+
+    var body: some View {
+        ForEach(WindowContextMenu.items(viewModel: viewModel, mixer: mixer, hideWindow: hideWindow)) { item in
+            Group {
+                switch item.kind {
+                case .action(let perform): Button(item.title, action: perform)
+                case .toggle(let isOn): Toggle(item.title, isOn: isOn)
+                }
+            }
+            .modifier(CommandShortcut(key: item.commandKey))
+        }
+    }
+}
+
+struct CommandShortcut: ViewModifier {
+    let key: Character?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let key {
+            content.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
+        } else {
+            content
+        }
     }
 }
 

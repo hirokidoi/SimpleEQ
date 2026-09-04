@@ -356,6 +356,14 @@ final class VisualizerHostViewTests: XCTestCase {
         makeVMWithEngine().vm
     }
 
+    /// ビジュアライザ側の見え方を確かめる回では面を出さないため、行を持たない状態で足りる。
+    private func makeMixer() -> MixerModel {
+        MixerModel(
+            settings: SettingsStore(defaults: defaults), coordinator: nil,
+            levelStore: MixerLevelStore(slotCount: 4)
+        )
+    }
+
     /// engine.levelMeter へテスト値を書き込みたい (→ pull 経由で vm へ引き出す) 場合に使う。
     private func makeVMWithEngine() -> (vm: EQViewModel, engine: AudioEngine) {
         let store = SettingsStore(defaults: defaults)
@@ -406,7 +414,7 @@ final class VisualizerHostViewTests: XCTestCase {
     // LED 領域の高さは padding とラベル行の積み上げで決まる。段の刻みを決める定数がその実寸から
     // ずれると、段が領域を埋めきらず上端に余りが出る。
     func testCompactLedHeightMatchesTheLaidOutVisualizerHeight() throws {
-        let hosting = NSHostingView(rootView: CompactRootView(viewModel: makeVM()))
+        let hosting = NSHostingView(rootView: CompactRootView(viewModel: makeVM(), mixer: makeMixer()))
         hosting.frame = CGRect(origin: .zero, size: EQLayout.compactWindowDefaultSize)
         hosting.layoutSubtreeIfNeeded()
         let hostView = try XCTUnwrap(

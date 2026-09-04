@@ -147,7 +147,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.windowController = windowController
         statusItemController = StatusItemController(
-            windowController: windowController, viewModel: viewModel, diagnostics: diagnostics
+            windowController: windowController, viewModel: viewModel, mixer: mixer,
+            diagnostics: diagnostics
         )
         viewModel.startObservingOutputDevices()
         viewModel.startAutoPreampDerivation()

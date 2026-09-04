@@ -61,18 +61,24 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
     private let statusItem: NSStatusItem
     private let windowController: EQWindowController
     private let viewModel: EQViewModel
+    private let mixer: MixerModel
     private let diagnostics: DiagnosticsModel
     private let menu = NSMenu()
     private var toggleItem: NSMenuItem!
     private var viewModeItem: NSMenuItem!
+    private var mixerItem: NSMenuItem!
     private var presetSection: MenuSection!
     private var outputSection: MenuSection!
     /// option 押下時だけ見せる項目 (診断の項目群とその区切り線)。
     private var diagnosticsItems: [NSMenuItem] = []
 
-    init(windowController: EQWindowController, viewModel: EQViewModel, diagnostics: DiagnosticsModel) {
+    init(
+        windowController: EQWindowController, viewModel: EQViewModel, mixer: MixerModel,
+        diagnostics: DiagnosticsModel
+    ) {
         self.windowController = windowController
         self.viewModel = viewModel
+        self.mixer = mixer
         self.diagnostics = diagnostics
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
@@ -116,9 +122,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
         menu.addItem(modeItem)
         viewModeItem = modeItem
 
-        let mixerItem = NSMenuItem(title: "EQ Mixer", action: #selector(openMixer), keyEquivalent: "")
-        mixerItem.target = self
-        menu.addItem(mixerItem)
+        let mixerMenuItem = NSMenuItem(title: "", action: #selector(toggleMixer), keyEquivalent: "")
+        mixerMenuItem.target = self
+        menu.addItem(mixerMenuItem)
+        mixerItem = mixerMenuItem
 
         // action 名を openSettings にすると OS が標準の設定コマンドと見なして歯車アイコンを添える。
         let settingsItem = NSMenuItem(title: "EQ Settings", action: #selector(openSettingsWindow), keyEquivalent: "")
@@ -197,6 +204,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
         toggleItem.title = toggle.title
         toggleItem.setCommandShortcut(toggle.commandKey)
         viewModeItem.title = viewModel.viewMode.toggled.switchActionTitle
+        mixerItem.title = MixerVisibilityMenu.toggle(isShown: mixer.shown)
         rebuildPresetItems()
         rebuildOutputDeviceItems()
         let showsDiagnostics = DiagnosticsEntry.isRevealed
@@ -230,8 +238,8 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
         windowController.showSettings()
     }
 
-    @objc private func openMixer() {
-        windowController.showMixer()
+    @objc private func toggleMixer() {
+        windowController.toggleMixer()
     }
 
     @objc private func openAboutWindow() {
