@@ -425,9 +425,12 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
             // 管理者パスワードダイアログのユーザキャンセルは意図的な中断であり、失敗表示はせず
             // 静かに無視する。
             break
-        case .failure:
+        case .failure(let error):
             let failed = NSAlert()
             failed.messageText = "インストールに失敗しました"
+            if case .outputDeviceSwitchFailed = error {
+                failed.informativeText = DriverOperationPrompt.outputDeviceSwitchRecovery
+            }
             failed.alertStyle = .warning
             failed.addButton(withTitle: "OK")
             failed.runModal()
