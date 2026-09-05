@@ -2208,9 +2208,9 @@ final class EQViewModelTests: XCTestCase {
     /// フォント・アンチエイリアシングは環境間で変わりうるため、開発機・Xcode バージョンに固有の基準値。
     /// CI 環境やツールチェインを変えた場合は再採取が必要になりうる。
     private static let goldenRootViewHashLevelMeterShown =
-        "6be19fc757fcbf3ba0456f5c71d7151431885df802ca3cd5ee6b05d6e5ed49fd"
+        "7157f1001d1a985d2fa65c77779afcad32b5328b1993f283da8848fbd9712776"
     private static let goldenRootViewHashLevelMeterHidden =
-        "5c85b392431b07a91fb7e05ceb4729ee3e1b8675ca7212191467177f657a58ea"
+        "c0c62711ddfc481457ea2d81ff8133ee98660ee4583b795d49b502154425d23a"
 
     // MARK: - installOrUpdateDriver / uninstallDriver
 

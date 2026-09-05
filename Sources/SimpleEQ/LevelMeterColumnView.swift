@@ -11,7 +11,8 @@ struct LevelMeterColumnView: View {
                 channelLabel("R")
             }
             .frame(maxWidth: .infinity)
-            .frame(height: EQLayout.freqRowHeight)
+            .padding(.bottom, EQLayout.freqRowLabelBottomInset)
+            .frame(height: EQLayout.freqRowHeight, alignment: .bottom)
         }
         .frame(width: EQLayout.levelMeterColumnWidth)
         .frame(maxHeight: .infinity)

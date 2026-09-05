@@ -577,7 +577,9 @@ The sequence number has an upper limit, however, and firing beyond it within the
 In the rendering layers that manipulate CALayer directly, the order in which layers are added to the tree is exactly the compositing order.
 When there are combinations of elements that overlap, changing the order of addition changes the appearance.
 This is a visual regression detected neither by the compiler nor by the tests, so when changing the ordering, check whether any overlapping combinations exist.
-An element that overlaps another cannot be dimmed by its own alpha, since lowering it shows what sits beneath. Where such an element has to read as dimmed, its color is what moves instead.
+Lowering an element's own alpha shows what sits beneath it, and whether that is a defect or the point is what decides the treatment. Where the element has to read as dimmed against an unchanged surrounding, its color is what moves instead. Where what sits beneath is exactly what should come forward, the alpha is the treatment.
+
+The level display receding while the handles are shown is the latter case: what comes forward is the bar's own unlit outline, which is why that outline is left out of the dimming. The clip indication takes a shallower share of the same dimming, since what it reports is an exceedance rather than a level. How far the group recedes is a setting; the share the clip indication takes is not.
 
 The rendering of the EQ itself is closed within CALayer, and SwiftUI's `Canvas` is not used.
 `Canvas` carries a per-frame overhead even when its contents are empty, so during interaction a redraw occurs every frame and the CPU load jumps.

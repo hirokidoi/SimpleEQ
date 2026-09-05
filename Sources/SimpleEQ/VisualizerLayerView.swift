@@ -65,6 +65,9 @@ final class VisualizerHostView: NSView {
     private(set) var clipCells: [CALayer] = []
 
     private(set) var imageSet: BandImageSet?
+    /// 反映済みの点灯帯・クリップ表示の不透明度。
+    private var appliedLitOpacity: Float = 1
+    private var appliedClipOpacity: Float = 1
     private var lastBakedScale: CGFloat?
     private var lastBakedPlotHeight: CGFloat?
     private var lastBakedBrighten: Double?
@@ -151,7 +154,6 @@ final class VisualizerHostView: NSView {
         CATransaction.setDisableActions(true)
         eqContainer.actions = Self.disabledLayerActions
         meterContainer.actions = Self.disabledLayerActions
-        if !compact { root.addSublayer(chromeLayers.backChromeContainer) }
         root.addSublayer(eqContainer)
         root.addSublayer(meterContainer)
         if !compact { root.addSublayer(chromeLayers.frontChromeContainer) }
@@ -429,6 +431,19 @@ final class VisualizerHostView: NSView {
             CATransaction.commit()
         }
 
+        // コンパクトビューはハンドルを持たないため沈めない。
+        let litOpacity = Float(compact ? 1 : viewModel.ledLitOpacity)
+        let clipOpacity = Float(compact ? 1 : viewModel.ledClipOpacity)
+        if litOpacity != appliedLitOpacity || clipOpacity != appliedClipOpacity {
+            appliedLitOpacity = litOpacity
+            appliedClipOpacity = clipOpacity
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for column in eqColumns + meterColumns { column.setLitOpacity(litOpacity) }
+            for cell in clipCells { cell.opacity = clipOpacity }
+            CATransaction.commit()
+        }
+
         let plotHeight = eqContainer.bounds.height
         guard plotHeight > 0 else { return false }
         needsFrameApply = false
@@ -531,6 +546,12 @@ final class BandColumn {
         setContents(inEffect: inEffect, imageSet: imageSet)
     }
 
+    /// 点灯帯とピークキャップだけを透かす。消灯帯は触らないため、透かしてもバーの柱は残る。
+    func setLitOpacity(_ opacity: Float) {
+        litLayer.opacity = opacity
+        capLayer.opacity = opacity
+    }
+
     /// 素通し状態の遷移で画像の組を切り替える (焼き直しではなく contents の差し替えのみ)。
     func setContents(inEffect: Bool, imageSet: BandImageSet) {
         dimLayer.contents = inEffect ? imageSet.dimInEffect : imageSet.dimBypass
@@ -572,10 +593,10 @@ struct MeterChromeGeometry {
 /// サブレイヤの並び順は合成順序に効く。崩さないこと。
 @MainActor
 final class EQChromeLayers {
-    /// LED の奥に置くコンテナ。ゲイン範囲の白オーバーレイ (EQ バンドごと 1 枚 + L/R メーターぶん 2 枚) のみを持つ。
-    let backChromeContainer = CALayer()
     /// LED・メーターの手前に置くコンテナ。
     let frontChromeContainer = CALayer()
+    /// ゲイン範囲の白オーバーレイ (EQ バンドごと 1 枚 + L/R メーターぶん 2 枚) のみを持つコンテナ。
+    let gainRangeContainer = CALayer()
     let handleLinesContainer = CALayer()
     let gainRangeLayers: [CALayer] = (0..<EQSpec.bandCount).map { _ in CALayer() }
     /// L/R メーターの各バーに対応するゲイン範囲の白オーバーレイ。
@@ -610,14 +631,14 @@ final class EQChromeLayers {
     private var badgeSize: CGSize = .zero
 
     init() {
-        backChromeContainer.actions = VisualizerHostView.disabledLayerActions
+        gainRangeContainer.actions = VisualizerHostView.disabledLayerActions
         frontChromeContainer.actions = VisualizerHostView.disabledLayerActions
         handleLinesContainer.actions = VisualizerHostView.disabledLayerActions
 
         for layer in gainRangeLayers + preampGainRangeLayers {
             layer.actions = VisualizerHostView.disabledLayerActions
             layer.contentsGravity = .resize
-            backChromeContainer.addSublayer(layer)
+            gainRangeContainer.addSublayer(layer)
         }
         for layer in handleLineLayers + [preampHandleLineLayer] {
             layer.actions = VisualizerHostView.disabledLayerActions
@@ -629,6 +650,7 @@ final class EQChromeLayers {
             layer.actions = VisualizerHostView.disabledLayerActions
             layer.contentsGravity = .resize
         }
+        frontChromeContainer.addSublayer(gainRangeContainer)
         frontChromeContainer.addSublayer(handleLinesContainer)
         frontChromeContainer.addSublayer(dragFillLayer)
         for layer in preampDragFillLayers { frontChromeContainer.addSublayer(layer) }
@@ -643,7 +665,7 @@ final class EQChromeLayers {
     /// レイアウト時にのみ呼ぶ。
     /// コンテナの frame をホスト全域へ合わせ、焼き直し契機が変わっていれば baseline/gutter/axis を焼き直して静止配置する。
     func layout(hostBounds: CGRect, geo: EQPlotGeometry) {
-        backChromeContainer.frame = hostBounds
+        gainRangeContainer.frame = hostBounds
         frontChromeContainer.frame = hostBounds
 
         let key = ChromeBakeKey(scale: geo.pixelGrid.scale, plotRect: geo.plotRect, hostHeight: geo.size.height, floorDb: geo.floorDb)
@@ -681,16 +703,16 @@ final class EQChromeLayers {
         let plotRect = geo.plotRect
         let plotHeight = plotRect.height
         // このグリッドの bottomY は plotRect.maxY (ホスト座標) を取る。
-        // backChromeContainer/frontChromeContainer は frame = ホスト全域で、子はこのビューのローカル座標をそのまま使う。
+        // frontChromeContainer は frame = ホスト全域で、子はこのビューのローカル座標をそのまま使う。
         let grid = EQLayout.SegmentGrid(height: plotHeight, bottomY: plotRect.maxY, pixelGrid: geo.pixelGrid)
         let handleAlpha = viewModel.handleAlpha
-        let handleVisible = handleAlpha >= EQLayout.handleVisibilityThreshold
+        let handleVisible = viewModel.handlesVisible
         let displayGains = viewModel.handleDisplayGains
         let baselineY = geo.dbToY(0)
 
-        backChromeContainer.isHidden = !(handleVisible && inEffect)
+        gainRangeContainer.isHidden = !(handleVisible && inEffect)
         for layer in preampGainRangeLayers { layer.isHidden = true }
-        if !backChromeContainer.isHidden {
+        if !gainRangeContainer.isHidden {
             for band in 0..<EQSpec.bandCount {
                 let gy = geo.dbToY(displayGains[band])
                 gainRangeLayers[band].opacity = Float(handleAlpha)

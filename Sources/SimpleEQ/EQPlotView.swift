@@ -24,7 +24,8 @@ struct EQPlotView: View {
         }
         .padding(.leading, EQLayout.Padding.left)
         .padding(.trailing, EQLayout.Padding.right)
-        .frame(height: EQLayout.freqRowHeight)
+        .padding(.bottom, EQLayout.freqRowLabelBottomInset)
+        .frame(height: EQLayout.freqRowHeight, alignment: .bottom)
     }
 
     /// 1000 以上は k 表記にする (整数なら小数点なし)。

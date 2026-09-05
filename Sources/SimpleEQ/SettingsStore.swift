@@ -56,6 +56,7 @@ final class SettingsStore {
         /// nil は「まだ一度も設定していない」= 初期セットを撒く合図で、空配列は「ユーザーが全部消した」。
         var mixerChannels: [MixerChannelEntry]?
         var handleRevealGesture: HandleRevealGesture
+        var ledDimAmount: Double?
     }
 
     struct MixerChannelEntry: Codable, Equatable {
@@ -107,7 +108,8 @@ final class SettingsStore {
                 preampAutoEnabled: true,
                 preampAutoTargetDb: AutoPreampSpec.targetDbDefault,
                 mixerChannels: nil,
-                handleRevealGesture: .default
+                handleRevealGesture: .default,
+                ledDimAmount: nil
             )
         }
     }
@@ -130,6 +132,7 @@ final class SettingsStore {
         p.releaseLevel = clamped(p.releaseLevel, to: EQLayout.Tuning.release)
         p.handleFadeLevel = clamped(p.handleFadeLevel, to: EQLayout.Tuning.handleFade)
         p.handlePreviewLevel = clamped(p.handlePreviewLevel, to: EQLayout.Tuning.handlePreview)
+        p.ledDimAmount = p.ledDimAmount.map { clamped($0, to: EQLayout.Tuning.ledDimAmountRange) }
         p.presetOverrides = p.presetOverrides.mapValues {
             PresetOverride(
                 title: EQLayout.clampToPresetTitleMaxWidth($0.title),
@@ -339,6 +342,12 @@ final class SettingsStore {
     var handleRevealGesture: HandleRevealGesture {
         get { readState { $0.handleRevealGesture } }
         set { writeState { $0.handleRevealGesture = newValue } }
+    }
+
+    /// ハンドル表示中に LED を沈める量。
+    var ledDimAmount: Double {
+        get { readState { $0.ledDimAmount } ?? EQLayout.Tuning.ledDimAmountDefault }
+        set { writeState { $0.ledDimAmount = newValue } }
     }
 
     /// nil は「まだ一度も設定していない」。初期化はこの値を nil へ戻すことで表す。

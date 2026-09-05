@@ -39,7 +39,7 @@ enum EQLayout {
     /// Settings ウィンドウの高さの下限。
     static let settingsWindowMinHeight: CGFloat = 460
     /// Settings ウィンドウを開いたときの高さ。
-    static let settingsWindowDefaultHeight: CGFloat = 880
+    static let settingsWindowDefaultHeight: CGFloat = 830
 
     /// Diagnostics ウィンドウの幅 (固定)。値の桁が揃って読めるよう Settings と同じ幅に合わせる。
     static let diagnosticsWindowWidth: CGFloat = settingsWindowWidth
@@ -165,6 +165,8 @@ enum EQLayout {
     }
     /// 周波数ラベル行の高さ。
     static let freqRowHeight: CGFloat = 28
+    /// 周波数ラベル・L/R ラベルの下端から行の下端 (ウィンドウの下端) までに空ける余白。
+    static let freqRowLabelBottomInset: CGFloat = 12
 
     /// EQ プロットと L/R レベルメーターバーの縦方向の描画領域 (上端 y・高さ) を導出する。
     /// canvasHeight はラベル行を除いた、バー描画対象領域そのものの高さを渡すこと。
@@ -432,6 +434,11 @@ enum EQLayout {
         static let peakCapBrightenAmountDefault: Double = 0.3
         static let peakCapBrightenAmountRange: ClosedRange<Double> = 0...1
         static let peakCapBrightenAmountStep: Double = 0.05
+
+        /// ハンドル表示中に発光の不透明度から落とす割合 (0=沈めない、1=点灯部が消える)。
+        static let ledDimAmountDefault: Double = 0.85
+        static let ledDimAmountRange: ClosedRange<Double> = 0...1
+        static let ledDimAmountStep: Double = 0.05
     }
 
     // MARK: - アイコンモチーフ
@@ -520,6 +527,10 @@ enum EQLayout {
     /// 色相を保ったまま白へ寄せる度合いは Settings で調整可能なため別の集約先に置く。
     static let peakCapAlpha: Double = 1.0
 
+    /// ハンドル表示中の沈みのうち、クリップ表示に及ぶ割合 (0=沈めない、1=点灯帯と同じだけ沈む)。
+    /// フルスケール超過を伝える役目があるため、点灯帯より浅く沈める。
+    static let clipDimRatio: Double = 0.5
+
     /// バー内の垂直位置比率 (0=下端..1=上端) からセグメント発光色を補間する (定数から導出、色をベタ書きしない)。
     static func segmentColor(atRatio pr: Double) -> RGB {
         let p = max(0, min(1, pr))
@@ -536,9 +547,7 @@ enum EQLayout {
     /// ハンドル線 (ゲイン設定ライン) の色。
     static let handleLineColor = handleTintRGB.opacity(1)
     /// 0dB ラインからゲイン設定ライン (ハンドル) までの範囲に重ねる半透明オーバーレイ色。
-    /// ハンドル線と同系色 (handleLineColor) を使う。
-    /// リアルタイムのレベル表示 (lit/dim/peak) はそのまま描いた上に、この色を重ね塗りする。
-    static let gainRangeFillColor = handleLineColor.opacity(0.15)
+    static let gainRangeFillColor = handleLineColor.opacity(0.25)
     /// ドラッグ中のバンドのみ、0dB ラインから現在ゲインまでの範囲を最前面 (バーより手前) で塗りつぶす色。
     /// ハンドル線と同系色。
     static let dragBandFillColor = handleLineColor.opacity(1)

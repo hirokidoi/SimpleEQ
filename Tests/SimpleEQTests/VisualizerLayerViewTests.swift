@@ -695,7 +695,7 @@ final class VisualizerHostViewTests: XCTestCase {
         }
 
         let chrome = hostView.chromeLayers
-        XCTAssertNil(chrome.backChromeContainer.animationKeys())
+        XCTAssertNil(chrome.gainRangeContainer.animationKeys())
         XCTAssertNil(chrome.frontChromeContainer.animationKeys())
         XCTAssertNil(chrome.handleLinesContainer.animationKeys())
         for layer in chrome.gainRangeLayers + chrome.preampGainRangeLayers + chrome.handleLineLayers {
@@ -724,18 +724,103 @@ final class VisualizerHostViewTests: XCTestCase {
         guard let root = hostView.layer else { return XCTFail("root layer が取得できない") }
         let chrome = hostView.chromeLayers
         XCTAssertEqual(root.sublayers?.map(ObjectIdentifier.init), [
-            ObjectIdentifier(chrome.backChromeContainer), ObjectIdentifier(hostView.eqContainer),
+            ObjectIdentifier(hostView.eqContainer),
             ObjectIdentifier(hostView.meterContainer), ObjectIdentifier(chrome.frontChromeContainer),
         ])
         XCTAssertEqual(
             chrome.frontChromeContainer.sublayers?.map(ObjectIdentifier.init),
-            [ObjectIdentifier(chrome.handleLinesContainer), ObjectIdentifier(chrome.dragFillLayer)]
+            [
+                ObjectIdentifier(chrome.gainRangeContainer),
+                ObjectIdentifier(chrome.handleLinesContainer), ObjectIdentifier(chrome.dragFillLayer),
+            ]
                 + chrome.preampDragFillLayers.map(ObjectIdentifier.init)
                 + [
                     ObjectIdentifier(chrome.baselineLayer), ObjectIdentifier(chrome.gutterLayer),
                     ObjectIdentifier(chrome.axisLayer), ObjectIdentifier(chrome.dragBadgeLayer),
                 ]
         )
+    }
+
+    // MARK: - ハンドル表示中の LED の沈み
+
+    /// ハンドルが完全に見えている状態まで進めた ViewModel。
+    private func makeVMWithHandlesFullyShown() -> EQViewModel {
+        let vm = makeVM()
+        vm.handlesRevealed = true
+        for k in 0...200 { vm.tick(now: Date(timeIntervalSinceReferenceDate: Double(k) * 0.016)) }
+        XCTAssertEqual(vm.handleAlpha, 1, "前提: ハンドルが完全に見えていること")
+        return vm
+    }
+
+    // 沈むのは点灯帯・キャップ・クリップ表示だけで、消灯帯 (バーの柱) は残ること。
+    func testDimReachesLitLayersAndLeavesTheUnlitColumnUntouched() {
+        let vm = makeVMWithHandlesFullyShown()
+        let hostView = makeLaidOutHostView(vm)
+        let expected = Float(1 - vm.ledDimAmount)
+
+        for column in hostView.eqColumns + hostView.meterColumns {
+            XCTAssertEqual(column.litLayer.opacity, expected, accuracy: 0.001)
+            XCTAssertEqual(column.capLayer.opacity, expected, accuracy: 0.001)
+            XCTAssertEqual(column.dimLayer.opacity, 1, "消灯帯は沈めないこと")
+        }
+    }
+
+    // クリップ表示は点灯帯より浅く沈むこと。
+    func testClipCellDimsLessThanTheLitLayers() {
+        let vm = makeVMWithHandlesFullyShown()
+        let hostView = makeLaidOutHostView(vm)
+        guard let clip = hostView.clipCells.first, let column = hostView.meterColumns.first
+        else { return XCTFail("クリップセルが無い") }
+
+        XCTAssertEqual(clip.opacity, Float(1 - vm.ledDimAmount * EQLayout.clipDimRatio), accuracy: 0.001)
+        XCTAssertGreaterThan(clip.opacity, column.litLayer.opacity)
+        XCTAssertLessThan(clip.opacity, 1, "沈みは及ぶこと")
+    }
+
+    // 沈みはハンドルの表示アルファに比例し、往復とも動き出しが遅れないこと。
+    func testDimFollowsTheHandleAlphaInBothDirections() {
+        let vm = makeVM()
+        let hostView = makeLaidOutHostView(vm)
+        guard let column = hostView.eqColumns.first else { return XCTFail("バンドが無い") }
+        XCTAssertEqual(column.litLayer.opacity, 1, "ハンドルが出ていない間は沈めないこと")
+
+        var now = 0.0
+        var seen: [Float] = []
+        func advance(_ frames: Int) -> Float {
+            let before = column.litLayer.opacity
+            for _ in 0..<frames {
+                now += 0.016
+                vm.tick(now: Date(timeIntervalSinceReferenceDate: now))
+                hostView.viewModelSettingsChanged()
+                seen.append(column.litLayer.opacity)
+            }
+            return before
+        }
+
+        vm.handlesRevealed = true
+        let beforeFadeIn = advance(1)
+        XCTAssertLessThan(column.litLayer.opacity, beforeFadeIn, "沈み始めが 1 フレーム目から動くこと")
+        _ = advance(200)
+        XCTAssertEqual(column.litLayer.opacity, Float(1 - vm.ledDimAmount), accuracy: 0.001, "沈みきること")
+
+        vm.handlesRevealed = false
+        let beforeFadeOut = advance(1)
+        XCTAssertGreaterThan(column.litLayer.opacity, beforeFadeOut, "戻り始めも 1 フレーム目から動くこと")
+        _ = advance(400)
+        XCTAssertEqual(column.litLayer.opacity, 1, accuracy: 0.001, "戻りきること")
+
+        XCTAssertGreaterThan(Set(seen).count, 2, "途中の値を通ること (段階的な切り替えではない)")
+    }
+
+    // コンパクトビューはハンドルを持たないため沈めないこと。
+    func testCompactViewNeverDims() {
+        let vm = makeVMWithHandlesFullyShown()
+        let hostView = VisualizerHostView(viewModel: vm, compact: true)
+        hostView.frame = CGRect(origin: .zero, size: EQLayout.compactWindowDefaultSize)
+        hostView.layoutSubtreeIfNeeded()
+        for column in hostView.eqColumns + hostView.meterColumns {
+            XCTAssertEqual(column.litLayer.opacity, 1)
+        }
     }
 
     // 白オーバーレイ・ハンドル線が横方向に重ならないこと。ノーマルビューの幅とそれより狭い幅、
@@ -773,7 +858,7 @@ final class VisualizerHostViewTests: XCTestCase {
                     "不変条件 columnWidth > barWidth + handleLineOverhang totalWidth=\(totalWidth) showMeter=\(showMeter)"
                 )
 
-                XCTAssertFalse(chrome.backChromeContainer.masksToBounds)
+                XCTAssertFalse(chrome.gainRangeContainer.masksToBounds)
                 XCTAssertFalse(chrome.frontChromeContainer.masksToBounds)
                 XCTAssertFalse(chrome.handleLinesContainer.masksToBounds)
             }
@@ -782,7 +867,7 @@ final class VisualizerHostViewTests: XCTestCase {
 
     func testVisibilityFollowsHandleAlphaThresholdAndProcessingInEffectAsymmetrically() {
         let idleChrome = makeLaidOutHostView(makeVM()).chromeLayers
-        XCTAssertTrue(idleChrome.backChromeContainer.isHidden, "待機中は白オーバーレイが隠れる")
+        XCTAssertTrue(idleChrome.gainRangeContainer.isHidden, "待機中は白オーバーレイが隠れる")
         XCTAssertTrue(idleChrome.handleLinesContainer.isHidden, "待機中はハンドル線が隠れる")
         XCTAssertTrue(idleChrome.baselineLayer.isHidden, "待機中は baseline が隠れる")
         XCTAssertTrue(idleChrome.gutterLayer.isHidden, "待機中は gutter が隠れる")
@@ -797,7 +882,7 @@ final class VisualizerHostViewTests: XCTestCase {
         XCTAssertFalse(vm.processingInEffect, "前提: 素通しにより効いていないこと")
 
         let chrome = makeLaidOutHostView(vm).chromeLayers
-        XCTAssertTrue(chrome.backChromeContainer.isHidden, "白オーバーレイは processingInEffect を条件に持つため即座に隠れる")
+        XCTAssertTrue(chrome.gainRangeContainer.isHidden, "白オーバーレイは processingInEffect を条件に持つため即座に隠れる")
         XCTAssertFalse(chrome.handleLinesContainer.isHidden, "ハンドル線は handleAlpha のみに従うため、この時点ではまだ見える")
     }
 
@@ -1146,7 +1231,7 @@ final class VisualizerHostViewTests: XCTestCase {
     func testViewModelSettingsChangedReflectsChromeStateWhileTimerIsStopped() {
         let vm = makeVM()
         let hostView = makeLaidOutHostView(vm)
-        XCTAssertTrue(hostView.chromeLayers.backChromeContainer.isHidden, "前提: 待機中は白オーバーレイが隠れている")
+        XCTAssertTrue(hostView.chromeLayers.gainRangeContainer.isHidden, "前提: 待機中は白オーバーレイが隠れている")
 
         vm.handlesRevealed = true
         for k in 0...200 { vm.tick(now: Date(timeIntervalSinceReferenceDate: Double(k) * 0.016)) }

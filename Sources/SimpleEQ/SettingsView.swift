@@ -23,6 +23,7 @@ struct SettingsView: View {
                     generalSection
                     gainSection
                     deviceSection
+                    handlesSection
                     presetsSection
                     mixerSection
                     visualizerSection
@@ -125,7 +126,7 @@ struct SettingsView: View {
         PanelSection("Gain") {
             preampSliderRow(
                 title: "プリアンプ",
-                subtitle: "AUTO はゲインカーブから自動決定"
+                subtitle: "AUTO 時はゲインカーブから自動的に決定される"
             ) {
                 AutoToggleButton(isOn: preampAutoBinding(viewModel))
             } trailing: {
@@ -142,19 +143,6 @@ struct SettingsView: View {
             ) { EQLayout.formatSignedDb($0) }
             .disabled(!viewModel.preampAutoEnabled || !viewModel.processingInEffect)
             .opacity(viewModel.preampAutoEnabled && viewModel.processingInEffect ? 1 : EQLayout.disabledOpacity)
-
-            settingsRow(
-                title: "ゲインカーブ編集トリガー",
-                subtitle: "ビジュアライザ上にゲイン設定用ハンドルを出すための操作を選択"
-            ) {
-                HStack(spacing: 5) {
-                    ForEach(HandleRevealGesture.allCases, id: \.self) { gesture in
-                        choiceButton(gesture.title, isActive: viewModel.handleRevealGesture == gesture) {
-                            viewModel.handleRevealGesture = gesture
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -186,6 +174,40 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Handles (即時反映)
+
+    private var handlesSection: some View {
+        PanelSection("Handles") {
+            settingsRow(
+                title: "編集トリガー",
+                subtitle: "ビジュアライザ上にゲイン設定ハンドルを出すための操作"
+            ) {
+                HStack(spacing: 5) {
+                    ForEach(HandleRevealGesture.allCases, id: \.self) { gesture in
+                        choiceButton(gesture.title, isActive: viewModel.handleRevealGesture == gesture) {
+                            viewModel.handleRevealGesture = gesture
+                        }
+                    }
+                }
+            }
+
+            levelRow(
+                title: "フェード速度", subtitle: "ゲイン設定ハンドルの表示/非表示の速さ", level: $viewModel.handleFadeLevel,
+                scale: EQLayout.Tuning.handleFade
+            )
+            levelRow(
+                title: "プレビュー追従速度", subtitle: "プリセット hover 時のカーブ追従", level: $viewModel.handlePreviewLevel,
+                scale: EQLayout.Tuning.handlePreview
+            )
+
+            sliderRow(
+                title: "編集中のレベル表示", subtitle: "ゲイン設定ハンドル表示中にバーの発光を薄くする度合い",
+                value: $viewModel.ledDimAmount, range: EQLayout.Tuning.ledDimAmountRange,
+                step: EQLayout.Tuning.ledDimAmountStep, defaultValue: EQLayout.Tuning.ledDimAmountDefault
+            ) { "\(Int(($0 * 100).rounded()))%" }
+        }
+    }
+
     // MARK: - Presets
 
     private var presetsSection: some View {
@@ -208,15 +230,6 @@ struct SettingsView: View {
                     confirmTitle: "初期化", onConfirm: viewModel.resetAllPresets
                 )
             }
-
-            levelRow(
-                title: "フェード速度", subtitle: "ハンドルの表示/非表示の速さ", level: $viewModel.handleFadeLevel,
-                scale: EQLayout.Tuning.handleFade
-            )
-            levelRow(
-                title: "プレビュー追従速度", subtitle: "プリセット hover 時のカーブ追従", level: $viewModel.handlePreviewLevel,
-                scale: EQLayout.Tuning.handlePreview
-            )
         }
     }
 

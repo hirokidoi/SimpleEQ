@@ -83,6 +83,7 @@ final class EQLayoutTests: XCTestCase {
             ("peakHoldSeconds", EQLayout.Tuning.peakHoldSecondsDefault, EQLayout.Tuning.peakHoldSecondsRange),
             ("peakDecayDbPerSec", EQLayout.Tuning.peakDecayDbPerSecDefault, EQLayout.Tuning.peakDecayDbPerSecRange),
             ("peakCapBrightenAmount", EQLayout.Tuning.peakCapBrightenAmountDefault, EQLayout.Tuning.peakCapBrightenAmountRange),
+            ("ledDimAmount", EQLayout.Tuning.ledDimAmountDefault, EQLayout.Tuning.ledDimAmountRange),
         ]
         for item in items {
             XCTAssertTrue(item.range.contains(item.value), "\(item.name) の既定値 \(item.value) がレンジ \(item.range) の外にある")

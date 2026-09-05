@@ -221,6 +221,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.peakHoldSeconds, EQLayout.Tuning.peakHoldSecondsDefault)
         XCTAssertEqual(store.peakDecayDbPerSec, EQLayout.Tuning.peakDecayDbPerSecDefault)
         XCTAssertEqual(store.peakCapBrightenAmount, EQLayout.Tuning.peakCapBrightenAmountDefault)
+        XCTAssertEqual(store.ledDimAmount, EQLayout.Tuning.ledDimAmountDefault)
     }
 
     func testDirectValueTuningRoundTrip() {
@@ -232,12 +233,14 @@ final class SettingsStoreTests: XCTestCase {
         store.peakHoldSeconds = 0.5
         store.peakDecayDbPerSec = 50
         store.peakCapBrightenAmount = 0.8
+        store.ledDimAmount = 0.35
         let reloaded = SettingsStore(defaults: defaults)
         XCTAssertEqual(reloaded.visualizerFps, probeFps)
         XCTAssertEqual(reloaded.floorDb, -90)
         XCTAssertEqual(reloaded.peakHoldSeconds, 0.5)
         XCTAssertEqual(reloaded.peakDecayDbPerSec, 50)
         XCTAssertEqual(reloaded.peakCapBrightenAmount, 0.8)
+        XCTAssertEqual(reloaded.ledDimAmount, 0.35)
     }
 
     // MARK: - 外から読んだ値の健全化
@@ -312,6 +315,15 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.releaseLevel, EQLayout.Tuning.release.values.count)
         XCTAssertEqual(store.handleFadeLevel, 1)
         XCTAssertEqual(store.handlePreviewLevel, EQLayout.Tuning.handlePreview.values.count)
+    }
+
+    func testOutOfRangeLedDimAmountClampsToRangeEnds() {
+        let range = EQLayout.Tuning.ledDimAmountRange
+        writeStoredPayload(overriding: ["ledDimAmount": range.upperBound + 1])
+        XCTAssertEqual(SettingsStore(defaults: defaults).ledDimAmount, range.upperBound)
+
+        writeStoredPayload(overriding: ["ledDimAmount": range.lowerBound - 1])
+        XCTAssertEqual(SettingsStore(defaults: defaults).ledDimAmount, range.lowerBound)
     }
 
     // 表示側はバンド数ぶんの添字アクセスを行うため、要素数の不足は読み込みの時点で埋める。

@@ -204,6 +204,23 @@ final class EQViewModel: ObservableObject {
             settings.peakCapBrightenAmount = peakCapBrightenAmount
         }
     }
+    /// ハンドル表示中に LED を沈める量。
+    @Published var ledDimAmount: Double {
+        didSet {
+            guard oldValue != ledDimAmount else { return }
+            settings.ledDimAmount = ledDimAmount
+        }
+    }
+
+    /// ハンドル群 (設定ライン/軸の記号/0dB 基準線) が見えているか。
+    var handlesVisible: Bool { handleAlpha >= EQLayout.handleVisibilityThreshold }
+
+    /// LED の点灯帯・ピークキャップの不透明度。
+    /// 消灯帯には掛けないため、沈めてもバーの柱は残る。
+    var ledLitOpacity: Double { 1 - ledDimAmount * handleAlpha }
+
+    /// クリップ表示の不透明度。点灯帯と同じ沈みを割合で薄めて効かせる。
+    var ledClipOpacity: Double { 1 - ledDimAmount * EQLayout.clipDimRatio * handleAlpha }
 
     var attackCoef: Double { EQLayout.Tuning.attack.value(at: attackLevel) }
     var releaseCoef: Double { EQLayout.Tuning.release.value(at: releaseLevel) }
@@ -375,6 +392,7 @@ final class EQViewModel: ObservableObject {
         peakHoldSeconds = settings.peakHoldSeconds
         peakDecayDbPerSec = settings.peakDecayDbPerSec
         peakCapBrightenAmount = settings.peakCapBrightenAmount
+        ledDimAmount = settings.ledDimAmount
 
         selectedPreset = settings.preset
         syncSelectedPresetIfInvalid()
