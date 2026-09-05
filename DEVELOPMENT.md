@@ -35,17 +35,17 @@ All of these states can be inspected as actual numbers from the Diagnostics scre
 - **HAL / AUHAL** — The HAL is the layer in which CoreAudio absorbs hardware differences (Hardware Abstraction Layer). The dedicated driver runs as a plug-in inserted into this layer, and both driving the IO cycle and stamping the presentation time are done by this layer. AUHAL is the audio unit that connects to this layer, which the app uses to hand audio to the real output device.
 - **Shared memory / shared header** — A cross-process memory region that the dedicated driver and the app read and write with the same layout. Because the two are separate processes, they have no other means of exchanging audio data and part of their state.
 - **Ring** — A circular buffer placed in shared memory. The writing side (the dedicated driver) and the reading side (the app) are fixed one to one (single producer, single consumer), so consistency holds without locks even when the two advance at different paces.
-- **Audio world / UI world** — The two execution domains inside the app. The audio world refers to a single serial queue that solely owns the audio-related resources (device queries, audio units, shared memory, and so on). The UI world refers to the main thread, that is, the domain responsible for building and operating the screen. Because their roles and their execution timing both differ, the way they cross into each other is bound by explicit rules (→ Crossing Rules Between the Audio World and the UI World).
-- **Analyzer** — The component that analyzes the output audio and produces the level meter values (LevelMeter). It is a fixed instance whose reference is never swapped after creation, and capture (the writer) and analysis/display (the reader) are directly connected as a single producer and a single consumer. It does not count as an audio-related resource, so it is explicitly carved out as being outside the scope of the crossing rules between the audio world and the UI world. Capture is performed by the realtime output callback, and analysis and the retrieval of display values are performed by the drawing side.
-- **Token** — An empty type, carrying no data, that can only be created on the audio world's queue. Every function that mutates an audio resource requires this token as an argument, so an attempt to call such a function from outside the queue fails to compile. The token does not exist to carry a value. What it carries is proof that execution is happening somewhere the call is allowed (on the audio world's queue), and nothing else. Mistaking this property makes the discussion of the crossing rules that follows — the distinction that a request can be submitted but direct reads and writes cannot — impossible to follow.
+- **Audio world / UI world** — The two execution domains inside the app: a single serial queue that solely owns the audio-related resources, and the main thread that builds and operates the screen. How they cross into each other is bound by explicit rules (→ Crossing Rules Between the Audio World and the UI World).
+- **Analyzer** — The component that analyzes the output audio and produces the level meter values. Capture is performed by the realtime output callback and analysis by the drawing side, so it is a single producer and a single consumer and sits outside the crossing rules (→ Crossing Rules Between the Audio World and the UI World).
+- **Token** — An empty type that can only be created on the audio world's queue and that every function mutating an audio resource requires as an argument, so calling one from outside the queue fails to compile. What it carries is not a value but proof that execution is happening somewhere the call is allowed. Reading it as data makes the crossing rules that follow impossible to follow.
 - **Occupancy / target occupancy / ceiling occupancy** — Occupancy is the amount of audio accumulated in the ring that has not yet been read; target occupancy is the level the reading side tries to hold it at; ceiling occupancy is the boundary past which correction becomes necessary. The mechanism that maintains the relationship among these three is the subject of → Occupancy Control.
-- **Priming** — Stopping consumption and waiting until occupancy reaches the target. Beginning consumption before it is reached breaks the instantaneous floor and cuts the audio off, so this wait is entered not only on starting and resuming playback but also when the target has grown so that the current occupancy no longer reaches it, and when occupancy has run dry.
-- **Control lease** — The expiry the app attaches to the per-application gains it pushes to the dedicated driver, renewed for as long as the app is running. Once it passes, the driver returns every client to neutral on its own, so gains cannot outlive the app that set them.
+- **Priming** — Stopping consumption and waiting until occupancy reaches the target. Beginning consumption before it is reached breaks the instantaneous floor and cuts the audio off (→ Occupancy Control).
+- **Control lease** — The expiry the app attaches to the per-application gains it pushes to the dedicated driver, renewed for as long as the app is running, so that gains cannot outlive the app that set them (→ Operating Rules for the Dedicated Driver).
 - **Heartbeat** — A unit of no-op work posted periodically to the audio world's queue. The fact that it runs and returns a timestamp is itself the evidence that the queue is not stuck.
-- **Presentation time** — The time the HAL hands to the dedicated driver on every IO cycle, representing when that audio will be played. The dedicated driver separately counts and records cycles where this time did not advance from the previous cycle (stalls) and cycles where the way it was given is itself inconsistent (inconsistencies), but does not use them to decide whether to write.
-- **Bypass** — The state in which the EQ and preamp processing is skipped and the input is passed straight to the output. Switching it does not change the audio path itself (dedicated driver → shared memory → audio engine → output device).
-- **Normal view / compact view** — Two ways of presenting the contents of the EQ window. The frame (the window) stays as one and only the contents are swapped, so the two are not separate windows. Which one is shown is persisted and restored at launch. The window position is also held separately per view. Which view is shown and whether the mixer surface is shown are two states that do not constrain each other, so either view can be carrying the mixer. The compact view shows one or the other: the visualizer (bars, peak indicators, L/R master levels) with the horizontal axis labels, or the mixer. Its mixer has no editing mode, and a row carries the icon, the application name, the mute control and the slider — the last two being the only controls a row of it ever carries. Whichever of the two it shows, the compact view also carries the control that hides the window, which the pointer approaching one corner brings into view.
-- **Target** — How much of a rise the automatic preamp adjustment is willing to leave in place, measured against the level a typical signal is expected to gain. It is not a ceiling on the peak: a curve that lifts one narrow band steeply can still come out above it, since what the adjustment answers to there is the worst case rather than the expected one (→ Deriving the Preamp). Raising it leaves the preamp shallower, which buys level at the cost of the peak indicator lighting more often.
+- **Presentation time** — The time the HAL hands to the dedicated driver on every IO cycle, representing when that audio will be played (→ Constraints on the Realtime Path).
+- **Bypass** — The state in which the EQ and preamp processing is skipped and the input is passed straight to the output, without the audio path itself changing.
+- **Normal view / compact view** — Two ways of presenting the contents of the EQ window. The frame stays as one and only the contents are swapped, so the two are not separate windows, and the window position is held separately per view. Which view is shown and whether the mixer surface is shown are two states that do not constrain each other, so either view can be carrying the mixer.
+- **Target** — How much of a rise the automatic preamp adjustment is willing to leave in place, measured against the level a typical signal is expected to gain. It is not a ceiling on the peak (→ Deriving the Preamp). Raising it leaves the preamp shallower, which buys level at the cost of the peak indicator lighting more often.
 - **Measurement chain** — An offline EQ chain built solely to measure the composite frequency response used to derive the preamp (→ Deriving the Preamp). It never sits on the audio path, and it is a separate chain from the one actually processing audio.
 
 ---
@@ -70,7 +70,6 @@ The driver binary is bundled into the app bundle. The app only places it at the 
 ## Operating Rules for the Dedicated Driver
 
 The dedicated driver has a fixed composition of one box and one device, and the object IDs do not change after launch.
-It has no mechanism for dynamically creating and destroying multiple devices, and requests to create or destroy a device are always treated as unsupported.
 
 For a selector to work as a custom property, it must be declared to the host in advance.
 Only after seeing that declaration does the host start forwarding Has/Get/Set requests for that selector to the driver.
@@ -80,18 +79,15 @@ A hidden custom property (one not exposed to the general UI) is not protected by
 The visibility override is held as a custom property because the standard selector does not work for it. The standard selector that expresses whether a device is hidden from the general UI has its writes from external clients rejected by the host.
 Replacing it on the assumption that the standard one suffices makes writes silently stop taking effect.
 
-The driver acts on the audio passing through it in exactly one way: it multiplies each client's own output buffer by a per-application gain, in place, before that audio is mixed and written to the ring. The table of gains is pushed in by the app as a custom property, and the driver interprets nothing about it — it only matches the key against the seat it handed that client and applies what it was told. Every other decision (which process belongs to which application, what gain a row should carry) is made by the app, because resolving the responsible application needs interfaces that have no business running inside the host's audio service.
+The driver acts on the audio passing through it in exactly one way: it multiplies each client's own output buffer by a per-application gain, in place, before that audio is mixed and written to the ring. It interprets nothing about the table of gains it is handed (→ The Per-Application Mixer).
 
 A gain that is not neutral is only honored while the push that set it is still current. Each push carries a control lease, and once it expires, the driver ramps every client back to neutral on its own. This is the single condition that covers the app being quit, killed, or hung — nothing about the audio path is left muted by an app that is no longer there.
 
-The Volume/Mute controls the driver exposes are a separate matter. They are the window through which the system's volume keys and volume UI operate, and the driver does not act on the audio on their behalf.
-Volume and mute are each carried out either by the real output device or by the app's own gain stage, and which one it is is decided separately for each, from what that device supports. A state where the device carries out volume while the app carries out mute is therefore reachable, and neither side may assume the two agree.
+The Volume/Mute controls the driver exposes are a separate matter. They are the window through which the system's volume keys and volume UI operate, and the driver does not act on the audio on their behalf; volume and mute are each carried out either by the real output device or by the app's own gain stage (→ Managing the Output Device Route).
 Where the app's own gain stage is the one carrying it out, the gain is derived from the same dB range the driver declared.
 The upper end of that range being unity is what structurally guarantees that the app's output stage never moves into amplification even when the system volume is at maximum. Moving the upper end loses that guarantee.
 
 State the driver holds only in process memory — whether the box is claimed, the device visibility, the display-name override, and so on — is not persisted. It returns to the defaults every time the host's service restarts.
-
-The list of sample rates the driver declares also has an independent duplicate on the test side. Widening only one of them makes the tests fail.
 
 The host never fully releases a plug-in it has loaded. The reference count returning to 0 must not be treated as the trigger for release or cleanup, and the count itself is maintained only to honor the calling convention.
 
@@ -110,14 +106,13 @@ There are three of them, each with a different role. They are not kept in lockst
 The app and the driver can be modified separately, so their versions are held separately as well. A change to the driver's format bumps both the driver version and the layout version.
 
 The driver version is carried in the shared header, and the app reads it from there. There is no path that reads information from the driver bundle.
-It can be read only while the layout version matches; when it does not match, there is no guarantee that the same position carries the same meaning, so it is not read.
-Not being able to read it is itself the cue that a driver reinstall is required.
+It is read only while the layout version matches, and not being able to read it is itself the cue that a driver reinstall is required.
 
-Where the same value is placed in more than one location — the shared header constant for the driver version and the driver's build setting, the source constant for the driver's bundle identifier and the build setting, the device icon file name, the list of sample rates the driver declares and the duplicate on the test side, and the side that writes the relative placement of the bundled items and the side that reads it — the match is not left to humans; the tests enforce it.
+Where the same value is placed in more than one location — the driver version, the driver's bundle identifier, the device icon file name, the list of sample rates the driver declares, the relative placement of the bundled items — the match is not left to humans; the tests enforce it.
 Moving only one side makes the tests fail.
 
 The driver version and layout version shown on screen are the values actually written in the shared header, not the values the app expects.
-The moment the two disagree is exactly when you want to read them, so they are never shown skewed toward the app's expected values. The configuration information the Diagnostics screen lays out follows the same principle (→ Diagnostics).
+The moment the two disagree is exactly when you want to read them, so they are never shown skewed toward the app's expected values (→ Diagnostics).
 
 Version consistency only holds once the shared header — the foundation of the exchange — is in place.
 
@@ -162,10 +157,10 @@ The false verdict that the writer has stopped then sticks as well, and it never 
 The shared memory file survives across reloads, so rewriting the initialization group while a valid identifying value is still in place lets the reading side observe "the identifying value is valid, the contents are mid-rewrite". When recreating it, invalidate the identifying value before writing.
 
 The app's audio engine only reads this ring; it never writes to it or uses it as an output target.
-The output after the EQ is applied goes only to the output device. This means the app never breaks the path along which an external tool reads the raw audio from the dedicated driver.
+This means the app never breaks the path along which an external tool reads the raw audio from the dedicated driver.
 
-The shared memory file remains after the process exits, so the contents of the ring immediately after connecting may be the remains of audio from the previous run.
-The reading side's notion of "the continuation of the sound that was playing" does not exist at the instant of connection, so on the first connection it discards everything up to the writer's current position rather than keeping it, and starts from there.
+The shared memory file remains after the process exits, so the ring may hold the remains of audio from the previous run.
+The first connection discards everything up to the writer's current position rather than treating it as the continuation of the sound that was playing.
 
 ---
 
@@ -177,7 +172,7 @@ What the token binds is ownership and mutation; it does not bind references them
 
 The analyzer does not count as one of these resources. Capture and analysis/display are directly connected as a single producer and a single consumer, so it is treated as being outside the scope of this rule.
 
-The per-application meter values are carved out for the same reason and in the same shape: the realtime output callback folds what the driver left in the client table into a fixed-size holder, and the drawing side takes it from there. The holder is a single producer and a single consumer, holds nothing but fixed-length arrays and atomic scalars, and no new exception has to be invented for it. What does not go through it is the roster — which client is present, and which application it belongs to — because that is not a per-frame value and copying strings is not something the realtime path does. The roster is read as an ordinary low-frequency request on the audio world's queue.
+The per-application meter values are carved out for the same reason and in the same shape: a single-producer, single-consumer holder of fixed-length arrays and atomic scalars, so no new exception has to be invented for it. What does not go through it is the roster — which client is present, and which application it belongs to — because that is not a per-frame value and copying strings is not something the realtime path does. The roster is read as an ordinary low-frequency request on the audio world's queue.
 
 The analyzer's internals (the working buffers, the analysis window, the capture ring) are rebuilt whenever the sample rate changes. The rebuild is mutually exclusive with analysis by way of a lock, but capture is a realtime path and therefore takes no lock. That the two never overlap is guaranteed solely by the ordering that **the rebuild is only ever done while the output stage is stopped**. This order is detected neither by the compiler nor by the tests, so when adding places that call the rebuild, always confirm that the output stage is stopped at that point. The fact that the analyzer reference itself never moves is no substitute for this ordering.
 
@@ -225,11 +220,9 @@ Two key spaces are in play and they must not be confused. What a row is saved un
 
 A gain that is not neutral is only honored while its push is current (→ Control lease). The app renews on a period derived from the lease's own length, so the two cannot drift apart into a state where renewal arrives after expiry. Neutral rows are left out of the table entirely, which is what makes "nothing is being controlled" and "nothing is being pushed" the same condition, decided by comparing tables alone. The gains are written before the expiry is armed, so a realtime reader that sees an armed expiry is guaranteed to see the gains it governs.
 
-A row keeps the match keys its clients have been seen under, so an application that is relaunched is matched the moment it takes a seat rather than at whatever pass comes next. What is kept is narrower than what is matched: only a key built from a bundle identifier inside the row's own namespace, since a key built from a process id names a process that no longer exists, and a key built from a shared framework's identifier would go on being applied to whatever else embeds that framework once this application is gone. What bounds the set is the rows themselves: deleting a row forgets the keys it held.
+A row keeps the match keys its clients have been seen under, so a relaunched application is matched the moment it takes a seat. Only a key built from a bundle identifier inside the row's own namespace is kept: a process id names a process that no longer exists, and a shared framework's identifier would go on being applied to whatever else embeds that framework once this application is gone. Deleting a row forgets the keys it held.
 
-A match key can still turn out to name the clients of two different applications at once, and then it belongs to neither: it is left out of the table entirely rather than resolved in favour of one. Having a row is not what puts an application into that count — every application the keys in play reach is counted, since a key that would reach one is no more another row's own for that application having been left unarranged. Those clients keep whatever the system gives them, which is the same outcome as having no row at all, and is preferable to one row's setting silently reaching another application's audio.
-
-The per-frame side is carved out the same way the analyzer is (→ Crossing Rules). What the realtime callback folds is fixed-width numbers only; the roster — which client is present and which application it belongs to — is read as an ordinary low-frequency request, because it carries strings and a name is not a per-frame value.
+A match key that turns out to name the clients of two different applications belongs to neither: it is left out of the table entirely rather than resolved in favour of one. Every application the keys in play reach is counted here, whether or not it has a row of its own. Those clients keep whatever the system gives them, which is preferable to one row's setting silently reaching another application's audio.
 
 ---
 
@@ -238,6 +231,10 @@ The per-frame side is carved out the same way the analyzer is (→ Crossing Rule
 The output render callback and the paths called from it, and the point where the dedicated driver writes audio into shared memory, all perform no locking, no memory allocation, and no logging.
 This applies to the point where audio is written, not to everything called from the same IO thread (the point that responds to time reporting does take a lock).
 They do nothing but pass values between preallocated buffers. Nor does the writing side make any decision about whether to write. As long as the deadline is met, it always writes, even when the presentation time has not advanced from the previous cycle.
+
+Where a per-client value on this path needs an atomic float — a gain, a peak — it is carried as a bit-pattern integer instead. A plain atomic float's lock-freedom is implementation-defined, so declaring one could quietly reintroduce a lock here on whatever platform does not provide it lock-free.
+
+Two values bound this path, and neither is free to move without checking what it costs. The frame count the render path preallocates for (`AudioConfig.maxRenderFrames`) is a hard ceiling rather than a hint: a request above it fails that render outright instead of degrading. The IO buffer length asked of the output device (`AudioConfig.ioBufferDeadlineSeconds`, held at a reference rate and converted per device) trades latency against how much slack the render has to meet its deadline, so shortening it moves toward dropouts.
 
 The side that takes locks is the control path outside this realtime path. Some processing that rewrites the driving state itself takes multiple locks nested inside one another (starting IO is such a case).
 The order of this nesting is kept aligned across paths. If even one path reverses the order, deadlock becomes possible.
@@ -275,11 +272,13 @@ It remembers whether the value it currently holds is the derived value for the c
 
 Measurement runs on a queue of its own, so the relationship is established after the fact rather than at the moment an input changes. Until the first derivation lands, what is shown and applied is the value carried over from the previous run.
 
+The chain's default dependency is built behind a lazily populated box rather than as the default argument itself, because Swift evaluates a default-argument expression at the call site: constructing it there would build the chain on the caller's thread instead of on the measurement queue it has to stay on.
+
 Measurement results are cached keyed by the curve and the declared rate. The target does not affect measurement.
 
 A rate change has no dedicated follow-up mechanism of its own: a mismatch between the requested rate and the rate the measurement chain was built for is itself what triggers rebuilding it.
 
-Automatic mode blocks none of the preamp's controls. Placing a value through any of them drops automatic mode, and from that point the value is whatever the person placed, and the controls that hand it back take it back to automatic. What gates all of them is the same rule that gates every other control: while there is no way for the setting to reach the audio, they are dimmed and refused, automatic and manual alike. The one that sets the target carries a second condition of its own, since it has nothing to act on while the derivation is off. Deriving still continues there, so the value is already right at the moment the audio comes back.
+Automatic mode blocks none of the preamp's controls: placing a value through any of them drops automatic mode, and the controls that hand it back take it back to automatic. What gates them is the same rule that gates every other control — while there is no way for the setting to reach the audio, they are dimmed and refused. The one that sets the target carries a second condition of its own, since it has nothing to act on while the derivation is off. Deriving still continues there, so the value is already right at the moment the audio comes back.
 
 What a preview shows is only ever what applying it would produce. Since applying a preset moves the preamp as well, hovering one shows the value derived from that preset's curve, asked for without disturbing the value being held. Where the answer is not yet at hand, the value currently in effect is shown until it is.
 
@@ -298,26 +297,21 @@ The "writer's block length" here is not the value the dedicated driver declares 
 When the target occupancy has grown but the current occupancy has not yet reached it, consumption is halted so as not to break the instantaneous floor, and it resumes only after occupancy reaches the new target.
 
 When occupancy exceeds the ceiling occupancy, the handling splits into two paths by cause. A stall on the reader side, or a step caused by switching the output destination or output stage, is far too large for ordinary correction to catch up with, so it is resynchronized immediately.
-Gradual overshoot caused by clock drift, on the other hand, is treated as within the authority of correction: it waits for the time it would take to walk back from the ceiling to the target at the maximum correction rate (`AudioConfig.driftCorrectionMaxRateFraction`), and trims only if the overshoot still continues.
+Gradual overshoot caused by clock drift is treated as within the authority of correction, and is trimmed only if it persists.
 Handling both together with a single time threshold would drag the cost of an already-occurred dropout along as a long delay, so they are split by cause.
+The maximum correction rate (`AudioConfig.driftCorrectionMaxRateFraction`) only sizes that wait. Nothing applies it to the audio: what eventually happens is a discard, never a change of rate, and the rate is there to express how long a walk back would have taken. Raising it shortens the wait, so overshoot is acted on sooner and more often.
 
 There are four triggers for rebuilding the occupancy (discarding what is there now and re-priming up to the target): the first sync at connection time, resumption across a stop of the output stage, continued silence at the output stage, and a step with no definable counterpart to blend with.
-Whether a counterpart to blend with is definable is judged by whether the difference between the ring capacity and the occupancy is sufficient relative to the amount the writer advances at once.
-When the counterpart may already have been overwritten, it is better to insert silence and rebuild the phase outright, since any leftover old audio disappears at the same time.
-These four triggers are each counted as an independent metric. Merging the reasons into a single count would make a normal rebuild due to silence indistinguishable from a rebuild due to an abnormal stall, and isolating the cause would become impossible.
-The first sync is likewise counted as a metric separate from an ordinary resync that crossfades a step that does have a counterpart to blend with.
+These four are each counted as an independent metric. Merging the reasons into a single count would make a normal rebuild due to silence indistinguishable from a rebuild due to an abnormal stall, and isolating the cause would become impossible.
+The first sync is likewise counted separately from an ordinary resync that crossfades a step that does have a counterpart to blend with.
 
 A rebuild triggered by silence is performed only when both conditions hold: the output stage has stayed silent for a fixed duration (`OccupancyPolicy.silenceHoldSeconds`), and the occupancy clearly exceeds the target.
-The judgement looks only at the overshoot side (the undershoot side is not a candidate, since there is nothing to discard).
-Continued silence alone would end up needlessly discarding occupancy that is not actually off target. The judgement of whether it is off target carries a slack of one write unit.
-On paths where the client's requested frame count varies from call to call, even a healthy state can have occupancy peaks that slightly exceed the target, and without this slack, every one of those healthy overshoots would create a late start coming out of silence.
+The judgement of whether it is off target carries a slack of one write unit, because on paths where the client's requested frame count varies from call to call even a healthy state has occupancy peaks slightly above the target, and without the slack every one of them would create a late start coming out of silence.
 
-When trimming the read position down to the target, if a counterpart to blend with exists, the old and new cursors are joined by a crossfade. This is the same for an immediate resync triggered by a discontinuity and for a trim triggered by clock drift, and applies regardless of the reason for trimming.
-Because two correlated signals are being blended, a ramp of a few milliseconds (`OccupancyPolicy.seamFadeSeconds`) is enough to smooth the amplitude discontinuity to a level that is not audible.
-Stretching it longer extends the time during which the old and new are mixed, which sounds more unnatural, not less.
+When trimming the read position down to the target, if a counterpart to blend with exists, the old and new cursors are joined by a crossfade — the same for an immediate resync triggered by a discontinuity and for a trim triggered by clock drift.
+Because two correlated signals are being blended, a ramp of a few milliseconds (`OccupancyPolicy.seamFadeSeconds`) is enough, and stretching it longer sounds more unnatural, not less.
 
-The seam with silence uses a different mechanism, and its length is decided differently as well (`OccupancyPolicy.silenceSeamFadeSeconds`).
-Here the amplitude itself is moved between the signal and silence, so it must move more slowly than the period of the lowest band the EQ can handle. Moving it faster leaves energy in that band, which defeats the point of smoothing the step.
+The seam with silence is decided differently (`OccupancyPolicy.silenceSeamFadeSeconds`): here the amplitude itself is moved between the signal and silence, so it must move more slowly than the period of the lowest band the EQ can handle.
 The two lengths are independent, and the rationale for one is never carried over to the other. Inserted silence always leaves a trace in the metrics; no insertion is ever done silently.
 
 While occupancy is being stabilized, the route itself — which device the audio goes out to in the first place — also needs to keep following environmental changes.
@@ -330,9 +324,7 @@ The app defines where the output should be, and the processing that reconciles t
 
 There are six targets of reconciliation: the visibility of the dedicated driver's device, the watch registered on that device, the output destination itself, the restore target, taking over a default output that has moved off the dedicated driver, and automatic restart after a stop. None of them holds up if a once-resolved value is cached and then used without verification.
 The identifier assigned to the dedicated driver's device can change on waking from display sleep or on a coreaudiod restart, so just before use it is verified by the UID — the sole key for identification, persistence, and resolution — and re-resolved from the UID if it has gone stale.
-The display name is display-only and is not used as a resolution key, because it can change at runtime and because devices with the same name can exist at the same time.
-The device actually being pointed at as the output destination can also be re-pointed without the app's involvement, by AUHAL's built-in fallback.
-For that reason the app side does not cache the ID; it reads it back from the output unit each time, and judges the match with the intended output destination by UID.
+The device actually being pointed at as the output destination can also be re-pointed without the app's involvement, by AUHAL's built-in fallback, so that ID is not cached either: it is read back from the output unit each time and matched against the intended destination by UID.
 
 There are three kinds of triggers for reconciliation: HAL configuration change notifications, a low-frequency periodic recheck, and explicit user operations.
 The periodic recheck performs reads only, and escalates to a write-bearing reconciliation only when the actual state disagrees with the intended state.
@@ -355,7 +347,7 @@ The claim goes through the same path the app uses to claim the default output at
 
 The read-only recheck counts a destination waiting to be taken over as a disagreement with the intended state and escalates to a write-bearing pass, so a notification that was never delivered is still picked up at the next recheck.
 
-The delay between the user's choice and the switch is dominated by the coalescing window: the notification itself arrives at once, and the work that follows it is short by comparison. Shortening the window shortens the delay by the same amount, and what it spends in return is how tightly a burst of notifications is bundled — a burst spread over about a second, with the destination alternating between two devices, is bundled into a small number of passes at the current window, and the output stage is restarted only that many times rather than once per notification.
+The delay between the user's choice and the switch is dominated by the coalescing window: the notification itself arrives at once, and the work that follows it is short by comparison. Shortening the window shortens the delay by the same amount, and what it spends in return is how tightly a burst of notifications is bundled — and with it, how many times the output stage is restarted across that burst.
 
 Whether any of this is done at all is a setting, because the behavior closes a route that exists without it: choosing another destination in the system's own UI is how a user moves the audio out from under the app while it keeps running.
 
@@ -369,9 +361,13 @@ Binding reads the dedicated driver's own volume and mute afresh rather than reus
 
 Where the app's own gain stage is the one carrying volume, the position it starts from on binding depends on what is known about that output destination. One already seen in the same session resumes at the position it was left at; one not seen yet starts at unity, which is where it would sit with the app absent. The first binding after launch is the exception, and continues from the position the dedicated driver still carries. None of these positions outlive the process, so none of them are restored across a relaunch. Landing on a destination not seen yet is therefore a move toward louder, bounded by unity.
 
-The dedicated driver's own device, and any Aggregate/Multi-Output device that contains it, are excluded from the output destination choices and from the restore candidates.
+The dedicated driver's own device, and any Aggregate/Multi-Output device that contains it, are excluded from the output destination choices.
 The dedicated driver is the side that captures system audio by way of shared memory, so making one of these the output destination would turn it into a feedback loop path where the post-EQ output circles back into its own capture point.
-AirPlay destinations are excluded as well. An AirPlay device disappears from the HAL's list once the system output selection moves off that endpoint, so saving it as a restore target or an automatic-restart target only leaves behind a value that can never be resolved again.
+AirPlay destinations are excluded as well. An AirPlay device disappears from the HAL's list once the system output selection moves off that endpoint, so one saved anywhere leaves behind a value that can never be resolved again.
+
+Where these exclusions act is not uniform, and the difference matters when reading a saved value. All three are refused wherever a destination the app is to output through is resolved.
+What can reach the saved restore target is a narrower question. The dedicated driver's own device never does. An Aggregate/Multi-Output containing it and an AirPlay device both can, because the record made when the default output moves away on its own takes whatever it moved to as it stands.
+Putting the system default output back is a separate path again, and it consults none of this. A saved value that no longer resolves is therefore a state that can actually be met, rather than one to be read as impossible.
 If the output destination does change to one of these dangerous paths while running, it falls back to the restore target (the output destination the user had selected before the switch). If the fallback destination cannot be resolved either, it does not stop at merely showing a warning: audio processing itself is stopped.
 
 The dedicated driver's device is hidden by default and carries a fixed name. The app makes it visible at launch and hides it again on a clean exit once the output destination has been put back. The name returns to the fixed one on a clean exit as well, and whenever no output destination has been settled as safe to use.
@@ -454,9 +450,8 @@ The screen is divided into panels (sections), each of which tries to answer a di
 - A panel that reflects what has happened so far. The number of times occupancy was cleared, the number of anomalies observed on the writing side, and so on are laid out as cumulative totals since the last reset.
 - A panel for actually performing a reset or an export (it exists only on the screen and is not included in the exported text).
 
-The item definitions for the upper three panels are produced from the same place for both the on-screen display and the generation of the exported text.
-Because of that, it is structurally impossible for the items shown on screen and the items appearing in the export to diverge.
-In the export, subtitles that span multiple lines are folded into a single line before being output. The gauge visualization exists only on screen, and the exported text carries only the corresponding numbers.
+The item definitions for the upper three panels are produced from the same place for both the on-screen display and the exported text, so it is structurally impossible for the two to diverge.
+The gauge exists only on screen; the export carries the corresponding numbers.
 
 ### Display When a Value Cannot Be Read
 
@@ -475,7 +470,7 @@ The following is a guide to reading, in actual operation, the values on each of 
 
 **Occupancy (current, target, ceiling)**
 The current occupancy uses the median over the recent observation window (described below), to avoid the noise of a single observation.
-The target occupancy is the value derived from the length of the block the writer writes at once, the observed actual requested frame count of the client, and a margin for phase jitter (→ Occupancy Control).
+The target occupancy is derived as described in → Occupancy Control.
 The ceiling occupancy is the target plus a margin so that a backlog right after recovery is not misjudged as an anomaly even if the reader stalls for the worst case (`OccupancyPolicy.readerStopWorstCaseSeconds`), plus the write block length.
 
 In a healthy state, the current occupancy stays stable around the target and does not stick at 0 or at the ceiling.
@@ -499,8 +494,7 @@ The amplitude itself and dBFS relative to full scale are shown together. The amp
 The one before is what tells whether the EQ or the preamp is boosting too much. The gap between the two is how far the system volume is pulling the output down.
 
 **The driver's generation counter**
-A value that advances each time the dedicated driver starts IO and each time it changes the sample rate; the reading side uses only whether it differs from the value read last time, as a signal of a discontinuity.
-The value itself carries no meaning. When the dedicated driver re-prepares the shared region it starts counting again from 0, but that is treated as a signal just like any other advance.
+A value that advances each time the dedicated driver starts IO and each time it changes the sample rate. Only whether it differs from the value read last time carries meaning; the value itself does not.
 The number of changes is laid out as a separate metric on the "what has happened so far" side. If it keeps increasing with no operation or environmental change to account for it, the driver's IO is being brought up again and again.
 
 **Partial reads and priming waits**
@@ -528,11 +522,8 @@ A drift trim is the ordinary correction for a gradual clock offset, and occurrin
 If the frequency or the amount discarded per occurrence clearly increases, that is a sign that the clock offset between the writer and the reader is larger than usual.
 
 **Write position observations**
-Four values decided by the dedicated driver's IO side, which the app simply transcribes and displays.
-The count of cycles where the presentation time did not advance from the previous cycle is not, on its own, evidence of actual harm, since the writes themselves were not stopped.
-The count of cycles where the way the presentation time was given was itself inconsistent (invalid values, going backwards, deltas that do not add up, and so on) likewise stays an observation of disorder in the HAL-side metadata.
-The count of cycles where the deadline was missed and the write itself was skipped entirely is the count of cycles where data was actually lost, and this is the only one that directly expresses actual harm.
-The count of gaps filled with silence is the number of times a write filled an interval with silence because no write had been performed just before, and it tends to increase right after a deadline overrun.
+Four values decided by the dedicated driver's IO side, which the app simply transcribes and displays: presentation time stalls, presentation time inconsistencies, deadline overruns, and gaps filled with silence.
+Only the deadline overruns directly express actual harm — those are the cycles where the write was skipped entirely and data was lost. Stalls and inconsistencies stay observations of disorder in the HAL-side metadata, since the writes themselves were not stopped, and silence fills tend to follow a deadline overrun rather than stand on their own.
 Ideally all four are 0, but in terms of the weight of actual harm it is reasonable to read them in this order: deadline overruns, silence fills, presentation time inconsistencies, presentation time stalls.
 
 **The driver's running state and the block length estimate**
@@ -548,7 +539,9 @@ The reason the two values are shown side by side is to make it possible to confi
 **The volume route**
 Volume and mute are laid out side by side, each written as the side carrying it out followed by the value in effect on that side.
 The real output device carrying it out is the ordinary case for a device that has a control of its own. The app's own gain stage stands in for a device that has no such control, and for one whose control does not accept writes.
-A marking of having been downgraded means the device advertised a control that accepts writes but did not follow through — the write itself failed, or the value could not be read at all, whether that was on binding, before writing, or on reading back what was written. Whether the value read back matches the value written is not part of that judgement. The device and the dedicated driver hold the same volume on grids of their own, so the two are never obliged to agree as numbers, and a write that comes back sitting where it started is a legitimate result of the device's grid rather than evidence of a control that does nothing. What comes back is taken as that device's own value and carried over to the dedicated driver. A two-state control such as mute has no grid, so there a value that comes back differing from the one written does mean the write did not take. The marking clears when the route is bound again to a different output destination, or when the dedicated driver's identifier is re-resolved; a rebinding that lands on the same output destination leaves it as it stands. An increase in how often it appears is a sign to suspect the device itself.
+A marking of having been downgraded means the device advertised a control that accepts writes but did not follow through — the write itself failed, or the value could not be read at all.
+Whether the value read back matches the value written is not part of that judgement for volume: the device and the dedicated driver hold it on grids of their own, so a write that comes back sitting where it started is a legitimate result of the device's grid rather than evidence of a control that does nothing, and what comes back is taken as that device's own value. Mute has no grid, so there a value that comes back differing from the one written does mean the write did not take.
+The marking clears when the route is bound again to a different output destination, or when the dedicated driver's identifier is re-resolved; a rebinding that lands on the same output destination leaves it as it stands. An increase in how often it appears is a sign to suspect the device itself.
 While nothing is bound — audio processing stopped, or the interval right after launch — neither the side nor the value is shown as what the binding before it held.
 
 **Gauge**
@@ -570,15 +563,11 @@ A registration failure means a client could not be placed in the driver's table,
 
 The export uses a snapshot newly taken from the audio world at the moment it runs, not the values currently shown on screen.
 The on-screen values are only updated while the screen is open, so on the path that exports directly from the menu without opening the screen, the display values have not been updated.
-Like the metrics reset, the export is posted to the audio world as a one-shot request, and the values are retrieved after that.
 
-The text produced is the export time and the most recent reset time (with elapsed time), followed by each panel laid out under its heading.
-Times are written as one continuous string of local time through to the offset, matching the file names in the destination directory.
-The intended use is to lay several exports side by side afterwards and read their ordering, and a missing offset would make it impossible to correctly read the ordering between records taken in different time zones.
+Times are written through to the offset. The intended use is to lay several exports side by side afterwards and read their ordering, and a missing offset would make that impossible for records taken in different time zones.
 
-The destination has a default directory, but it can be changed while running through an on-screen operation (it returns to the default on restart).
 When exporting more than once within the same second, a sequence number is appended to avoid an existing file.
-The sequence number has an upper limit, however, and firing beyond it within the same second returns the last candidate as-is, so that one export alone overwrites. A write failure is not swallowed; it is handled together with its reason.
+The sequence number has an upper limit, however, and firing beyond it within the same second returns the last candidate as-is, so that one export alone overwrites.
 
 ---
 
@@ -597,11 +586,13 @@ This property is not visible from reading the sources; it only becomes apparent 
 Doing this unconditionally on paths that write values at high frequency, such as mouse drags or per-frame render updates, makes SwiftUI re-evaluate the entire view tree each time and significantly drives up the CPU load during interaction.
 For that reason, per-frame display values are not routed through `@Published`; they are reflected directly on the CALayer side.
 On paths that do use `@Published`, such as state changes during a drag, assignments are filtered so that a notification is emitted only when the value actually changed.
+It also notifies before the property's own storage is updated. A handler that needs the new value takes it from what the publisher delivered; re-reading the model from inside the handler yields the previous one.
 
 Colors applied on a per-frame path are built from their RGB components directly. Going through a SwiftUI `Color` to reach a `CGColor` resolves against the environment on every call, and doing that for each element of each frame costs more than the drawing it feeds. A color that depends only on fixed inputs — an element's index, whether it is lit — is built once and kept.
 
 Periodic work whose only purpose is to drive a window's contents is gated on whether that window is visible. Closing a window does not detach the views inside it, so a view leaving its window is not a signal that arrives on close, and work gated on that alone keeps running for the rest of the session. Hiding a window without closing it delivers no delegate callback at all, so each place that hides one applies the gating itself. The auxiliary windows share a single rule for the decision, so that the gating of one cannot drift from another's. The EQ window's own drawing timer is not among them; it is gated on its own path.
-One surface inside the EQ window stands in the visualizer's place, so what drives the visualizer is gated on that surface being absent, and what drives the contents of the surface itself is gated on its being present and on those contents being the ones that carry a meter at all — the compact view's rows carry none — both conditions carrying the window's own visibility as well. The two are derived at one place from those inputs rather than written from each side that shows or hides something, because a gate assembled from more than one input is where one of them gets left behind.
+What is read for this is whether the window is visible, not its occlusion state, which has been observed not to update at all in some runtime environments.
+Where one surface inside the EQ window stands in the visualizer's place, the gates for the two are derived at a single place from the same inputs rather than written from each side that shows or hides something, because a gate assembled from more than one input is where one of them gets left behind.
 A meter that is redrawn every frame discards what it was left holding — the values that piled up while its clock was stopped, and the height it is still drawn at — at the moment it becomes visible again, whether or not the clock itself starts on that occasion. What the smoothing is holding counts as held as well: emptying the input alone leaves it to decay from the height it had, since the next displayed value is built from the previous one. A peak that is cleared on retrieval keeps growing while nothing retrieves it, and a counter read as a difference has no baseline for the interval nobody watched, so the first frame after resuming would otherwise show the whole stopped period at once. Totals that accumulate from a reset are not among them.
 
 If the internal identifier (action) assigned to a menu bar item contains certain words, the OS regards it as a standard settings command and may automatically attach an icon to the display.
@@ -677,7 +668,7 @@ An identifier that names one of a fixed number of slots carries the slot and not
 
 ## Build and Tests
 
-What is required to build is in the requirements section of the [README](README.md).
+What is required to build is in the [README](README.md).
 
 The app's Xcode project is generated from `project.yml`, so it is not included in the repository.
 The dedicated driver's project is not generated; the repository holds it (its build settings are edited by hand). The app's project references it and holds the driver as a dependency of the app's target.
@@ -686,19 +677,6 @@ Building the app includes building the driver and bundles the product under Reso
 The scripts read the header relative to their own location, so the bundled items are placed in the same relative arrangement as in the source tree. This arrangement appears split between the side that writes it (`project.yml`) and the side that reads it (the app and both scripts), and the match is enforced by the tests.
 The tests do not assemble the app bundle, so whether the bundling itself succeeded is confirmed on a real machine.
 The install script looks for the driver binary in the bundled location and, failing that, looks at the build product in the source tree. This is what keeps alive the path for replacing the driver without going through the app.
-
-| Command | What it does |
-|---|---|
-| `make project` | Generates the app's Xcode project (for opening it in Xcode) |
-| `make build` | Builds the app (includes generating the project and building and bundling the driver) |
-| `make install` | Builds and installs the app |
-| `make test` | Runs the tests and cleans up the preferences files the tests left behind |
-| `make driver` | Builds the dedicated driver (no administrator privileges required) |
-| `make install-driver` | Builds the driver and prints the commands required to install it |
-| `make uninstall-driver` | Prints the commands required to remove the driver |
-| `make icon` | Regenerates the app and driver icons from the assets |
-| `make clean-test-prefs` | Deletes the preferences files the tests left behind |
-| `make clean` | Deletes the app and driver build products, the generated Xcode project, and the preferences files the tests left behind |
 
 Installing and removing the driver requires administrator privileges, so they are not run from `make`; it only prints the commands. The printed commands are run by hand.
 
@@ -716,12 +694,7 @@ Before reporting the number of tests, run `swift package clean` (`make clean` do
 
 ## License Layout
 
-There are two files that carry the license, and both are named `LICENSE`.
-
-| File | Scope covered |
-|---|---|
-| [LICENSE](LICENSE) | Everything except the dedicated driver |
-| [Driver/SimpleEQAudio/LICENSE](Driver/SimpleEQAudio/LICENSE) | The dedicated driver |
+Two files carry the license, both named `LICENSE`: [the one at the repository root](LICENSE) covers everything except the dedicated driver, and [Driver/SimpleEQAudio/LICENSE](Driver/SimpleEQAudio/LICENSE) covers the driver.
 
 The driver side holds separate terms because the driver bundle physically leaves the app.
 It is placed in the system's plug-in directory, remains after the app is deleted, and can also be built and handed over on its own.
