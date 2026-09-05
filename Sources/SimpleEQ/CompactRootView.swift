@@ -12,8 +12,14 @@ struct CompactRootView: View {
 
     private static let labeledBands = Set(stride(from: 1, to: EQSpec.bandCount, by: 2))
 
-    @ViewBuilder
     var body: some View {
+        content.overlay(alignment: .topLeading) {
+            CompactHideButton(viewModel: viewModel, mixer: mixer)
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if mixer.shown {
             CompactMixerView(model: mixer, viewModel: viewModel)
         } else {

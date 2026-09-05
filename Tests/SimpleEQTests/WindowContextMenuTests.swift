@@ -110,4 +110,56 @@ final class WindowContextMenuTests: XCTestCase {
             XCTAssertTrue(models.mixer.shown)
         }
     }
+
+    // MARK: - WindowContextMenu.nsMenu
+
+    func testTheMenuCarriesTheSameItemsAsTheDefinition() {
+        let models = makeModels()
+        let items = WindowContextMenu.items(viewModel: models.viewModel, mixer: models.mixer, hideWindow: {})
+        let menu = WindowContextMenu.nsMenu(viewModel: models.viewModel, mixer: models.mixer, hideWindow: {})
+
+        XCTAssertEqual(menu.items.map(\.title), items.map(\.title), "並びと文言が定義どおりであること")
+        XCTAssertEqual(
+            menu.items.map(\.keyEquivalent),
+            items.map { $0.commandKey.map(String.init) ?? "" },
+            "ショートカットが定義どおりであること"
+        )
+    }
+
+    func testTheToggleItemCarriesTheCurrentState() {
+        let models = makeModels()
+        models.viewModel.alwaysOnTop = true
+        let onMenu = WindowContextMenu.nsMenu(viewModel: models.viewModel, mixer: models.mixer, hideWindow: {})
+        XCTAssertEqual(onMenu.item(withTitle: AlwaysOnTopMenu.title)?.state, .on)
+
+        models.viewModel.alwaysOnTop = false
+        let offMenu = WindowContextMenu.nsMenu(viewModel: models.viewModel, mixer: models.mixer, hideWindow: {})
+        XCTAssertEqual(offMenu.item(withTitle: AlwaysOnTopMenu.title)?.state, .off)
+    }
+
+    /// 項目を実際に送って効果まで見る。押して働くものと状態を持つもののどちらも、送り先が
+    /// 生きていなければここで落ちる。
+    func testSendingAnItemReachesWhatItStandsFor() throws {
+        let models = makeModels()
+        var hidden = false
+        let menu = WindowContextMenu.nsMenu(viewModel: models.viewModel, mixer: models.mixer) { hidden = true }
+
+        try send(menu.item(withTitle: WindowVisibilityMenu.hideTitle))
+        XCTAssertTrue(hidden, "非表示の項目が渡された処理へ届くこと")
+
+        try send(menu.item(withTitle: MixerVisibilityMenu.toggle(isShown: models.mixer.shown)))
+        XCTAssertTrue(models.mixer.shown, "ミキサーの項目が面を出すこと")
+
+        XCTAssertFalse(models.viewModel.alwaysOnTop)
+        try send(menu.item(withTitle: AlwaysOnTopMenu.title))
+        XCTAssertTrue(models.viewModel.alwaysOnTop, "状態を持つ項目が値を反転させること")
+    }
+
+    private func send(_ item: NSMenuItem?) throws {
+        let item = try XCTUnwrap(item, "項目が見つかること")
+        let target = try XCTUnwrap(item.target as? NSObject, "送り先が生きていること")
+        let action = try XCTUnwrap(item.action, "動作が決まっていること")
+        XCTAssertTrue(target.responds(to: action), "送り先がその動作に応じること")
+        target.perform(action, with: item)
+    }
 }

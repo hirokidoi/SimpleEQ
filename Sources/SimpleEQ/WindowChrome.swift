@@ -58,6 +58,43 @@ enum WindowContextMenu {
             }),
         ]
     }
+
+    /// 上の項目を AppKit のメニューとして組む。
+    static func nsMenu(
+        viewModel: EQViewModel, mixer: MixerModel, hideWindow: @escaping () -> Void
+    ) -> NSMenu {
+        let menu = NSMenu()
+        for item in items(viewModel: viewModel, mixer: mixer, hideWindow: hideWindow) {
+            let menuItem = NSMenuItem(
+                title: item.title, action: #selector(MenuAction.invoke(_:)), keyEquivalent: ""
+            )
+            menuItem.setCommandShortcut(item.commandKey)
+            let action: MenuAction
+            switch item.kind {
+            case .action(let perform):
+                action = MenuAction(perform)
+            case .toggle(let isOn):
+                menuItem.state = isOn.wrappedValue ? .on : .off
+                action = MenuAction { isOn.wrappedValue.toggle() }
+            }
+            menuItem.representedObject = action
+            menuItem.target = action
+            menu.addItem(menuItem)
+        }
+        return menu
+    }
+}
+
+private final class MenuAction: NSObject {
+    let perform: () -> Void
+
+    init(_ perform: @escaping () -> Void) {
+        self.perform = perform
+    }
+
+    @objc func invoke(_ sender: NSMenuItem) {
+        perform()
+    }
 }
 
 /// WindowContextMenu の項目を SwiftUI のメニューとして並べる。
