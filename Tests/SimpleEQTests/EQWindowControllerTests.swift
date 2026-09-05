@@ -18,8 +18,8 @@ final class EQWindowControllerTests: XCTestCase {
         XCTAssertEqual(ViewMode.normal.switchActionTitle, "ノーマルビューに切り替え")
     }
 
-    // 段は下端から積むため、領域に満たないぶんは上端の余りになる。拡大率で刻みが変わると
-    // ディスプレイによって余白が変わる。
+    // 段は下端から積むため、領域に満たないぶんは上端の余りになる。
+    // 拡大率で刻みが変わるとディスプレイによって余白が変わる。
     func testCompactSegmentsFillTheAreaAtEveryScale() {
         let height = EQLayout.compactLedHeight
         var steps: [CGFloat] = []
@@ -121,8 +121,8 @@ final class EQWindowControllerTests: XCTestCase {
         )
     }
 
-    // ダブルクリック直後の 1 クリックは回数 3 として届く。ここを「2 以上」で見ると、その 1 回で
-    // もう一度モードが切り替わる。
+    // ダブルクリック直後の 1 クリックは回数 3 として届く。
+    // ここを「2 以上」で見ると、その 1 回でもう一度モードが切り替わる。
     func testOnlyExactlyTwoClicksInvokesDoubleClick() {
         XCTAssertFalse(WindowDragClick.invokesDoubleClick(clickCount: 1), "単発の押下は移動に使う")
         XCTAssertTrue(WindowDragClick.invokesDoubleClick(clickCount: 2), "ちょうど 2 回だけが対象")

@@ -47,8 +47,8 @@ final class EQViewModelTests: XCTestCase {
         return (vm, engine)
     }
 
-    /// 同期実行の runMeasurement/deliver と、カーブ→応答の対応表を返す偽 measure を注入した
-    /// AutoPreampCoordinator 付き ViewModel を作る。
+    /// 同期実行の runMeasurement/deliver と、
+    /// カーブ→応答の対応表を返す偽 measure を注入した AutoPreampCoordinator 付き ViewModel を作る。
     private func makeVMWithAutoPreamp(
         _ store: SettingsStore, responses: [[Double]: EQMagnitudeResponse],
         responsesByRate: [Double: [[Double]: EQMagnitudeResponse]] = [:]
@@ -466,8 +466,8 @@ final class EQViewModelTests: XCTestCase {
         _ = cancellable
     }
 
-    // 停止判定はウィンドウ可視性に依存しない定期検算のため、可視化の再開のたびにリセットすると
-    // 実際に停止している間の警告が消えてしまう。
+    // 停止判定はウィンドウ可視性に依存しない定期検算のため、
+    // 可視化の再開のたびにリセットすると実際に停止している間の警告が消えてしまう。
     func testVisualizerActiveReactivationDoesNotResetRingStalled() {
         let store = SettingsStore(defaults: defaults)
         let vm = makeVM(store)
@@ -1089,8 +1089,8 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(vm.handleDisplayPreamp, liveValue, "自動 OFF では当てても動かないため現在値のまま")
     }
 
-    /// バイパス中も導出は止まらない。人の操作はどれも受け付けないため、この状態で唯一変わりうる
-    /// 入力であるサンプルレートで確かめる。
+    /// バイパス中も導出は止まらない。
+    /// 人の操作はどれも受け付けないため、この状態で唯一変わりうる入力であるサンプルレートで確かめる。
     func testAutoPreampContinuesDerivingWhileBypassedAndAppliesOnBypassOff() {
         let store = SettingsStore(defaults: defaults)
         let curve = EQSpec.builtInSeeds[.slot1]!.curve
@@ -1282,8 +1282,7 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(store.preampDb, -3)
     }
 
-    // オーディオ世界へは依頼として値のコピーを送る (生きた参照を経由して
-    // 都度読み直す形は取らない)。
+    // オーディオ世界へは依頼として値のコピーを送る (生きた参照を経由して都度読み直す形は取らない)。
     func testProcessingSettingsRequestCarriesValueSnapshotAtSubmissionTime() {
         let store = SettingsStore(defaults: defaults)
         let engine = AudioEngine()
@@ -1634,8 +1633,8 @@ final class EQViewModelTests: XCTestCase {
 
     // MARK: - メータの値は押し出しでのみ届く (取りに行く経路を持たない)
 
-    // UI はオーディオ世界の最初の押し出しより先に構築されるため、初期値は下限ちょうどではなく
-    // 厳密に下でなければならない (でないと最下部が点灯して見える)。
+    // UI はオーディオ世界の最初の押し出しより先に構築されるため、
+    // 初期値は下限ちょうどではなく厳密に下でなければならない (でないと最下部が点灯して見える)。
     func testInitialMeterValuesSitBelowTheDisplayFloor() {
         // 選べる下限のうち最も低い値より下であることが、この性質が成り立つ条件そのもの (下限候補をハードコードしない)。
         XCTAssertLessThan(
@@ -1935,8 +1934,7 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertFalse(engine.levelMeter.stereoCaptureEnabled)
     }
 
-    // 実際に画面へ表示して RunLoop を実時間で回し、Timer 駆動で tick が周期的に発火することを
-    // 確認する。
+    // 実際に画面へ表示して RunLoop を実時間で回し、Timer 駆動で tick が周期的に発火することを確認する。
     func testTickFiresDynamicallyViaTimerWhenVisualizerActive() {
         let store = SettingsStore(defaults: defaults)
         let engine = AudioEngine()
@@ -2023,8 +2021,8 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertTrue(capLayer.isHidden, "@Published の変更が SwiftUI 経由でレイヤへ届くこと")
     }
 
-    // showLevelMeter/preampDb の変化が、実際の SwiftUI 経由の反映経路 (updateNSView) を通って
-    // L/R メーター上のプリアンプハンドル線まで届くことを確認する。
+    // showLevelMeter/preampDb の変化が、
+    // 実際の SwiftUI 経由の反映経路 (updateNSView) を通って L/R メーター上のプリアンプハンドル線まで届くことを確認する。
     func testPreampHandleLineLayerReflectsVisibilityAndPreampDbThroughSwiftUI() {
         let store = SettingsStore(defaults: defaults)
         let vm = makeVM(store)
@@ -2129,8 +2127,8 @@ final class EQViewModelTests: XCTestCase {
 
     // MARK: - 視覚等価性ハーネス (RootView 全体の golden hash)
 
-    /// 全体をオフスクリーン描画し、ピクセルデータの SHA256 を返す。単体ビューではなく
-    /// 画面全体を比較することで、意図しない波及も検知できる。
+    /// 全体をオフスクリーン描画し、ピクセルデータの SHA256 を返す。
+    /// 単体ビューではなく画面全体を比較することで、意図しない波及も検知できる。
     private func captureRootViewVisual(showLevelMeter: Bool) -> (hash: String, pngData: Data?) {
         let suiteName = TestDefaults.makeName("EQViewModelTests.visual")
         let visualDefaults = UserDefaults(suiteName: suiteName)!
@@ -2207,8 +2205,8 @@ final class EQViewModelTests: XCTestCase {
         assertMatchesGoldenVisualHash(Self.goldenRootViewHashLevelMeterHidden, showLevelMeter: false, label: "hidden")
     }
 
-    /// フォント・アンチエイリアシングは環境間で変わりうるため、開発機・Xcode バージョンに固有の
-    /// 基準値。CI 環境やツールチェインを変えた場合は再採取が必要になりうる。
+    /// フォント・アンチエイリアシングは環境間で変わりうるため、開発機・Xcode バージョンに固有の基準値。
+    /// CI 環境やツールチェインを変えた場合は再採取が必要になりうる。
     private static let goldenRootViewHashLevelMeterShown =
         "6be19fc757fcbf3ba0456f5c71d7151431885df802ca3cd5ee6b05d6e5ed49fd"
     private static let goldenRootViewHashLevelMeterHidden =
@@ -2295,8 +2293,8 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(waitCount, 2, "可用でない観測を 2 回した後の 3 回目で成功するため wait は 2 回")
     }
 
-    /// ドライバを入れ替えた直後は、新しいドライバが共有領域を作り直す前に旧版数のまま残った
-    /// ファイルを読みうる。この経路だけは版ずれでも待つ。
+    /// ドライバを入れ替えた直後は、新しいドライバが共有領域を作り直す前に旧版数のまま残ったファイルを読みうる。
+    /// この経路だけは版ずれでも待つ。
     func testResolveDriverProbeWithRetryRetriesOnVersionMismatch() {
         var waitCount = 0
         let maxAttempts = 5
@@ -2417,8 +2415,8 @@ final class EQViewModelTests: XCTestCase {
         )
     }
 
-    // 他の警告はいずれも値が更新され続けることを前提にしており、応答が無い間はどの値も古いまま
-    // 静止するため、前提の崩れを先に伝える。
+    // 他の警告はいずれも値が更新され続けることを前提にしており、
+    // 応答が無い間はどの値も古いまま静止するため、前提の崩れを先に伝える。
     func testTopBarWarningIdentifierPrioritizesAudioWorldUnresponsiveOverEverythingElse() {
         XCTAssertEqual(
             topBarWarningIdentifier(

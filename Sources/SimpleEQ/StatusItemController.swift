@@ -54,8 +54,9 @@ private final class MenuSection {
     }
 }
 
-/// メニューバー常駐アイコンとメニューを薄く配線する。クリックはメニューを開くだけでウィンドウの
-/// 表示状態には触れない。表示/非表示はメニュー項目のトグルで操作する。
+/// メニューバー常駐アイコンとメニューを薄く配線する。
+/// クリックはメニューを開くだけでウィンドウの表示状態には触れない。
+/// 表示/非表示はメニュー項目のトグルで操作する。
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private let statusItem: NSStatusItem

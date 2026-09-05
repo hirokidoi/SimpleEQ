@@ -5,8 +5,7 @@ import SimpleEQRingC
 enum MixerSpec {
     static let maxChannelCount = 30
 
-    /// 永続化キーの前置き。共有ヘッダの突き合わせキーとは別に持つ (保存値であり、ドライバ側の
-    /// 都合で動かさない)。
+    /// 永続化キーの前置き。共有ヘッダの突き合わせキーとは別に持つ (保存値であり、ドライバ側の都合で動かさない)。
     static let bundleKeyPrefix = "bundle:"
     static let processKeyPrefix = "proc:"
 
@@ -63,8 +62,8 @@ enum MixerSpec {
     }
 }
 
-/// ミキサーのゲイン軸。減衰のみ (上限 0dB)。段を等幅で並べるため、指の移動量あたりの段数は
-/// 全域で一定になり、0dB 付近ほど 1 段の dB が小さくなる。
+/// ミキサーのゲイン軸。減衰のみ (上限 0dB)。
+/// 段を等幅で並べるため、指の移動量あたりの段数は全域で一定になり、0dB 付近ほど 1 段の dB が小さくなる。
 /// ビジュアライザの表示下限とは無関係にミキサー専用に持つ。
 enum MixerGainScale {
     static let floorDb: Double = -50

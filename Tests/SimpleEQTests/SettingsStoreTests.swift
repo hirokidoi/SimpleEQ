@@ -512,8 +512,8 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.curve(for: .slot4), Array(repeating: 0, count: EQSpec.bandCount))
     }
 
-    /// 枠ごとに異なる値を持ち、ゲインの範囲に収まるカーブ。範囲外の値を含めると、読み込み時の
-    /// 健全化で丸められて往復の検証にならない。
+    /// 枠ごとに異なる値を持ち、ゲインの範囲に収まるカーブ。
+    /// 範囲外の値を含めると、読み込み時の健全化で丸められて往復の検証にならない。
     private static func distinctCurve() -> [Double] {
         (0..<EQSpec.bandCount).map { EQSpec.clampDb(EQSpec.DB_MIN + Double($0)) }
     }

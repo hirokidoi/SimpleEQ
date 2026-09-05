@@ -1,8 +1,8 @@
 import AppKit
 import CoreAudio
 
-/// アプリのライフサイクル統括。起動時の出力デバイス復帰・ドライバ可視化と、クリーン終了時の
-/// 復帰・非表示化を担う薄い配線層。
+/// アプリのライフサイクル統括。
+/// 起動時の出力デバイス復帰・ドライバ可視化と、クリーン終了時の復帰・非表示化を担う薄い配線層。
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioWorld = AudioWorld()
@@ -212,8 +212,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// ウィンドウの可視性から独立した低頻度タイマーで回す (EQ ウィンドウの描画は非表示中に
-    /// 止まるため、そちらに載せるとウィンドウを閉じたままの是正が働かなくなる)。
+    /// ウィンドウの可視性から独立した低頻度タイマーで回す
+    /// (EQ ウィンドウの描画は非表示中に止まるため、そちらに載せるとウィンドウを閉じたままの是正が働かなくなる)。
     private func startPeriodicRoutingVerification() {
         let timer = Timer.scheduledTimer(
             withTimeInterval: DeviceRoutingReconciler.verificationInterval, repeats: true
@@ -293,8 +293,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    /// 手動固定が現在解決できない場合は自動選択へフォールバックする。ユーザが選んだ固定先自体は
-    /// この解決の成否に関わらず変更しない。
+    /// 手動固定が現在解決できない場合は自動選択へフォールバックする。
+    /// ユーザが選んだ固定先自体はこの解決の成否に関わらず変更しない。
     nonisolated private static func resolveOutputDevice(
         configuredUID: String?, outputController: OutputDeviceController, _ token: AudioWorldToken
     ) -> ResolvedOutputDevice? {

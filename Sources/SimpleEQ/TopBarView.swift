@@ -3,8 +3,7 @@ import SwiftUI
 
 /// 上部バー: ブランド表示・出力チップ・EQ ON/OFF スイッチ・(異常時のみ) 警告チップ。
 /// 稼働状態は ON/OFF スイッチに一本化し、別途の状態チップは持たない。
-/// 警告チップはこの「稼働状態表示」とは別種のもので、専用ドライバ未検出・音声取得失敗など
-/// 異常時にのみ現れる。
+/// 警告チップはこの「稼働状態表示」とは別種のもので、専用ドライバ未検出・音声取得失敗など異常時にのみ現れる。
 struct TopBarView: View {
     @ObservedObject var viewModel: EQViewModel
     /// 右クリックメニューの Mixer 項目は表示状態で文言が変わるため、観測して受ける。
@@ -97,8 +96,8 @@ struct TopBarView: View {
         .frame(height: height, alignment: .bottom)
     }
 
-    /// ドライバ未検出 / ドライバ更新要 / 出力先の選び直し要 / 再起動要 / 音声取得失敗を知らせる警告
-    /// チップ。優先順位・文言・誘導先はすべてビューモデル側が決める。正常時は何も表示しない。
+    /// ドライバ未検出 / ドライバ更新要 / 出力先の選び直し要 / 再起動要 / 音声取得失敗を知らせる警告チップ。
+    /// 優先順位・文言・誘導先はすべてビューモデル側が決める。正常時は何も表示しない。
     @ViewBuilder
     private var warningChip: some View {
         if let warning = viewModel.topBarWarning {
@@ -190,8 +189,8 @@ struct TopBarView: View {
             )
         }
         .buttonStyle(.plain)
-        // 音に効きようが無い間は受け付けない。ラベルとつまみは設定値のまま残し、灰色と減光だけで
-        // 「今は効いていない」を表す。
+        // 音に効きようが無い間は受け付けない。
+        // ラベルとつまみは設定値のまま残し、灰色と減光だけで「今は効いていない」を表す。
         .unavailableAppearance(!viewModel.canToggleBypass)
     }
 }
@@ -233,8 +232,8 @@ private struct BottomAlignedInBar: ViewModifier {
 }
 
 extension View {
-    /// 「今は効かない」ことを表す見た目 (彩度を落として減光し、操作を受け付けない)。効く側では
-    /// 修飾を一切付けない (恒等の値でも修飾を付けると合成の経路が変わるため)。
+    /// 「今は効かない」ことを表す見た目 (彩度を落として減光し、操作を受け付けない)。
+    /// 効く側では修飾を一切付けない (恒等の値でも修飾を付けると合成の経路が変わるため)。
     @ViewBuilder
     func unavailableAppearance(_ unavailable: Bool) -> some View {
         if unavailable {
@@ -269,24 +268,23 @@ private struct PreampPopoverView: View {
                 )
                 AutoToggleButton(isOn: preampAutoBinding(viewModel))
             }
-            // 自前の DragGesture を使うスライダーのため、明示的に
-            // allowsHitTesting でヒットテストを止める必要がある。
+            // 自前の DragGesture を使うスライダーのため、明示的に allowsHitTesting でヒットテストを止める必要がある。
             .allowsHitTesting(viewModel.processingInEffect)
         }
         .padding(16)
         .frame(width: 232)
         .grayscale(viewModel.processingInEffect ? 0 : 1)
         .opacity(viewModel.processingInEffect ? 1 : EQLayout.disabledOpacity)
-        // .popover は既定でシステムのマテリアル背景 (ライトモード相当) を使うため、明示的に
-        // 不透明な背景を敷かないと本文の明色テキストが読めなくなる。
+        // .popover は既定でシステムのマテリアル背景 (ライトモード相当) を使うため、
+        // 明示的に不透明な背景を敷かないと本文の明色テキストが読めなくなる。
         .background(EQLayout.Palette.panel)
         .preferredColorScheme(.dark)
     }
 }
 
 /// AppKit の Slider (NSSlider) を使わない、SwiftUI のみで描画するスライダー。
-/// 刻みスナップ・範囲クランプは呼び出し側が渡す value を共有コントロールの刻みスナップ経由でラップ
-/// する前提で、ここでは行わない。
+/// 刻みスナップ・範囲クランプは呼び出し側が渡す value を共有コントロールの刻みスナップ経由でラップする前提で、
+/// ここでは行わない。
 private struct DraggableDbSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>

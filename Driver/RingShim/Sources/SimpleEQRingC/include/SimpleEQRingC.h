@@ -83,8 +83,8 @@ uint64_t simpleeq_mixer_load_control_lease_deadline_host_time(const void *inHead
 uint32_t simpleeq_mixer_load_slot_client_id_acquire(const void *inHeader, uint32_t inIndex);
 uint32_t simpleeq_mixer_slot_process_id(const void *inHeader, uint32_t inIndex);
 
-/// outBundleID を必ず NUL 終端し、書いた文字数を返す。スロットの値が終端されていなくても
-/// 容量を越えて読まない。
+/// outBundleID を必ず NUL 終端し、書いた文字数を返す。
+/// スロットの値が終端されていなくても容量を越えて読まない。
 size_t simpleeq_mixer_slot_bundle_id(const void *inHeader, uint32_t inIndex,
                                      char *outBundleID, size_t inCapacity);
 

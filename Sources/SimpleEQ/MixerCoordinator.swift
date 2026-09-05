@@ -18,10 +18,8 @@ struct MixerCoordinatorUpdate: Sendable {
 
 /// 押し込みの要否とゲイン表の組み立て。CoreAudio に触れない純粋関数。
 enum MixerPushPolicy {
-    /// 中立の要素は表に載せない。載せないことで「中立の間は押し込みが起きない」が
-    /// 表の同値判定だけで決まる。
-    /// 同じ鍵を 2 つ以上のアプリが持つときはどのゲインとも言えないため、その鍵は載せない
-    /// (行にしていないアプリも数える)。
+    /// 中立の要素は表に載せない。載せないことで「中立の間は押し込みが起きない」が表の同値判定だけで決まる。
+    /// 同じ鍵を 2 つ以上のアプリが持つときはどのゲインとも言えないため、その鍵は載せない (行にしていないアプリも数える)。
     static func gainTable(
         matchKeysByChannelKey: [String: Set<String>],
         gainByChannelKey: [String: Double]
@@ -39,8 +37,8 @@ enum MixerPushPolicy {
         return table
     }
 
-    /// 行の名前空間に属するバンドル ID から作った鍵だけを覚える。アプリを起動し直しても同じ鍵に
-    /// なるため、席を取った瞬間からゲインが当たる。
+    /// 行の名前空間に属するバンドル ID から作った鍵だけを覚える。
+    /// アプリを起動し直しても同じ鍵になるため、席を取った瞬間からゲインが当たる。
     /// 共有フレームワーク (複数のアプリが同じバンドル ID の子プロセスから音を出す) の鍵は覚えない。
     /// 覚えると、そのアプリを終了したあとも別のアプリに当たり続ける。
     /// pid から作った鍵も覚えない (起動のたびに変わる)。
@@ -167,8 +165,8 @@ final class MixerCoordinator: @unchecked Sendable {
         }
     }
 
-    /// 自分自身は行にしない。SimpleEQ が出す音は全アプリの音そのもので、他の行と並べても
-    /// 意味を持たない。
+    /// 自分自身は行にしない。
+    /// SimpleEQ が出す音は全アプリの音そのもので、他の行と並べても意味を持たない。
     private func channelKey(forProcess processID: UInt32) -> String? {
         guard let key = resolutions[pid_t(bitPattern: processID)]?.channelKey,
               key != selfChannelKey else { return nil }

@@ -7,8 +7,9 @@ enum WindowDestination {
     case diagnostics
 }
 
-/// 診断への隠し導線。現れる条件をここ 1 箇所で決め、押下時点で読む導線 (プリセットレールの
-/// Settings ボタン) とメニューを開く時点で読む導線 (メニューバー) が同じ修飾キーに従うようにする。
+/// 診断への隠し導線。
+/// 現れる条件をここ 1 箇所で決め、
+/// 押下時点で読む導線 (プリセットレールの Settings ボタン) とメニューを開く時点で読む導線 (メニューバー) が同じ修飾キーに従うようにする。
 enum DiagnosticsEntry {
     static var isRevealed: Bool { NSEvent.modifierFlags.contains(.option) }
 }

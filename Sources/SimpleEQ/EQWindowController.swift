@@ -2,8 +2,9 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// EQ ウィンドウの保持とビューモードの適用、メニューバーからの開閉トグルを担う。可視状態は
-/// ビューモデル側の可視化状態へ連動させる。Settings/Diagnostics/About ウィンドウの開閉もここで担う。
+/// EQ ウィンドウの保持とビューモードの適用、メニューバーからの開閉トグルを担う。
+/// 可視状態はビューモデル側の可視化状態へ連動させる。
+/// Settings/Diagnostics/About ウィンドウの開閉もここで担う。
 final class EQWindowController: NSWindowController, NSWindowDelegate {
     private var appliedViewMode: ViewMode?
     private var cancellables = Set<AnyCancellable>()
@@ -15,8 +16,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     private var aboutWindowController: NSWindowController?
     private var mixer: MixerModel!
     private var mixerRenderClock: MixerRenderClock!
-    /// Diagnostics ウィンドウ専用の delegate。NSWindow.delegate は weak 参照のため、ここで strong に
-    /// 保持しないと解放され、delegate 経路が発火しなくなる。
+    /// Diagnostics ウィンドウ専用の delegate。
+    /// NSWindow.delegate は weak 参照のため、ここで strong に保持しないと解放され、delegate 経路が発火しなくなる。
     private var diagnosticsWindowDelegate: DiagnosticsWindowDelegate?
     /// 周期処理の駆動条件が使う可視状態。表示・非表示の各所はここだけを動かす。
     private var windowIsVisible = false {
@@ -50,8 +51,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         window.onCancel = { [weak mixer] in mixer?.endEditing() }
         applyViewMode(viewModel.viewMode)
 
-        // 駆動条件はミキサーの状態が動くたびに導き直す。@Published は変更前に流すため、
-        // モデルを読み直さず流れてきた値を使う。
+        // 駆動条件はミキサーの状態が動くたびに導き直す。
+        // @Published は変更前に流すため、モデルを読み直さず流れてきた値を使う。
         viewModel.$viewMode.combineLatest(mixer.$shown, mixer.$editing)
             .sink { [weak self] viewMode, shown, editing in
                 MainActor.assumeIsolated {
@@ -133,8 +134,9 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         return NSPoint(x: saved.x, y: saved.y)
     }
 
-    /// Settings ウィンドウを開く。EQ ウィンドウの上に重ねる sheet ではなく独立ウィンドウ
-    /// (移動自由・幅は固定で高さのみ可変) にする。初回のみ生成し、以後は使い回す。
+    /// Settings ウィンドウを開く。
+    /// EQ ウィンドウの上に重ねる sheet ではなく独立ウィンドウ (移動自由・幅は固定で高さのみ可変) にする。
+    /// 初回のみ生成し、以後は使い回す。
     func showSettings() {
         if settingsWindowController == nil {
             let width = EQLayout.settingsWindowWidth
@@ -218,8 +220,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         mixer.setShown(willShow)
     }
 
-    /// About ウィンドウを開く。Settings / Diagnostics と同じ流儀に倣う。寸法は固定 (幅は定数、
-    /// 高さは内容が要求する寸法をそのまま採る)。
+    /// About ウィンドウを開く。Settings / Diagnostics と同じ流儀に倣う。
+    /// 寸法は固定 (幅は定数、高さは内容が要求する寸法をそのまま採る)。
     func showAbout() {
         if aboutWindowController == nil {
             let window = NSWindow(
@@ -242,8 +244,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         aboutWindowController?.window?.makeKeyAndOrderFront(nil)
     }
 
-    /// スクロールが要らなくなる高さをウィンドウの高さ上限にする。内容の高さは外から測れないため、
-    /// 内容側から報告される超過量 (scrollOverflow) を使う。
+    /// スクロールが要らなくなる高さをウィンドウの高さ上限にする。
+    /// 内容の高さは外から測れないため、内容側から報告される超過量 (scrollOverflow) を使う。
     private func applyHeightLimit(to window: NSWindow?, scrollOverflow: CGFloat, minHeight: CGFloat) {
         guard let window else { return }
         window.maxSize = NSSize(
@@ -287,8 +289,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         promptDriverInstallIfNeeded()
     }
 
-    /// 起動シーケンスの最初のスナップショットが確定した後に一度だけ呼ぶ。ウィンドウが可視でなければ
-    /// 何もしない。
+    /// 起動シーケンスの最初のスナップショットが確定した後に一度だけ呼ぶ。ウィンドウが可視でなければ何もしない。
     func recheckDriverInstallPromptAfterStartupConfirmed() {
         guard let window, window.isVisible else { return }
         promptDriverInstallIfNeeded()
@@ -311,8 +312,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         persistWindowOrigin()
     }
 
-    /// Settings ウィンドウが表示中であれば隠す。破棄せず隠すだけの流儀に合わせ、close ではなく
-    /// orderOut を使う。
+    /// Settings ウィンドウが表示中であれば隠す。
+    /// 破棄せず隠すだけの流儀に合わせ、close ではなく orderOut を使う。
     private func hideSettingsIfOpen() {
         guard let settingsWindow = settingsWindowController?.window, settingsWindow.isVisible else { return }
         settingsWindow.orderOut(nil)
@@ -332,8 +333,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         aboutWindow.orderOut(nil)
     }
 
-    /// 現在の EQ ウィンドウ位置を保存する。handleWindowHidden() に加えて、
-    /// Cmd+Q 等で終了するケースをカバーするため、アプリの終了処理からも呼ぶ。
+    /// 現在の EQ ウィンドウ位置を保存する。
+    /// handleWindowHidden() に加えて、Cmd+Q 等で終了するケースをカバーするため、アプリの終了処理からも呼ぶ。
     func persistWindowOrigin() {
         guard let mode = appliedViewMode else { return }
         persistWindowOrigin(for: mode)
@@ -346,8 +347,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    /// 保存済み位置が現在のディスプレイ構成でも画面内に収まるか判定する。ウィンドウが画面外へ
-    /// 配置されて操作不能になるのを避けるため、復元前にいずれかの画面と重なるかを確認する。
+    /// 保存済み位置が現在のディスプレイ構成でも画面内に収まるか判定する。
+    /// ウィンドウが画面外へ配置されて操作不能になるのを避けるため、復元前にいずれかの画面と重なるかを確認する。
     static func originIsOnScreen(_ origin: SettingsStore.WindowOrigin, size: NSSize) -> Bool {
         let frame = NSRect(x: origin.x, y: origin.y, width: size.width, height: size.height)
         return NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
@@ -355,8 +356,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - 周期処理 (可視性連動)
 
-    /// ウィンドウの可視・ミニマイズの状態から、そのウィンドウのための周期処理を有効にすべきかを
-    /// 決める準純粋関数。
+    /// ウィンドウの可視・ミニマイズの状態から、そのウィンドウのための周期処理を有効にすべきかを決める準純粋関数。
     static func wantsWindowDrivenWorkActive(isVisible: Bool, isMiniaturized: Bool) -> Bool {
         isVisible && !isMiniaturized
     }
@@ -393,8 +393,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         applyDrivenWork(viewMode: viewModel.viewMode, shown: mixer.shown, editing: mixer.editing)
     }
 
-    /// ドライバ未検出の間は EQ ウィンドウを開くたびにインストールを促す (TopBar の警告チップとは
-    /// 別に、能動的に知らせる導線)。
+    /// ドライバ未検出の間は EQ ウィンドウを開くたびにインストールを促す (TopBar の警告チップとは別に、能動的に知らせる導線)。
     private func promptDriverInstallIfNeeded() {
         guard viewModel.driverAvailability == .notFound else { return }
         let alert = NSAlert()
@@ -422,8 +421,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
                 AppRelaunch.relaunch()
             }
         case .failure(.executionFailed(.cancelled)):
-            // 管理者パスワードダイアログのユーザキャンセルは意図的な中断であり、失敗表示はせず
-            // 静かに無視する。
+            // 管理者パスワードダイアログのユーザキャンセルは意図的な中断であり、失敗表示はせず静かに無視する。
             break
         case .failure(let error):
             let failed = NSAlert()
@@ -476,8 +474,8 @@ private final class DiagnosticsWindowDelegate: NSObject, NSWindowDelegate {
         owner?.updateDiagnosticsActive(isVisible: false, isMiniaturized: false)
     }
 
-    /// isVisible はミニマイズ中も真のまま (macOS の仕様) だが、isMiniaturized が真である以上
-    /// wantsDiagnosticsActive は偽を返す。
+    /// isVisible はミニマイズ中も真のまま (macOS の仕様) だが、
+    /// isMiniaturized が真である以上 wantsDiagnosticsActive は偽を返す。
     func windowDidMiniaturize(_ notification: Notification) {
         owner?.updateDiagnosticsActive(isVisible: true, isMiniaturized: true)
     }

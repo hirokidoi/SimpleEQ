@@ -5,8 +5,8 @@ import Foundation
 
 // --- realtime レンダ実体の補助 -------------------------------------
 
-/// AudioUnitRender は mDataByteSize を実生成バイト数へ書き下げる。復元しないと要求フレーム数が
-/// 増えた回から render が失敗し続ける。
+/// AudioUnitRender は mDataByteSize を実生成バイト数へ書き下げる。
+/// 復元しないと要求フレーム数が増えた回から render が失敗し続ける。
 func restorePlanarBufferByteSize(_ ioData: UnsafeMutablePointer<AudioBufferList>, bytesPerChannel: UInt32) {
     let abl = UnsafeMutableAudioBufferListPointer(ioData)
     for c in 0..<abl.count { abl[c].mDataByteSize = bytesPerChannel }
@@ -32,8 +32,8 @@ final class AudioEngine: @unchecked Sendable {
     var appliedSampleRateDidChange: (@Sendable (Double) -> Void)?
     /// テスト用の観測点 (計測のみ、他の状態に影響しない)。
     private(set) var suspensionHistory: [SuspensionCause] = []
-    /// 停止直前のあるべき出力先 UID。停止で intendedOutputDeviceUID が失われた後も残り、assemble() の
-    /// 成功時に破棄する。
+    /// 停止直前のあるべき出力先 UID。
+    /// 停止で intendedOutputDeviceUID が失われた後も残り、assemble() の成功時に破棄する。
     private(set) var intendedOutputDeviceUIDAtSuspension: String?
 
     /// EQ ユニットの生成と初期化。既定は実装本体で、差し替え可能な境界として持つ。
@@ -41,8 +41,8 @@ final class AudioEngine: @unchecked Sendable {
         guard let eq = EQUnit() else { return nil }
         let format = EQStreamFormat(channels: AudioConfig.channels, sampleRate: AudioConfig.appliedSampleRate)
         guard eq.setup(format: format, maxFrames: maxFrames, renderCallback: renderCallback, refCon: refCon) else {
-            // 境界の内側で前段の生成物を破棄する。クロージャが nil を返すと、呼び出し側の
-            // 解放対象に入らないため。
+            // 境界の内側で前段の生成物を破棄する。
+            // クロージャが nil を返すと、呼び出し側の解放対象に入らないため。
             eq.dispose()
             return nil
         }
@@ -108,8 +108,8 @@ final class AudioEngine: @unchecked Sendable {
     /// 使う直前に UID で検証する。
     private var driverDeviceID: AudioDeviceID?
 
-    /// 実際の出力先は AUHAL 内蔵のフォールバックでアプリの関与なく張り替わりうるため、ID は
-    /// キャッシュせず currentOutputDeviceID() で読み返す。
+    /// 実際の出力先は AUHAL 内蔵のフォールバックでアプリの関与なく張り替わりうるため、
+    /// ID はキャッシュせず currentOutputDeviceID() で読み返す。
     private(set) var intendedOutputDeviceUID: String?
 
     /// ドライバのコントロールを未読の間の想定値 (仮の値)。
@@ -127,12 +127,12 @@ final class AudioEngine: @unchecked Sendable {
     private var preampDb: Double = 0
     private var bypassed = false
     private var driverDeviceListenerBlock: AudioObjectPropertyListenerBlock?
-    /// リスナー群を実際に登録したデバイス ID。解除は必ずこの ID に対して行う (driverDeviceID は
-    /// 再解決で変わりうるため)。
+    /// リスナー群を実際に登録したデバイス ID。
+    /// 解除は必ずこの ID に対して行う (driverDeviceID は再解決で変わりうるため)。
     private(set) var driverDeviceListenerDeviceID: AudioDeviceID?
 
-    /// HAL への問い合わせを含むため、読み手が居ない間は呼んではならない。書き手停止の判定結果に
-    /// 関わらず無条件で呼ぶ (再生継続中の coreaudiod 再起動でも音量追従を復帰させるため)。
+    /// HAL への問い合わせを含むため、読み手が居ない間は呼んではならない。
+    /// 書き手停止の判定結果に関わらず無条件で呼ぶ (再生継続中の coreaudiod 再起動でも音量追従を復帰させるため)。
     func refreshDriverDeviceIDIfNeeded(_ token: AudioWorldToken) {
         if let id = driverDeviceID, deviceUID(id, token) == DriverConfig.deviceUID { return }
         updateDriverDeviceID(translateUIDToDeviceID(forUID: DriverConfig.deviceUID, token), token)
@@ -276,8 +276,8 @@ final class AudioEngine: @unchecked Sendable {
         return true
     }
 
-    /// I/O バッファ長は出力デバイスの実サンプルレートから導出する (ドライバの実レートとは別の
-    /// クロック領域)。取得に失敗した場合は基準レートで代替する。
+    /// I/O バッファ長は出力デバイスの実サンプルレートから導出する (ドライバの実レートとは別のクロック領域)。
+    /// 取得に失敗した場合は基準レートで代替する。
     private static func applyOutputDevice(
         _ id: AudioDeviceID, on unit: AudioUnit, metrics: AudioRuntimeMetrics, _ token: AudioWorldToken
     ) -> Bool {
@@ -291,8 +291,8 @@ final class AudioEngine: @unchecked Sendable {
         return true
     }
 
-    /// AUHAL は内蔵のフォールバックでアプリの関与なく出力先を張り替えることがあるため、現在の
-    /// 出力先は必ずここから読み返す (キャッシュしない)。
+    /// AUHAL は内蔵のフォールバックでアプリの関与なく出力先を張り替えることがあるため、
+    /// 現在の出力先は必ずここから読み返す (キャッシュしない)。
     func currentOutputDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
         guard let outUnit = outputUnit else { return nil }
         var id = AudioDeviceID(kAudioObjectUnknown)
@@ -303,9 +303,10 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     /// kAudioOutputUnitProperty_CurrentDevice は AudioUnit 稼働中に変更しても反映が不定になるため、
-    /// Stop → プロパティ変更 → Start の手順を踏む。Stop〜Start の間は書き手が止まらずバッファ量が
-    /// 押し上がるため、共有メモリ読み手に作り直しを要求し次回の読み取りで作り直させる (失敗して旧デバイスへ
-    /// 戻す経路でも同じ要求を行うが、その経路では復旧の Start が要求のあとに来る)。
+    /// Stop → プロパティ変更 → Start の手順を踏む。
+    /// Stop〜Start の間は書き手が止まらずバッファ量が押し上がるため、
+    /// 共有メモリ読み手に作り直しを要求し次回の読み取りで作り直させる
+    /// (失敗して旧デバイスへ戻す経路でも同じ要求を行うが、その経路では復旧の Start が要求のあとに来る)。
     @discardableResult
     func switchOutputDevice(to device: ResolvedOutputDevice, _ token: AudioWorldToken) -> Bool {
         guard let outUnit = outputUnit else { return false }
@@ -339,8 +340,8 @@ final class AudioEngine: @unchecked Sendable {
         return false
     }
 
-    /// サンプル領域は allocate(capacity:) 由来のため deallocate()、AudioBufferList の入れ物は
-    /// calloc 由来のため free() で解放する (解放子は揃わない)。
+    /// サンプル領域は allocate(capacity:) 由来のため deallocate()、
+    /// AudioBufferList の入れ物は calloc 由来のため free() で解放する (解放子は揃わない)。
     private func setupPlanarOutputBuffers(maxFrames: UInt32) {
         let channels = Int(AudioConfig.channels)
         let wrapper = AudioBufferList.allocate(maximumBuffers: channels)
@@ -453,8 +454,8 @@ final class AudioEngine: @unchecked Sendable {
         volumeScalarAddress, muteAddress, nominalSampleRateAddress,
     ]
 
-    /// 実登録状態とは独立の、あるべき状態を表すフラグ。ID が一時的に解決不能で解除された後も、
-    /// これが立っている限り回復時に再登録される。
+    /// 実登録状態とは独立の、あるべき状態を表すフラグ。
+    /// ID が一時的に解決不能で解除された後も、これが立っている限り回復時に再登録される。
     private var driverDeviceMonitoringDesired = false
 
     private func startDriverDeviceMonitoring(_ token: AudioWorldToken) {
@@ -620,8 +621,8 @@ final class AudioEngine: @unchecked Sendable {
     // --- realtime コールバック実体 -----------------------------------
     // print/alloc/lock は行わず、事前確保済みバッファ間の値の受け渡しのみを行う。
 
-    // バッファ数は AU が決め、フォーマットから確定できるとは限らない。1本渡しの実機確認まで
-    // 両分岐を残す。
+    // バッファ数は AU が決め、フォーマットから確定できるとは限らない。
+    // 1本渡しの実機確認まで両分岐を残す。
     func renderEQInput(_ ioData: UnsafeMutablePointer<AudioBufferList>?, _ frames: UInt32) -> OSStatus {
         guard let ioData = ioData, let ringReader else { return noErr }
         guard case .renderable = renderBufferSizing(frames: frames, capacityFrames: AudioConfig.maxRenderFrames) else {
@@ -708,8 +709,8 @@ final class AudioEngine: @unchecked Sendable {
         return noErr
     }
 
-    /// 添えるゲインにフェード係数は含まない (フェード末尾で無音判定寄りに振れるが、継続長が
-    /// クロスフェード長を超えないため実害はない)。
+    /// 添えるゲインにフェード係数は含まない
+    /// (フェード末尾で無音判定寄りに振れるが、継続長がクロスフェード長を超えないため実害はない)。
     func recordOutputLevel(
         _ dst: UnsafePointer<Float>, frameCount: Int, channels: Int,
         peakBeforeVolume: Float, effectiveOutputGain: Float, reader: SharedRingReader?
@@ -751,8 +752,9 @@ final class AudioEngine: @unchecked Sendable {
     }
 }
 
-// C コールバック trampoline (Swift メソッドは AURenderCallback の C 関数ポインタ要件を
-// 直接満たせないため、free function 経由で Unmanaged self へ橋渡しする)
+// C コールバック trampoline
+// (Swift メソッドは AURenderCallback の C 関数ポインタ要件を直接満たせないため、
+// free function 経由で Unmanaged self へ橋渡しする)
 
 private func eqInputRenderProc(_ refCon: UnsafeMutableRawPointer,
                                _ flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,

@@ -11,8 +11,8 @@ func isExcludedFromOutputPicker(uid: String, driverDeviceUID: String?, containsD
     return containsDriver || isAirPlay
 }
 
-/// 判定には頭打ちも平滑化もしていない生のピーク振幅を渡すこと (表示用のレベル値は表示レンジで
-/// 頭打ちにされ超過を表せない)。ちょうどフルスケールは超過に含めない。
+/// 判定には頭打ちも平滑化もしていない生のピーク振幅を渡すこと (表示用のレベル値は表示レンジで頭打ちにされ超過を表せない)。
+/// ちょうどフルスケールは超過に含めない。
 func outputExceedsFullScale(peakAmplitude: Float) -> Bool {
     peakAmplitude > 1
 }
@@ -25,8 +25,8 @@ enum OutputSwitchDecision: Equatable {
     case needed
 }
 
-/// 判定は AudioDeviceID ではなく UID で行う (ID は入れ替わるため一致が「同じデバイス」を
-/// 意味しない)。現在の UID を取得できない場合は確証が無いため切替要へ倒す。
+/// 判定は AudioDeviceID ではなく UID で行う (ID は入れ替わるため一致が「同じデバイス」を意味しない)。
+/// 現在の UID を取得できない場合は確証が無いため切替要へ倒す。
 func outputSwitchDecision(intendedUID: String, currentUID: String?) -> OutputSwitchDecision {
     guard let currentUID, currentUID == intendedUID else { return .needed }
     return .notNeeded
@@ -38,8 +38,8 @@ func isRingStalled(writerIOIsRunning: Bool, elapsedSinceLastWrite: TimeInterval,
     writerIOIsRunning && elapsedSinceLastWrite > threshold
 }
 
-/// キューへのハートビートが返ってこないことを表す。now/lastResponse/waitingSince はシステムスリープ中に
-/// 進まない時計で測ること (壁時計だと、復帰直後に必ず応答なしと判定される)。
+/// キューへのハートビートが返ってこないことを表す。
+/// now/lastResponse/waitingSince はシステムスリープ中に進まない時計で測ること (壁時計だと、復帰直後に必ず応答なしと判定される)。
 func isAudioWorldUnresponsive(
     now: TimeInterval, lastResponse: TimeInterval?, waitingSince: TimeInterval, threshold: TimeInterval
 ) -> Bool {

@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Optional<String> (選択中の UID) を Picker の selection/tag に使う際の SwiftUI の癖を吸収する
-/// 共有ヘルパー。
+/// Optional<String> (選択中の UID) を Picker の selection/tag に使う際の SwiftUI の癖を吸収する共有ヘルパー。
 /// - autoLabel: 非nil なら「自動選択」疑似項目を候補の先頭に加える。nil ならこの疑似項目自体を出さない。
 /// - fallbackLabel: 選択中の uid が options に含まれない場合の防御的な表示ラベル。
 private let outputDeviceAutoTag = "__simpleeq_auto__"
@@ -20,8 +19,8 @@ func sharedOutputDevicePicker(
     selection: Binding<String?>, options: [OutputDeviceOption], autoLabel: String?, fallbackLabel: String
 ) -> some View {
     let allOptions = resolvedOutputDevicePickerOptions(selection: selection.wrappedValue, options: options, fallbackLabel: fallbackLabel)
-    // 実デバイスが1つも解決できておらず、自動選択の疑似項目も出さない場合、未解決センチネルの
-    // 1行を表示専用で加える (選び直す対象ではないため allOptions には含めない)。
+    // 実デバイスが1つも解決できておらず、自動選択の疑似項目も出さない場合、
+    // 未解決センチネルの 1行を表示専用で加える (選び直す対象ではないため allOptions には含めない)。
     let showsUnresolvedRow = selection.wrappedValue == nil && autoLabel == nil
     let mapped = Binding<String>(
         get: {
@@ -46,11 +45,11 @@ func sharedOutputDevicePicker(
     }
     .labelsHidden()
     .pickerStyle(.menu)
-    // 無効化は「選択可能な候補が1つも無いか」のみで決める。自動選択の疑似項目を出す呼び出し元は
-    // その疑似項目自体が常に選択可能な候補のため、実候補の有無に関わらず常に有効。
+    // 無効化は「選択可能な候補が1つも無いか」のみで決める。
+    // 自動選択の疑似項目を出す呼び出し元はその疑似項目自体が常に選択可能な候補のため、実候補の有無に関わらず常に有効。
     .disabled(autoLabel == nil && allOptions.isEmpty)
-    // Picker はネイティブ (AppKit 由来) コントロールで .foregroundColor を無視しシステムの
-    // カラースキームに従うため、常時ダーク固定のこのアプリでは明示的に指定する。
+    // Picker はネイティブ (AppKit 由来) コントロールで .foregroundColor を無視しシステムのカラースキームに従うため、
+    // 常時ダーク固定のこのアプリでは明示的に指定する。
     .colorScheme(.dark)
     .frame(maxWidth: .infinity, alignment: .leading)
 }
@@ -80,8 +79,8 @@ extension View {
     }
 }
 
-/// トップバーの電源スイッチと Settings のトグルが共有する見た目 (カプセル+ノブ)。タップ操作は持たず
-/// isOn に応じた静的な見た目のみを描く (タップ処理・Binding の扱いは呼び出し側の責務)。
+/// トップバーの電源スイッチと Settings のトグルが共有する見た目 (カプセル+ノブ)。
+/// タップ操作は持たず isOn に応じた静的な見た目のみを描く (タップ処理・Binding の扱いは呼び出し側の責務)。
 struct ToggleTrack: View {
     let isOn: Bool
 
@@ -113,8 +112,8 @@ struct SettingsToggle: View {
     }
 }
 
-/// Slider(value:in:step:) は macOS でティックマークを自動描画してしまうため、値のスナップを
-/// Binding 側で行うことでティックを出さずに刻み挙動だけ保つ。
+/// Slider(value:in:step:) は macOS でティックマークを自動描画してしまうため、
+/// 値のスナップを Binding 側で行うことでティックを出さずに刻み挙動だけ保つ。
 func steppedBinding(_ value: Binding<Double>, range: ClosedRange<Double>, step: Double) -> Binding<Double> {
     Binding<Double>(
         get: { value.wrappedValue },

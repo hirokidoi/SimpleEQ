@@ -1,8 +1,9 @@
 import XCTest
 @testable import SimpleEQ
 
-/// トップレベルの非 isolated 関数にしてあるのは、@Sendable な measure クロージャ (MainActor から
-/// 隔離された測定キュー上で呼ばれる想定) から actor 隔離を跨がずに呼べるようにするため。
+/// トップレベルの非 isolated 関数にしてあるのは、
+/// @Sendable な measure クロージャ (MainActor から隔離された測定キュー上で呼ばれる想定) から
+/// actor 隔離を跨がずに呼べるようにするため。
 private func autoPreampTestCurve(_ tag: Double) -> [Double] {
     Array(repeating: tag, count: EQSpec.bandCount)
 }
@@ -13,8 +14,8 @@ private func autoPreampTestResponse(_ gain: Double) -> EQMagnitudeResponse {
 
 @MainActor
 final class AutoPreampCoordinatorTests: XCTestCase {
-    /// runMeasurement/deliver がともに即実行 (同期完了) する調停役。対応表に無い curve は
-    /// 測定失敗 (nil) として扱われる。
+    /// runMeasurement/deliver がともに即実行 (同期完了) する調停役。
+    /// 対応表に無い curve は測定失敗 (nil) として扱われる。
     private func makeSyncCoordinator(
         measureCount: Recorded<Int> = Recorded(0), responses: [[Double]: EQMagnitudeResponse] = [:],
         cacheCapacity: Int = AutoPreampCoordinator.defaultCacheCapacity

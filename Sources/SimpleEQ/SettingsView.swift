@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Settings 画面。EQ ウィンドウの Settings ボタンから、EQ ウィンドウとは独立した
-/// (自由に移動でき、幅は固定で高さのみ可変な) ウィンドウとして開く。各セクションは
-/// @Published プロパティへ直結するため、操作は即座に反映される。
+/// Settings 画面。
+/// EQ ウィンドウの Settings ボタンから、EQ ウィンドウとは独立した (自由に移動でき、幅は固定で高さのみ可変な) ウィンドウとして開く。
+/// 各セクションは @Published プロパティへ直結するため、操作は即座に反映される。
 struct SettingsView: View {
     @ObservedObject var viewModel: EQViewModel
     @ObservedObject var mixer: MixerModel
@@ -368,8 +368,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 既定へ戻す点は行ごとの既定を見る (項目によって既定の段が違うため、共通の段へ戻すと
-    /// 起動直後の状態と食い違う)。
+    /// 既定へ戻す点は行ごとの既定を見る (項目によって既定の段が違うため、共通の段へ戻すと起動直後の状態と食い違う)。
     private func levelRow(
         title: String, subtitle: String? = nil, level: Binding<Int>, scale: EQLayout.Tuning.LevelScale
     ) -> some View {

@@ -34,8 +34,8 @@ struct HandleInteractionSurface: ViewModifier {
             }
     }
 
-    /// ポインタ位置に応じてカーソルを出し分ける。onContinuousHover は連続発火するため push/pop
-    /// でなく set() で更新する。
+    /// ポインタ位置に応じてカーソルを出し分ける。
+    /// onContinuousHover は連続発火するため push/pop でなく set() で更新する。
     private func updateCursor(at location: CGPoint) {
         let kind = EQPlotCursor.kind(
             processingInEffect: viewModel.processingInEffect,

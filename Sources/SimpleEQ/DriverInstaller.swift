@@ -47,8 +47,8 @@ enum DriverInstaller {
 
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            // do shell script へ渡すシェル文字列として (shellQuoted)、続けて -e の AppleScript
-            // ソース文字列リテラルとして (appleScriptQuoted) の 2 段階でエスケープする。
+            // do shell script へ渡すシェル文字列として (shellQuoted)、
+            // 続けて -e の AppleScript ソース文字列リテラルとして (appleScriptQuoted) の 2 段階でエスケープする。
             let shellSafe = shellQuoted(scriptPath)
             let source = "do shell script \"\(appleScriptQuoted(shellSafe))\" with administrator privileges"
             process.arguments = ["-e", source]
@@ -87,8 +87,7 @@ enum DriverInstaller {
         s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// completion は必ずメインキュー上で呼ぶ契約にする (installOrUpdate/uninstall はバックグラウンド
-    /// キューで実行されるため)。
+    /// completion は必ずメインキュー上で呼ぶ契約にする (installOrUpdate/uninstall はバックグラウンドキューで実行されるため)。
     private static func complete(_ result: Result<Void, ActionError>, _ completion: @escaping @MainActor (Result<Void, ActionError>) -> Void) {
         DispatchQueue.main.async { completion(result) }
     }

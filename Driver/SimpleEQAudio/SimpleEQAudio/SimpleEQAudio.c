@@ -435,8 +435,8 @@ static void SimpleEQMixer_AcquireSlot(const AudioServerPlugInClientInfo *inClien
     if(inClientInfo->mBundleID != NULL
        && !CFStringGetCString(inClientInfo->mBundleID, theBundleID, sizeof(theBundleID), kCFStringEncodingUTF8))
     {
-        // 収まらないバンドル ID は切り詰めず空文字にする。スロットの値を「完全な値か空文字か」の
-        // どちらかに閉じることで、ドライバとアプリが同じ入力から同じ鍵を得ることを構造で保証する。
+        // 収まらないバンドル ID は切り詰めず空文字にする。
+        // スロットの値を「完全な値か空文字か」のどちらかに閉じることで、ドライバとアプリが同じ入力から同じ鍵を得ることを構造で保証する。
         memset(theBundleID, 0, sizeof(theBundleID));
     }
 
@@ -476,8 +476,8 @@ static void SimpleEQMixer_AcquireSlot(const AudioServerPlugInClientInfo *inClien
     float theGain = SimpleEQMixer_LeaseIsArmed(theHeader)
         ? SimpleEQMixer_LookupGain_Locked(theBundleID, theSlot->processID)
         : 1.0f;
-    // まだ 1 サンプルも出していないクライアントに継ぎ目は無い。ランプを掛けると
-    // 「既定ゲインで始まる窓」を自分で作ることになるので、現在ゲインも目標へ揃える。
+    // まだ 1 サンプルも出していないクライアントに継ぎ目は無い。
+    // ランプを掛けると「既定ゲインで始まる窓」を自分で作ることになるので、現在ゲインも目標へ揃える。
     atomic_store_explicit(&gMixer_SlotTargetGainBits[theSlotIndex], SimpleEQMixerFloatToBits(theGain), memory_order_relaxed);
     gMixer_SlotCurrentGain[theSlotIndex] = theGain;
     atomic_store_explicit(&theSlot->appliedGainBits, SimpleEQMixerFloatToBits(theGain), memory_order_relaxed);
@@ -661,8 +661,8 @@ static void SimpleEQMixer_ApplyGainTable(CFDictionaryRef inTable)
 
     if(theBuild.hasNonNeutral)
     {
-        // 目標ゲインを全部書き終えてから release でリースを張る。リースが見えているのに目標ゲインが
-        // 古い、という観測を作らない。
+        // 目標ゲインを全部書き終えてから release でリースを張る。
+        // リースが見えているのに目標ゲインが古い、という観測を作らない。
         uint64_t theDeadline = mach_absolute_time()
             + (uint64_t)(kSimpleEQMixerControlLeaseSeconds * gMixer_HostTicksPerSecond);
         atomic_store_explicit(&theHeader->mixerControlLeaseDeadlineHostTime, theDeadline, memory_order_release);
@@ -2281,8 +2281,8 @@ static OSStatus SimpleEQAudio_SetDevicePropertyData(AudioServerPlugInDriverRef i
         case kSimpleEQMixerGainSelector:
             FailWithAction(inDataSize != sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_SetDevicePropertyData: wrong size for kSimpleEQMixerGainSelector");
             FailWithAction(*((const CFPropertyListRef*)inData) == NULL || CFGetTypeID(*((const CFPropertyListRef*)inData)) != CFDictionaryGetTypeID(), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQMixerGainSelector expects a CFDictionaryRef");
-            // 変更を告知しない。リースの更新で同じ表が周期的に押し込まれるため、告知すると
-            // 中身が変わらないまま通知だけが撒かれ続ける。
+            // 変更を告知しない。
+            // リースの更新で同じ表が周期的に押し込まれるため、告知すると中身が変わらないまま通知だけが撒かれ続ける。
             SimpleEQMixer_ApplyGainTable((CFDictionaryRef)(*((const CFPropertyListRef*)inData)));
             break;
 
@@ -3110,8 +3110,8 @@ static OSStatus SimpleEQAudio_WillDoIOOperation(AudioServerPlugInDriverRef inDri
     FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_WillDoIOOperation: bad driver reference");
     FailWithAction(inDeviceObjectID != kObjectID_Device, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_WillDoIOOperation: bad device ID");
 
-    // MixOutput は宣言しない。宣言するとそのサイクルの以降の出力オペレーションが起きず、
-    // WriteMix が来なくなる (実測で確認済みの唯一の条件)。
+    // MixOutput は宣言しない。
+    // 宣言するとそのサイクルの以降の出力オペレーションが起きず、WriteMix が来なくなる (実測で確認済みの唯一の条件)。
     bool willDo = (inOperationID == kAudioServerPlugInIOOperationWriteMix)
                || (inOperationID == kAudioServerPlugInIOOperationProcessOutput);
 
@@ -3151,8 +3151,8 @@ static OSStatus SimpleEQAudio_DoIOOperation(AudioServerPlugInDriverRef inDriver,
     }
     else if(inOperationID == kAudioServerPlugInIOOperationProcessOutput)
     {
-        // WriteMix にある締切超過のスキップをここには設けない。スキップするとその区間だけ
-        // 減衰されない音が出るので、遅れても掛けるほうが実害が小さい。
+        // WriteMix にある締切超過のスキップをここには設けない。
+        // スキップするとその区間だけ減衰されない音が出るので、遅れても掛けるほうが実害が小さい。
         SimpleEQMixer_ProcessOutput(inClientID, (float*)ioMainBuffer, inIOBufferFrameSize);
     }
 

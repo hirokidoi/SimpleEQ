@@ -2,8 +2,8 @@ import XCTest
 import SimpleEQRingC
 @testable import SimpleEQ
 
-/// ドライバのビルド設定が名乗る値と、ドライバのソースが宣言する値の一致を担保する。ビルド設定は
-/// ソース側の宣言から導出できず同じ値が 2 箇所に置かれるため、一致を人手の規律に委ねない。
+/// ドライバのビルド設定が名乗る値と、ドライバのソースが宣言する値の一致を担保する。
+/// ビルド設定はソース側の宣言から導出できず同じ値が 2 箇所に置かれるため、一致を人手の規律に委ねない。
 final class DriverSourceConsistencyTests: XCTestCase {
 
     func testDriverBundleVersionMatchesTheSharedHeaderConstants() throws {
@@ -52,8 +52,8 @@ final class DriverSourceConsistencyTests: XCTestCase {
         )
     }
 
-    /// 「持っている」と答えたセレクタには「変更できるか」も答える。片方だけに足すと、同じセレクタに
-    /// 対して持っていると知らないを同時に答える状態になる。
+    /// 「持っている」と答えたセレクタには「変更できるか」も答える。
+    /// 片方だけに足すと、同じセレクタに対して持っていると知らないを同時に答える状態になる。
     func testEveryDeclaredPropertyAlsoAnswersWhetherItIsSettable() throws {
         for objectKind in ["PlugIn", "Box", "Device", "Stream", "Control"] {
             let declared = try Self.driverSourceCaseLabels(inFunction: "Has\(objectKind)Property")

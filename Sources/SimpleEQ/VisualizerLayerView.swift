@@ -2,9 +2,8 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
-/// LED バー・ピークキャップ・L/R レベルメーター (クリップセル込み) の描画を CALayer の
-/// 幾何更新で担う View。当たり判定は持たない (hitTest 常に nil)。ジェスチャ・カーソル出し分けは
-/// 手前に重なる別のビューが担う。
+/// LED バー・ピークキャップ・L/R レベルメーター (クリップセル込み) の描画を CALayer の幾何更新で担う View。
+/// 当たり判定は持たない (hitTest 常に nil)。ジェスチャ・カーソル出し分けは手前に重なる別のビューが担う。
 struct VisualizerLayerView: View {
     @ObservedObject var viewModel: EQViewModel
     var compact: Bool = false
@@ -39,21 +38,21 @@ private struct VisualizerHostRepresentable: NSViewRepresentable {
     }
 }
 
-/// タイマ起動可否の門 (LED レイヤの毎フレーム駆動)。ビジュアライザの表示要否と、ホストビューが実際に
-/// 利用者から見えているかの両方が真のときだけ起動可とする。
+/// タイマ起動可否の門 (LED レイヤの毎フレーム駆動)。
+/// ビジュアライザの表示要否と、ホストビューが実際に利用者から見えているかの両方が真のときだけ起動可とする。
 enum VisualizerTimerGate {
     static func shouldRun(visualizerActive: Bool, hostViewVisible: Bool) -> Bool {
         visualizerActive && hostViewVisible
     }
 }
 
-/// LED バー (EQ 本体)・L/R レベルメーター・EQ chrome (ゲイン範囲の白オーバーレイ/
-/// ハンドル線/ドラッグ帯・バッジ/baseline/gutter/dBFS 軸目盛り) の描画を CALayer で担うホストビュー。
+/// LED バー (EQ 本体)・L/R レベルメーター・EQ chrome
+/// (ゲイン範囲の白オーバーレイ/ハンドル線/ドラッグ帯・バッジ/baseline/gutter/dBFS 軸目盛り) の描画を CALayer で担うホストビュー。
 ///
 /// レイヤの並び順は合成順序に効く。崩さないこと。
 ///
-/// 座標系: このビューは isFlipped=true (y 下方向)。画像を貼るレイヤの contentsRect は、y=0 が
-/// 画像の論理上端・y=1 が論理下端という規約で解釈される。
+/// 座標系: このビューは isFlipped=true (y 下方向)。
+/// 画像を貼るレイヤの contentsRect は、y=0 が画像の論理上端・y=1 が論理下端という規約で解釈される。
 final class VisualizerHostView: NSView {
     private let viewModel: EQViewModel
     private let compact: Bool
@@ -90,8 +89,8 @@ final class VisualizerHostView: NSView {
     private var appliedDisplayRevision: Int?
     /// 描画リビジョンでは表せない契機で反映が要ることを表す。
     private var needsFrameApply = true
-    /// ウィンドウが表示されているか (NSWindow.isVisible の KVO 監視から更新)。遮蔽状態
-    /// (NSWindow.occlusionState) は検出に失敗する実行環境があるため可視性の根拠にしない。
+    /// ウィンドウが表示されているか (NSWindow.isVisible の KVO 監視から更新)。
+    /// 遮蔽状態 (NSWindow.occlusionState) は検出に失敗する実行環境があるため可視性の根拠にしない。
     var windowVisible = false
     /// アプリ全体が非表示か (NSApplication.didHide/didUnhide から更新)。
     var appHidden = false
@@ -139,8 +138,8 @@ final class VisualizerHostView: NSView {
         viewModel.refreshHandleReveal(pointerInsideCanvas: inside, pointerButtonDown: state.buttonDown)
     }
 
-    /// レイヤの暗黙アクションを一括で無効化する。幾何の代入は必ず CATransaction 側の無効化
-    /// (setDisableActions) と併用する。
+    /// レイヤの暗黙アクションを一括で無効化する。
+    /// 幾何の代入は必ず CATransaction 側の無効化 (setDisableActions) と併用する。
     nonisolated(unsafe) static let disabledLayerActions: [String: CAAction] = [
         "position": NSNull(), "bounds": NSNull(), "contents": NSNull(),
         "contentsRect": NSNull(), "hidden": NSNull(), "backgroundColor": NSNull(),
@@ -171,8 +170,9 @@ final class VisualizerHostView: NSView {
 
     // MARK: - SwiftUI からの入力反映
 
-    /// SwiftUI 側の更新契機から呼ぶ。@Published の変化を受けて、レイアウトの
-    /// invalidate・タイマ起動可否の再評価・(Timer 停止中に限った) chrome の現在値反映を行う唯一の口。
+    /// SwiftUI 側の更新契機から呼ぶ。
+    /// @Published の変化を受けて、
+    /// レイアウトの invalidate・タイマ起動可否の再評価・(Timer 停止中に限った) chrome の現在値反映を行う唯一の口。
     func viewModelSettingsChanged() {
         needsFrameApply = true
         idleFrameCount = 0
@@ -243,8 +243,8 @@ final class VisualizerHostView: NSView {
         appUnhideObserver = nil
     }
 
-    /// タイマ起動可否を再評価する。ウィンドウの表示状態はビジュアライザの表示要否へ書き戻さない
-    /// (可視性の門はこのホストビュー内部の局所状態に留める)。
+    /// タイマ起動可否を再評価する。
+    /// ウィンドウの表示状態はビジュアライザの表示要否へ書き戻さない (可視性の門はこのホストビュー内部の局所状態に留める)。
     func updateTimerRunning() {
         let hostViewVisible = windowVisible && !appHidden
         let shouldRun = VisualizerTimerGate.shouldRun(visualizerActive: viewModel.visualizerActive, hostViewVisible: hostViewVisible)
@@ -409,8 +409,8 @@ final class VisualizerHostView: NSView {
     }
     private var lastAppliedMeterSnapshot: MeterReflectionSnapshot?
 
-    /// 表示値を読み、点灯レイヤの高さ・キャップレイヤの位置/選択スライス/可視性・クリップセルの
-    /// 可視性を更新する。タイマ発火のたびに呼ぶほか、レイアウト直後・タイマの開始/停止の直後にも呼ぶ。
+    /// 表示値を読み、点灯レイヤの高さ・キャップレイヤの位置/選択スライス/可視性・クリップセルの可視性を更新する。
+    /// タイマ発火のたびに呼ぶほか、レイアウト直後・タイマの開始/停止の直後にも呼ぶ。
     @discardableResult
     private func applyGeometry(inEffect: Bool? = nil) -> Bool {
         guard let imageSet else { return false }
@@ -495,15 +495,15 @@ final class VisualizerHostView: NSView {
     }
 }
 
-/// RGB 値から CGColor を直接組み立てる (SwiftUI Color 経由の変換を挟まない。Color.cgColor は
-/// 環境依存の解決を伴いうるため、定数の色の変換はこちらのほうが単純で確実)。
+/// RGB 値から CGColor を直接組み立てる
+/// (SwiftUI Color 経由の変換を挟まない。Color.cgColor は環境依存の解決を伴いうるため、
+/// 定数の色の変換はこちらのほうが単純で確実)。
 func cgColor(_ rgb: EQLayout.RGB, alpha: Double = 1) -> CGColor {
     CGColor(red: rgb.r / 255, green: rgb.g / 255, blue: rgb.b / 255, alpha: alpha)
 }
 
-/// 1 バンド (EQ 本体) または 1 チャンネル (L/R レベルメーター) ぶんの消灯/点灯/キャップの各レイヤを
-/// まとめて持つ。いずれも焼いた同じ帯画像の組を共有し、反映のたびに触るのは
-/// 点灯の高さとキャップの位置/選択スライス/可視性だけ (消灯は静的)。
+/// 1 バンド (EQ 本体) または 1 チャンネル (L/R レベルメーター) ぶんの消灯/点灯/キャップの各レイヤをまとめて持つ。
+/// いずれも焼いた同じ帯画像の組を共有し、反映のたびに触るのは点灯の高さとキャップの位置/選択スライス/可視性だけ (消灯は静的)。
 final class BandColumn {
     let dimLayer = CALayer()
     let litLayer = CALayer()
@@ -568,8 +568,8 @@ struct MeterChromeGeometry {
     let barRects: [CGRect]
 }
 
-/// EQ chrome (ゲイン範囲の白オーバーレイ / ハンドル線 / ドラッグ帯・バッジ / baseline / gutter /
-/// dBFS 軸目盛り) のレイヤ一式。サブレイヤの並び順は合成順序に効く。崩さないこと。
+/// EQ chrome (ゲイン範囲の白オーバーレイ / ハンドル線 / ドラッグ帯・バッジ / baseline / gutter / dBFS 軸目盛り) のレイヤ一式。
+/// サブレイヤの並び順は合成順序に効く。崩さないこと。
 @MainActor
 final class EQChromeLayers {
     /// LED の奥に置くコンテナ。ゲイン範囲の白オーバーレイ (EQ バンドごと 1 枚 + L/R メーターぶん 2 枚) のみを持つ。
@@ -640,8 +640,8 @@ final class EQChromeLayers {
 
     // MARK: - レイアウト時 (拡大率・プロット矩形・ホスト高・フロア値が変わったときのみ)
 
-    /// レイアウト時にのみ呼ぶ。コンテナの frame をホスト全域へ合わせ、焼き直し契機が変わっていれば
-    /// baseline/gutter/axis を焼き直して静止配置する。
+    /// レイアウト時にのみ呼ぶ。
+    /// コンテナの frame をホスト全域へ合わせ、焼き直し契機が変わっていれば baseline/gutter/axis を焼き直して静止配置する。
     func layout(hostBounds: CGRect, geo: EQPlotGeometry) {
         backChromeContainer.frame = hostBounds
         frontChromeContainer.frame = hostBounds
@@ -680,8 +680,8 @@ final class EQChromeLayers {
     func applyFrame(viewModel: EQViewModel, geo: EQPlotGeometry, meter: MeterChromeGeometry?, showLevelMeter: Bool, inEffect: Bool) {
         let plotRect = geo.plotRect
         let plotHeight = plotRect.height
-        // このグリッドの bottomY は plotRect.maxY (ホスト座標) を取る。backChromeContainer/
-        // frontChromeContainer は frame = ホスト全域で、子はこのビューのローカル座標をそのまま使う。
+        // このグリッドの bottomY は plotRect.maxY (ホスト座標) を取る。
+        // backChromeContainer/frontChromeContainer は frame = ホスト全域で、子はこのビューのローカル座標をそのまま使う。
         let grid = EQLayout.SegmentGrid(height: plotHeight, bottomY: plotRect.maxY, pixelGrid: geo.pixelGrid)
         let handleAlpha = viewModel.handleAlpha
         let handleVisible = handleAlpha >= EQLayout.handleVisibilityThreshold
@@ -837,8 +837,8 @@ final class EQChromeLayers {
     }
 }
 
-/// CGImage を「y 下方向論理座標」(y=0 が画像の論理上端) で焼くための共通の土台。CALayer 側の
-/// contentsRect もこれと同じ規約で解釈されることを実機検証済み。
+/// CGImage を「y 下方向論理座標」(y=0 が画像の論理上端) で焼くための共通の土台。
+/// CALayer 側の contentsRect もこれと同じ規約で解釈されることを実機検証済み。
 private func bakeImage(logicalSize: CGSize, scale: CGFloat, draw: (CGContext) -> Void) -> CGImage? {
     guard logicalSize.width > 0, logicalSize.height > 0 else { return nil }
     let pixelWidth = Int((logicalSize.width * scale).rounded())
@@ -854,8 +854,8 @@ private func bakeImage(logicalSize: CGSize, scale: CGFloat, draw: (CGContext) ->
     return ctx.makeImage()
 }
 
-/// 焼き付け先 (y 下方向に反転済みの CTM を持つ CGContext) へ文字を中央合わせで描く。文字の向きは
-/// CTM の反転だけでは揃わないため、flipped:true の NSGraphicsContext を明示的に push する。
+/// 焼き付け先 (y 下方向に反転済みの CTM を持つ CGContext) へ文字を中央合わせで描く。
+/// 文字の向きは CTM の反転だけでは揃わないため、flipped:true の NSGraphicsContext を明示的に push する。
 private func drawCenteredText(_ text: String, font: NSFont, color: Color, center: CGPoint, in ctx: CGContext) {
     let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(color)]
     let size = (text as NSString).size(withAttributes: attrs)
@@ -866,10 +866,11 @@ private func drawCenteredText(_ text: String, font: NSFont, color: Color, center
     NSGraphicsContext.current = previous
 }
 
-/// EQ 本体・L/R レベルメーターと EQ chrome が共有する帯画像 7 種の集合 (消灯/点灯 × 効いている/
-/// 素通し + キャップ + ゲイン範囲の白オーバーレイ用 + ドラッグ帯用)。幅はバー幅の上限値で焼き、
-/// 実際のバー幅へは横方向の伸縮で対応する。EQ 本体・レベルメーター・chrome が同じ縞パスを
-/// 共有することで、白オーバーレイ・ドラッグ帯が LED と段の位置がずれることを構造的に避ける。
+/// EQ 本体・L/R レベルメーターと EQ chrome が共有する帯画像 7 種の集合
+/// (消灯/点灯 × 効いている/素通し + キャップ + ゲイン範囲の白オーバーレイ用 + ドラッグ帯用)。
+/// 幅はバー幅の上限値で焼き、実際のバー幅へは横方向の伸縮で対応する。
+/// EQ 本体・レベルメーター・chrome が同じ縞パスを共有することで、
+/// 白オーバーレイ・ドラッグ帯が LED と段の位置がずれることを構造的に避ける。
 struct BandImageSet {
     let dimInEffect: CGImage
     let litInEffect: CGImage
@@ -883,14 +884,14 @@ struct BandImageSet {
         let gainRange: CGImage
         let dragBand: CGImage
     }
-    /// 焼いた画素寸法の元になった拡大率。段の矩形は必ずこの値で解釈する (window から都度
-    /// 読み直す値とは、拡大率が変わる瞬間に食い違いうるため)。
+    /// 焼いた画素寸法の元になった拡大率。
+    /// 段の矩形は必ずこの値で解釈する (window から都度読み直す値とは、拡大率が変わる瞬間に食い違いうるため)。
     let scale: CGFloat
 }
 
-/// 帯画像の組を焼く。焼き直す契機は (1) 拡大率の変化、(2) プロット高の変化、(3) ピークキャップの
-/// 明るさ寄せ量の設定変更の 3 つ。素通し状態の遷移は焼き直さず、画像の組の切り替えのみで
-/// 対応する。
+/// 帯画像の組を焼く。
+/// 焼き直す契機は (1) 拡大率の変化、(2) プロット高の変化、(3) ピークキャップの明るさ寄せ量の設定変更の 3 つ。
+/// 素通し状態の遷移は焼き直さず、画像の組の切り替えのみで対応する。
 enum BandImageBaker {
     static func bake(
         plotHeight: CGFloat, pixelGrid: EQLayout.PixelGrid, peakCapBrightenAmount: Double, rowCount: Int?,
@@ -903,8 +904,8 @@ enum BandImageBaker {
             height: plotHeight, bottomY: plotHeight, pixelGrid: pixelGrid, rowCount: rowCount
         )
 
-        // 消灯帯・点灯帯・chrome の 2 種は段の矩形を束ねた縞パスでクリップし、段の間の隙間を
-        // 透明に抜く。キャップ帯は段ぴったりのスライスしか使わないため縞は要らず、全高を塗る。
+        // 消灯帯・点灯帯・chrome の 2 種は段の矩形を束ねた縞パスでクリップし、段の間の隙間を透明に抜く。
+        // キャップ帯は段ぴったりのスライスしか使わないため縞は要らず、全高を塗る。
         let stripedPath = CGMutablePath()
         for i in 0..<grid.rowCount {
             let row = grid.rowY(i)
@@ -976,9 +977,9 @@ enum BandImageBaker {
     }
 }
 
-/// baseline (0dB 破線) / gutter (+/−/0 記号) / dBFS 軸目盛りの、chrome のうち「不透明度のみで
-/// 変わる」要素が焼く画像の組。位置決め (レイヤ frame の原点) は呼び出し側が
-/// 幾何から都度決めるため、ここでは論理サイズだけを添えて返す。
+/// baseline (0dB 破線) / gutter (+/−/0 記号) / dBFS 軸目盛りの、
+/// chrome のうち「不透明度のみで変わる」要素が焼く画像の組。
+/// 位置決め (レイヤ frame の原点) は呼び出し側が幾何から都度決めるため、ここでは論理サイズだけを添えて返す。
 struct ChromeImageSet {
     let baseline: CGImage
     let baselineSize: CGSize
@@ -990,8 +991,9 @@ struct ChromeImageSet {
     let scale: CGFloat
 }
 
-/// 画像の組を焼く。焼き直す契機は (拡大率, プロット矩形, ホスト高, フロア値) の組が
-/// 変わったとき (呼び出し側が Equatable な鍵でこれを判定する)。
+/// 画像の組を焼く。
+/// 焼き直す契機は (拡大率, プロット矩形, ホスト高, フロア値) の組が変わったとき
+/// (呼び出し側が Equatable な鍵でこれを判定する)。
 enum ChromeImageBaker {
     nonisolated(unsafe) static let gutterSignFont = NSFont.systemFont(ofSize: 18, weight: .semibold)
     nonisolated(unsafe) static let gutterZeroFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
@@ -1054,8 +1056,8 @@ struct DragBadgeImage {
     let size: CGSize
 }
 
-/// ドラッグ中バッジの焼き口。色の出し分け (boost/cut/zero) は整数 dB の符号だけから決まるため、
-/// 焼き直しの鍵に色を含める必要はない。
+/// ドラッグ中バッジの焼き口。
+/// 色の出し分け (boost/cut/zero) は整数 dB の符号だけから決まるため、焼き直しの鍵に色を含める必要はない。
 enum DragBadgeBaker {
     nonisolated(unsafe) static let font = NSFont.boldSystemFont(ofSize: 13)
     static let paddingH: CGFloat = 8

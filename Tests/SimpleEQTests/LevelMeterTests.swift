@@ -1,8 +1,7 @@
 import XCTest
 @testable import SimpleEQ
 
-/// 非対称平滑化 (attack/release)、および L/R マスター
-/// レベルの取得を実際の FFT パイプラインを通して検証する。
+/// 非対称平滑化 (attack/release)、および L/R マスターレベルの取得を実際の FFT パイプラインを通して検証する。
 final class LevelMeterTests: XCTestCase {
     private let attack = 0.8
     private let release = 0.3
@@ -22,9 +21,9 @@ final class LevelMeterTests: XCTestCase {
             let hopSize = LevelMeter.deriveHopSize(fftSize: fftSize)
             let totalHops = 5
 
-            // 粗い刻み: 複数 hop ぶんを溜めてから 1 回だけ解析を呼ぶ。capture() は 1 回の呼び出しで
-            // AudioConfig.maxRenderFrames を超える書き込みをクランプするため、書き込み自体は
-            // その上限内のチャンクへ分けて行う (取り込みは複数回・解析は 1 回)。
+            // 粗い刻み: 複数 hop ぶんを溜めてから 1 回だけ解析を呼ぶ。
+            // capture() は 1 回の呼び出しで AudioConfig.maxRenderFrames を超える書き込みをクランプするため、
+            // 書き込み自体はその上限内のチャンクへ分けて行う (取り込みは複数回・解析は 1 回)。
             let coarse = LevelMeter(bandFrequencies: EQSpec.FREQS, appliedSampleRate: rate)
             var remaining = hopSize * totalHops
             let chunk = [Float](repeating: 0.5, count: min(AudioConfig.maxRenderFrames, remaining))
@@ -164,8 +163,8 @@ final class LevelMeterTests: XCTestCase {
 
     // MARK: - resetPeaksToCurrentLevel (ピークホールド再有効化時の凍結値クリア)
 
-    // 大音量入力の直後に無音を数回解析させると、release 平滑化で表示レベルは下がる一方ピークは
-    // ホールド時間が尽きるまで凍結され続ける。
+    // 大音量入力の直後に無音を数回解析させると、
+    // release 平滑化で表示レベルは下がる一方ピークはホールド時間が尽きるまで凍結され続ける。
     func testResetPeaksToCurrentLevelClearsStalePeakDisparity() {
         let meter = makeMeter()
         writeFullScaleDummyAudio(into: meter)
@@ -230,8 +229,7 @@ final class LevelMeterTests: XCTestCase {
         XCTAssertEqual(meter.snapshot().stereo, floorStereo)
     }
 
-    // 大音量入力の直後に無音を数回解析させ、L/R のピークホールドが保持されている状態から
-    // 凍結値が現在の表示レベルへ揃うこと。
+    // 大音量入力の直後に無音を数回解析させ、L/R のピークホールドが保持されている状態から凍結値が現在の表示レベルへ揃うこと。
     func testResetPeaksToCurrentLevelClearsStalePeakDisparityForStereo() {
         let meter = makeMeter()
         writeStereoDummyAudio(into: meter, left: 1.0, right: 1.0)
@@ -299,9 +297,9 @@ final class LevelMeterTests: XCTestCase {
 
     // MARK: - 平滑化とピークの進行
 
-    // L/R の対象値は捕捉した振幅から閉形式で求まるため、smoothed(_:target:attack:release:) を
-    // hop の数だけ適用した理論値と突き合わせられる (バンドは FFT を経るため理論値を閉形式で
-    // 求められず、hopsAnalyzedForTesting による回数の一致で確認する)。
+    // L/R の対象値は捕捉した振幅から閉形式で求まるため、
+    // smoothed(_:target:attack:release:) を hop の数だけ適用した理論値と突き合わせられる
+    // (バンドは FFT を経るため理論値を閉形式で求められず、hopsAnalyzedForTesting による回数の一致で確認する)。
     func testStereoSmoothingRunsOncePerHopMatchingBandUpdateCount() {
         let meter = makeMeter()
         meter.attackCoef = 0.4

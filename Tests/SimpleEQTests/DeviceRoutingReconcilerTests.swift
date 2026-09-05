@@ -25,8 +25,9 @@ private func makeMinimalSharedRingReaderFixture() -> URL {
     return url
 }
 
-/// 「あるべき出力先の UID」と「実際に指しているデバイス ID」を独立に設定でき、内蔵フォールバックに
-/// よる張り替えと ID の入れ替わりを再現する。この代役へ触れる経路は直列キューが順序を作るため、同時に触れることが無い。
+/// 「あるべき出力先の UID」と「実際に指しているデバイス ID」を独立に設定でき、
+/// 内蔵フォールバックによる張り替えと ID の入れ替わりを再現する。
+/// この代役へ触れる経路は直列キューが順序を作るため、同時に触れることが無い。
 final class MockAudioRoutingEngine: AudioRoutingEngine, ActivatableAudioEngine, @unchecked Sendable {
     var intendedOutputDeviceUID: String?
     var intendedOutputDeviceUIDAtSuspension: String?
@@ -1325,15 +1326,15 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
     // 協力オブジェクトを実物のまま組み合わせ、モックはデバイス台帳と音声エンジンの境界だけに限り、
     // 単発の呼び出しではなく一連の遷移として駆動する。
 
-    // 稼働中 → 出力デバイスが消える → 退避に失敗 → 停止 → 別デバイスを選択 → 再開 → 出力経路が安全で
-    // 復帰対象が解決済みであること。あるべき出力先を台帳から除き、退避先候補も退避不能にして駆動する。
+    // 稼働中 → 出力デバイスが消える → 退避に失敗 → 停止 → 別デバイスを選択 → 再開 → 出力経路が安全で復帰対象が解決済みであること。
+    // あるべき出力先を台帳から除き、退避先候補も退避不能にして駆動する。
     func testScenarioK2StopThenResumeToAnotherDeviceAfterEvacuationFails() {
         let f = makeFixture(initialDriverDeviceID: driverDeviceID)
         XCTAssertEqual(f.engine.processingState, .active, "前提: 稼働中")
         XCTAssertNotNil(f.outputController.resolvedRestoreTargetID, "前提: 復帰対象は解決済み")
 
-        // 出力デバイスが消える (あるべき出力先が解決できなくなり、退避先も退避不能になる) →
-        // AUHAL 内蔵のフォールバックで実際の出力先が自ドライバ自身へ切り替わる。
+        // 出力デバイスが消える (あるべき出力先が解決できなくなり、退避先も退避不能になる)
+        // → AUHAL 内蔵のフォールバックで実際の出力先が自ドライバ自身へ切り替わる。
         f.directory.deviceIDsByUID[speakerUID] = nil
         f.directory.containsDriverDeviceIDs = [restoreTargetID]
         f.engine.actualOutputDeviceID = driverDeviceID
@@ -1374,8 +1375,7 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
         XCTAssertEqual(f.outputController.resolvedRestoreTargetID, restoreTargetID)
     }
 
-    // 起動切替で占有 → ユーザが別デバイスへ移す → 義務が畳まれる → 自ドライバへ戻す → 義務が再び立つ
-    // → クリーン終了で元のデバイスへ復帰し、ドライバが非表示化されること。
+    // 起動切替で占有 → ユーザが別デバイスへ移す → 義務が畳まれる → 自ドライバへ戻す → 義務が再び立つ → クリーン終了で元のデバイスへ復帰し、ドライバが非表示化されること。
     func testScenarioK1RestoreObligationFollowsOccupancyThroughCleanExit() {
         let f = makeFixture(initialDriverDeviceID: driverDeviceID, adoptsSystemOutputSelection: false)
         // 起動切替がまだ行われていないクリーンな状態へ戻してから、このシナリオの手順で組み立て直す。
@@ -1414,8 +1414,8 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
         XCTAssertEqual(f.directory.setHiddenCalls.last?.id, driverDeviceID)
     }
 
-    // 出力先を解決できない起動 → 停止状態で立ち上がり、ピッカーが操作可能 → 選択 → 占有の再確立を
-    // 含めて再開されること。起動・再開の手順そのものを見るため、この 1 件だけは makeFixture を経由しない。
+    // 出力先を解決できない起動 → 停止状態で立ち上がり、ピッカーが操作可能 → 選択 → 占有の再確立を含めて再開されること。
+    // 起動・再開の手順そのものを見るため、この 1 件だけは makeFixture を経由しない。
     func testScenarioRestartRecoversViaSelectionAfterUnresolvedStartup() {
         let directory = MockAudioDeviceDirectory()
         directory.hiddenDeviceIDsByUID[driverUID] = driverDeviceID

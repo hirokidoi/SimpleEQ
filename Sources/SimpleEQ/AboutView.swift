@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// About 画面。EQ ウィンドウ・Settings ウィンドウ・Diagnostics ウィンドウとは独立したウィンドウ
-/// として開く。出すのはアプリの素性と、どの条項の誰のものかまで。条項の本文はバンドルへ同梱した
-/// ファイルそのものが持つため、この面はスクロールする対象を持たない。
+/// About 画面。EQ ウィンドウ・Settings ウィンドウ・Diagnostics ウィンドウとは独立したウィンドウとして開く。
+/// 出すのはアプリの素性と、どの条項の誰のものかまで。
+/// 条項の本文はバンドルへ同梱したファイルそのものが持つため、この面はスクロールする対象を持たない。
 struct AboutView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,8 +29,8 @@ struct AboutView: View {
                 .frame(width: iconSide, height: iconSide)
             Text("SimpleEQ")
                 .font(.system(size: 20, weight: .semibold))
-            // 文字列リテラルへ差し込むと LocalizedStringKey として扱われ、差し込んだ側の記号が
-            // 装飾として解釈される。バンドルから読んだ値は組み立ててから文字列として渡す。
+            // 文字列リテラルへ差し込むと LocalizedStringKey として扱われ、差し込んだ側の記号が装飾として解釈される。
+            // バンドルから読んだ値は組み立ててから文字列として渡す。
             Text(versionLabelPrefix + AppVersion.text)
                 .font(.system(size: 12.5))
                 .foregroundColor(EQLayout.Palette.faint)

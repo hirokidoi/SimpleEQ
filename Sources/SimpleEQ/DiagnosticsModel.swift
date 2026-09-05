@@ -22,8 +22,8 @@ final class DiagnosticsModel: ObservableObject {
 
     private let engine: AudioEngine
     private let audioWorld: AudioWorld
-    /// 書き出しのファイル操作を行うキュー。置き場は画面から選び直せるため、応答の遅い置き場を
-    /// 選ばれてもメインスレッドを止めないようにする。
+    /// 書き出しのファイル操作を行うキュー。
+    /// 置き場は画面から選び直せるため、応答の遅い置き場を選ばれてもメインスレッドを止めないようにする。
     nonisolated private static let fileQueue = DispatchQueue(label: "SimpleEQ.diagnostics.export", qos: .utility)
 
     init(engine: AudioEngine, audioWorld: AudioWorld, exportDirectory: URL = DiagnosticsExport.defaultDirectory()) {
@@ -43,8 +43,8 @@ final class DiagnosticsModel: ObservableObject {
         }
     }
 
-    /// 取りこぼしてはならない単発の依頼として送る (定期更新の畳み込みに巻き込まれて消えることを
-    /// 避けるため、鍵を共有しない)。
+    /// 取りこぼしてはならない単発の依頼として送る
+    /// (定期更新の畳み込みに巻き込まれて消えることを避けるため、鍵を共有しない)。
     func reset() {
         audioWorld.submitUncoalesced { [engine, weak self] token in
             // 基準値を立てる前に共有ヘッダの現在値を取り込む。
@@ -79,8 +79,9 @@ final class DiagnosticsModel: ObservableObject {
         }
     }
 
-    /// その場で取ったスナップショットを書き出す。画面へ押し出された値は画面が開いている間しか
-    /// 更新されないため、書き出しにはそれを使わず、リセットと同じ単発の依頼で取り直す。
+    /// その場で取ったスナップショットを書き出す。
+    /// 画面へ押し出された値は画面が開いている間しか更新されないため、書き出しにはそれを使わず、
+    /// リセットと同じ単発の依頼で取り直す。
     func export(now: Date = Date()) {
         // 置き場は UI 世界の値のため、依頼を投げる前 (メインスレッド) に読んで持ち回る。
         let directory = exportDirectory

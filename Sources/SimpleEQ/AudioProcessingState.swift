@@ -3,8 +3,8 @@ enum ProcessingState: Equatable {
     case suspended(SuspensionCause)
 }
 
-/// 停止の種別を表す識別子。文言・再開手順などの意味的データは持たず、種別ごとの扱いの違いは
-/// すべて対応表へ切り出す。
+/// 停止の種別を表す識別子。
+/// 文言・再開手順などの意味的データは持たず、種別ごとの扱いの違いはすべて対応表へ切り出す。
 enum SuspensionCause: Equatable, CaseIterable {
     /// 共有メモリまたは安全な出力先のいずれかが揃わず、音声経路を構成できない。
     case routeUnavailable
@@ -31,8 +31,8 @@ enum SuspensionPolicy {
         }
     }
 
-    /// 停止中に維持しない種別 (再起動を前提とする停止) で維持すると、誰も消費しないデバイスを
-    /// 一覧に残したまま戻す手段が無くなる。
+    /// 停止中に維持しない種別 (再起動を前提とする停止) で維持すると、
+    /// 誰も消費しないデバイスを一覧に残したまま戻す手段が無くなる。
     static func maintainsDriverVisibility(_ state: ProcessingState) -> Bool {
         switch state {
         case .active: return true

@@ -12,8 +12,7 @@ struct RootView: View {
         VStack(spacing: 0) {
             TopBarView(viewModel: viewModel, mixer: mixer, onOpenWindow: onOpenWindow)
             HStack(spacing: 0) {
-                // L/R レベルメーター表示が OFF の間は、その列のビューを HStack から
-                // 除去することで EQ 本体が広がる。
+                // L/R レベルメーター表示が OFF の間は、その列のビューを HStack から除去することで EQ 本体が広がる。
                 ZStack(alignment: .topLeading) {
                     VisualizerLayerView(viewModel: viewModel)
                     HStack(spacing: 0) {

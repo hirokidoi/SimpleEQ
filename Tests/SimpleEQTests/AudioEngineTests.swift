@@ -34,9 +34,10 @@ private func makeMinimalSharedRingReaderFixture(
     return url
 }
 
-/// テスト実行環境で駆動に使える出力デバイス (ID + UID) を選ぶ。実 AudioUnit を組み立てるには有効な
-/// AudioDeviceID が要るため、実行環境に存在するデバイスを都度読んで使う。自ドライバとそれを内包する
-/// Aggregate は選ばない (書き手の IO を揺らして再生中の音に触れるため)。どれも使えない場合は nil。
+/// テスト実行環境で駆動に使える出力デバイス (ID + UID) を選ぶ。
+/// 実 AudioUnit を組み立てるには有効な AudioDeviceID が要るため、実行環境に存在するデバイスを都度読んで使う。
+/// 自ドライバとそれを内包する Aggregate は選ばない (書き手の IO を揺らして再生中の音に触れるため)。
+/// どれも使えない場合は nil。
 private func usableOutputDevice() -> (deviceID: AudioDeviceID, uid: String)? {
     func isUsable(_ id: AudioDeviceID, _ uid: String) -> Bool {
         let containsDriver = containsDriverDevice(id, driverDeviceUID: DriverConfig.deviceUID, testToken)
@@ -449,8 +450,8 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken), "前提: 実デバイスへの組み立てが成立すること")
         XCTAssertEqual(engine.outputGain, 0)
 
-        // 初回 bind では音量 0 だけでもゲインが 0 になるため、採用がユニティへ戻る 2 回目の
-        // bind まで見ないとミュートが効いているかを判別できない。
+        // 初回 bind では音量 0 だけでもゲインが 0 になるため、
+        // 採用がユニティへ戻る 2 回目の bind まで見ないとミュートが効いているかを判別できない。
         let otherUIDDevice = ResolvedOutputDevice(uid: "another-uid-for-silence-test", deviceID: device.deviceID)
         XCTAssertTrue(engine.switchOutputDevice(to: otherUIDDevice, testToken), "前提: 別 UID への張り替えが成立すること")
 

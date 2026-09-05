@@ -698,8 +698,7 @@ final class EQViewModel: ObservableObject {
         resolvedOutputDeviceName = Self.unresolvedOutputDeviceName
     }
 
-    /// 是正パスが出力先の実体を差し替えたこと、またはユーザの選び直しが成功した
-    /// ことを表示へ反映する単一の入口。
+    /// 是正パスが出力先の実体を差し替えたこと、またはユーザの選び直しが成功したことを表示へ反映する単一の入口。
     func adoptOutputDevice(_ device: ResolvedOutputDevice, name: String) {
         guard sessionOutputDeviceUID != device.uid
             || confirmedOutputDeviceUID != device.uid

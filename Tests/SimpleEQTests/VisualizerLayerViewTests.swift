@@ -411,8 +411,8 @@ final class VisualizerHostViewTests: XCTestCase {
         XCTAssertFalse(hostView.visualizerTimerRunning, "アプリが非表示になったら止まる")
     }
 
-    // LED 領域の高さは padding とラベル行の積み上げで決まる。段の刻みを決める定数がその実寸から
-    // ずれると、段が領域を埋めきらず上端に余りが出る。
+    // LED 領域の高さは padding とラベル行の積み上げで決まる。
+    // 段の刻みを決める定数がその実寸からずれると、段が領域を埋めきらず上端に余りが出る。
     func testCompactLedHeightMatchesTheLaidOutVisualizerHeight() throws {
         let hosting = NSHostingView(rootView: CompactRootView(viewModel: makeVM(), mixer: makeMixer()))
         hosting.frame = CGRect(origin: .zero, size: EQLayout.compactWindowDefaultSize)
@@ -431,8 +431,8 @@ final class VisualizerHostViewTests: XCTestCase {
         return nil
     }
 
-    // モード切替は contentView ごと差し替える。捨てたビューのタイマが止まらなければ、切り替えるたびに
-    // 誰も見ていない描画の駆動が積み上がる。
+    // モード切替は contentView ごと差し替える。
+    // 捨てたビューのタイマが止まらなければ、切り替えるたびに誰も見ていない描画の駆動が積み上がる。
     func testTimerStopsWhenTheHostViewLeavesItsWindow() {
         let vm = makeVM()
         vm.visualizerActive = true
@@ -557,8 +557,8 @@ final class VisualizerHostViewTests: XCTestCase {
         XCTAssertTrue(hostView.eqColumns[band].capLayer.isHidden)
     }
 
-    /// 実際の解析を通じて左チャンネルだけをフルスケール超過させる (右は無音)。ちょうどフルスケールは
-    /// 超過に含めないため、1 を上回る振幅を与える。
+    /// 実際の解析を通じて左チャンネルだけをフルスケール超過させる (右は無音)。
+    /// ちょうどフルスケールは超過に含めないため、1 を上回る振幅を与える。
     private func captureLeftChannelClip(vm: EQViewModel, engine: AudioEngine, now: Date) {
         vm.visualizerActive = true
         let frameCount = 8192

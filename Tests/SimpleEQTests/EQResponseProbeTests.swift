@@ -1,8 +1,8 @@
 import XCTest
 @testable import SimpleEQ
 
-/// EQResponseProbe の実機統合テスト。実 AUNBandEQ を組む (出力デバイスは不要 — オフラインの
-/// エフェクトチェーンのみ)。ウォームアップ長と内部状態の落とし方の妥当性をここで担保する。
+/// EQResponseProbe の実機統合テスト。実 AUNBandEQ を組む (出力デバイスは不要 — オフラインのエフェクトチェーンのみ)。
+/// ウォームアップ長と内部状態の落とし方の妥当性をここで担保する。
 final class EQResponseProbeTests: XCTestCase {
     private let perfect: [Double] = [-2, 0, 2, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3, 4, 5, 6, 7, 8, 7, 5]
     private let eargasmExplosion: [Double] = [-2, 0, 2, 4, 5, 6, 5, 4, 3, 2, 1, 2, 3, 4, 5, 3, 0, 8, 7, 5]
@@ -21,8 +21,8 @@ final class EQResponseProbeTests: XCTestCase {
         }
     }
 
-    /// 期待値は実測値 (許容 0.1dB)。レートごとに測るのは、ウォームアップ長を秒で持っている以上
-    /// レートによって不足しうるため。
+    /// 期待値は実測値 (許容 0.1dB)。
+    /// レートごとに測るのは、ウォームアップ長を秒で持っている以上レートによって不足しうるため。
     func testMatchesHarnessValuesAt48kHz() {
         let probe = EQResponseProbe()
 

@@ -77,8 +77,9 @@ func findVisibleDeviceID(forUID target: String, needsOutput: Bool, _ token: Audi
     allDeviceIDs(token).first { deviceUID($0, token) == target && deviceHasStreams($0, needsOutput: needsOutput, token) }
 }
 
-/// UID からデバイスを解決する。非表示デバイスも列挙を経由せず解決できるが、環境によって
-/// 全デバイスで解決に失敗しうるため、非表示解決能力が必要な場合に限って使う。
+/// UID からデバイスを解決する。
+/// 非表示デバイスも列挙を経由せず解決できるが、環境によって全デバイスで解決に失敗しうるため、
+/// 非表示解決能力が必要な場合に限って使う。
 func translateUIDToDeviceID(forUID targetUID: String, _ token: AudioWorldToken) -> AudioDeviceID? {
     var uidCF = targetUID as CFString
     var resolvedID = AudioDeviceID(kAudioObjectUnknown)

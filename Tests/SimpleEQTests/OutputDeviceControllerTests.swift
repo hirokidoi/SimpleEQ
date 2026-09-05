@@ -202,8 +202,8 @@ final class OutputDeviceControllerTests: XCTestCase {
         XCTAssertEqual(mock.setDefaultOutputCalls, [], "デフォルト出力を動かしてはならない")
     }
 
-    // デフォルト出力が既に自ドライバのとき、その UID を復帰先に記録してはならない。記録すると
-    // 切り戻し先が自ドライバのままになり、戻しても無音が解けない。
+    // デフォルト出力が既に自ドライバのとき、その UID を復帰先に記録してはならない。
+    // 記録すると切り戻し先が自ドライバのままになり、戻しても無音が解けない。
     func testDoesNotOccupyWhenCurrentDefaultOutputIsDriverItselfWithoutPendingRestore() {
         let mock = MockAudioDeviceDirectory()
         mock.currentDefaultOutputID = loopbackDeviceID
@@ -468,8 +468,8 @@ final class OutputDeviceControllerTests: XCTestCase {
 
     func testCleanExitRestoresSavedDeviceAndClearsPending() {
         let mock = MockAudioDeviceDirectory()
-        // 占有継続 (デフォルト出力が自ドライバのデバイスのまま) を明示し、読み取り失敗時の
-        // 既定に依存せず「義務があるから切り戻す」経路を通ることを確かめる。
+        // 占有継続 (デフォルト出力が自ドライバのデバイスのまま) を明示し、
+        // 読み取り失敗時の既定に依存せず「義務があるから切り戻す」経路を通ることを確かめる。
         mock.currentDefaultOutputID = loopbackDeviceID
         mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
         mock.deviceIDsByUID[multiOutputUID] = multiOutputID
@@ -490,7 +490,7 @@ final class OutputDeviceControllerTests: XCTestCase {
     func testCleanExitDoesNothingWhenSavedUIDUnresolvable() {
         let mock = MockAudioDeviceDirectory()
         // multiOutputUID をあえて deviceIDsByUID に登録しない = 解決失敗を再現
-        // デフォルト出力は自ドライバのデバイスのまま (占有継続 = 復帰の義務がある状態)。
+        // デフォルト出力は自ドライバのデバイスのまま (占有継続 = 復帰の義務がある状態)
         mock.currentDefaultOutputID = loopbackDeviceID
         mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
 
@@ -522,8 +522,8 @@ final class OutputDeviceControllerTests: XCTestCase {
     // 保存済み UID は解決できても、CoreAudio 呼び出し自体が結果コード失敗を返す場合はクリアしてはならない。
     func testCleanExitDoesNotClearPendingWhenSetDefaultOutputDeviceIDFails() {
         let mock = MockAudioDeviceDirectory()
-        // 占有継続 (デフォルト出力が自ドライバのデバイスのまま) を明示し、読み取り失敗時の
-        // 既定に依存せず「義務があるから切り戻す」経路を通ることを確かめる。
+        // 占有継続 (デフォルト出力が自ドライバのデバイスのまま) を明示し、
+        // 読み取り失敗時の既定に依存せず「義務があるから切り戻す」経路を通ることを確かめる。
         mock.currentDefaultOutputID = loopbackDeviceID
         mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
         mock.deviceIDsByUID[multiOutputUID] = multiOutputID
@@ -890,8 +890,8 @@ final class OutputDeviceControllerTests: XCTestCase {
         XCTAssertFalse(controller.currentRestoreState(testToken).pending)
     }
 
-    // 保存済み UID が自ドライバを内包する構成を指す場合、退避してもガードが防ごうとしている状態の
-    // ままになるため、書き込まずに失敗を返す。
+    // 保存済み UID が自ドライバを内包する構成を指す場合、
+    // 退避してもガードが防ごうとしている状態のままになるため、書き込まずに失敗を返す。
     func testEnsureSafeDefaultOutputFailsWhenRestoreTargetContainsDriver() {
         let mock = MockAudioDeviceDirectory()
         mock.currentDefaultOutputID = loopbackDeviceID
@@ -987,8 +987,8 @@ final class OutputDeviceControllerTests: XCTestCase {
 
     // MARK: - 終了シーケンスの順序 (停止 → 復帰 → 復帰できたときだけ非表示化)
 
-    // 復帰に失敗した場合、非表示化を行ってはならない。行うと、デフォルト出力が自ドライバのデバイスを
-    // 指したまま一覧から消え、選び直す手段が無くなる。
+    // 復帰に失敗した場合、非表示化を行ってはならない。
+    // 行うと、デフォルト出力が自ドライバのデバイスを指したまま一覧から消え、選び直す手段が無くなる。
     func testCleanExitDoesNotHideDriverWhenRestoreFails() {
         let mock = MockAudioDeviceDirectory()
         // 占有継続 (デフォルト出力が自ドライバのデバイスのまま)。
@@ -1013,8 +1013,8 @@ final class OutputDeviceControllerTests: XCTestCase {
         XCTAssertTrue(outputController.currentRestoreState(testToken).pending, "復帰できていないため義務も残る")
     }
 
-    // 終了シーケンス本体は static 関数として切り出されており、実クラスの組み合わせと実際のキュー
-    // 経由の待ち合わせを通して、順序 (停止 → 復帰 → 非表示化) と完了待ちを固定できる。
+    // 終了シーケンス本体は static 関数として切り出されており、
+    // 実クラスの組み合わせと実際のキュー経由の待ち合わせを通して、順序 (停止 → 復帰 → 非表示化) と完了待ちを固定できる。
     func testPerformCleanExitSequenceRestoresAndHidesInOrderThroughRealAudioWorld() {
         let mock = MockAudioDeviceDirectory()
         // 復帰前: デフォルト出力は自ドライバのデバイスのまま (占有継続)。

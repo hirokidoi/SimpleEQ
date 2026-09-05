@@ -6,8 +6,7 @@ APP := build/Build/Products/Release/SimpleEQ.app
 DEST := /Applications/SimpleEQ.app
 
 # driver / install-driver / uninstall-driver は、アプリを経由せずドライバを入れ替えるための経路。
-# identifiers はソース (SimpleEQAudio.c) / project.pbxproj に直書きしてあるので、ここでは
-# ビルド引数を渡さない。
+# identifiers はソース (SimpleEQAudio.c) / project.pbxproj に直書きしてあるので、ここではビルド引数を渡さない。
 DRIVER_BUILD_DIR := Driver/SimpleEQAudio/build
 DRIVER_BUNDLE := $(DRIVER_BUILD_DIR)/Build/Products/Release/SimpleEQAudio.driver
 
@@ -42,19 +41,20 @@ test:
 
 # 検証が残した設定のファイルを消す。test と clean の両方から呼ぶため、対象の並びはここだけに置く。
 # 対象は接頭辞で書き下す。変数にすると、空になったときに利用者の設定すべてへ広がる。
-# 接頭辞は検証側が名前を組み立てる口 (TestDefaults) が付けるものと揃える。検証が増えても
-# 名前がその口を通る限り、ここは 1 つのままでよい。
+# 接頭辞は検証側が名前を組み立てる口 (TestDefaults) が付けるものと揃える。
+# 検証が増えても名前がその口を通る限り、ここは 1 つのままでよい。
 #
-# 消す側は find に渡す。シェルの展開でファイル名を並べる形だと、取りこぼしが積み重なって対象が
-# 増えたときに引数の上限へ当たり、検証が全件通っていても掃除の失敗で test が失敗扱いになる。
+# 消す側は find に渡す。
+# シェルの展開でファイル名を並べる形だと、取りこぼしが積み重なって対象が増えたときに引数の上限へ当たり、
+# 検証が全件通っていても掃除の失敗で test が失敗扱いになる。
 clean-test-prefs:
 	find "$(HOME)/Library/Preferences" -maxdepth 1 -type f \
 	     -name 'SimpleEQTests.*.plist' -delete
 
 # Regenerate the app icon PNGs from Scripts/makeicon.swift into the asset catalog.
-# Writes the throwaway compiled binary into build/, not tmp/: tmp/ is the project's shared
-# scratch (holds retained references and other workflows' artifacts), and clean must be able to
-# remove build output without touching it.
+# Writes the throwaway compiled binary into build/, not tmp/: tmp/ is the project's shared scratch
+# (holds retained references and other workflows' artifacts),
+# and clean must be able to remove build output without touching it.
 #
 # ドライバ用の icns も同じターゲットで作る。分けると、絵を変えたときに片方だけが更新された状態になる。
 icon:

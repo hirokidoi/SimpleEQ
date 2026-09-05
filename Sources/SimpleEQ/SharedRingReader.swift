@@ -5,8 +5,8 @@ import SimpleEQRingC
 
 /// 値の実体はレイアウトヘッダの 1 箇所のみで、ここでは薄い C 関数経由で取得するだけで複製しない。
 enum DriverConfig {
-    /// 表示専用であり、デバイスの解決キーとしての用途は無い (表示名は実行時に変更でき同名の
-    /// デバイスも同時に存在しうるため、解決キーには常に deviceUID を使う)。
+    /// 表示専用であり、デバイスの解決キーとしての用途は無い
+    /// (表示名は実行時に変更でき同名のデバイスも同時に存在しうるため、解決キーには常に deviceUID を使う)。
     static let deviceName = String(cString: simpleeq_driver_device_name())
 
     /// 識別・永続化・解決の唯一のキー。
@@ -39,8 +39,7 @@ enum DriverAvailability: Equatable {
     case notFound
     case versionMismatch
 
-    /// fileNotFound/headerInvalid はどちらも「有効なドライバが見当たらない」という同じ対処に
-    /// つながるため notFound へまとめる。
+    /// fileNotFound/headerInvalid はどちらも「有効なドライバが見当たらない」という同じ対処につながるため notFound へまとめる。
     init(openResult: Result<SharedRingReader, SharedRingReader.OpenFailure>) {
         switch openResult {
         case .success:
@@ -63,8 +62,8 @@ struct DriverVersion: Equatable {
 
 struct DriverProbe: Equatable {
     let availability: DriverAvailability
-    /// レイアウトバージョンが一致した場合にのみ読める。読めないこと自体が「再インストールが
-    /// 要る」ことを表す。
+    /// レイアウトバージョンが一致した場合にのみ読める。
+    /// 読めないこと自体が「再インストールが要る」ことを表す。
     let driverVersion: DriverVersion?
     let layoutVersion: UInt32?
 
@@ -129,8 +128,7 @@ final class SharedRingReader {
     private var clientRequestFramesEstimate: Int
     private var clientRequestWindowSampleCount = 0
 
-    /// 導出結果。N_p/N_c の観測値が変わるたびに read(into:frames:) 内で
-    /// 再計算する。
+    /// 導出結果。N_p/N_c の観測値が変わるたびに read(into:frames:) 内で再計算する。
     private var targetOccupancy: Int
     private var maxOccupancy: Int
 
@@ -147,13 +145,13 @@ final class SharedRingReader {
     /// バッファ量が上限を超え続けている継続時間の起点。上限以下に戻ったら nil に戻す。
     private var overshootStartHostTime: UInt64?
 
-    /// realtime 読み出しはこの値だけを読み、他の場所の値を直接読まない。書き換えは
-    /// レート適用の単一入口 (出力 AUHAL 停止中の 1 回) からのみ行う。
+    /// realtime 読み出しはこの値だけを読み、他の場所の値を直接読まない。
+    /// 書き換えはレート適用の単一入口 (出力 AUHAL 停止中の 1 回) からのみ行う。
     private var appliedSampleRate: Double
     /// 不連続の再同期で混ぜる 2 音のクロスフェード長 (無音との継ぎ目には使わない)。
     private var seamFadeTotalFrames: Int
-    /// 無音との継ぎ目のフェード長。EQ が扱う最も低い帯域の周期より遅く動かす (速いとその帯域に
-    /// エネルギーが残る)。
+    /// 無音との継ぎ目のフェード長。
+    /// EQ が扱う最も低い帯域の周期より遅く動かす (速いとその帯域にエネルギーが残る)。
     private var silenceSeamFadeTotalFrames: Int
     private var resyncFadeFramesRemaining = 0
     /// フェード中、再同期していなければ次に読んでいたはずの旧カーソル位置。
@@ -164,18 +162,15 @@ final class SharedRingReader {
     /// 直近に出力した 1 フレーム (包絡を掛ける前の値)。read(into:frames:) のみが読み書きする。
     private let lastEmittedFrame: UnsafeMutablePointer<Float>
 
-    /// realtime スレッド外からの store と、read(into:frames:) からの load/clear が異なる
-    /// スレッドで起こるため atomic。
+    /// realtime スレッド外からの store と、read(into:frames:) からの load/clear が異なるスレッドで起こるため atomic。
     private let occupancyResetRequestFlag = AtomicUInt64(0)
 
-    /// 積む側 (observeOutputLevel) と読む側 (read(into:frames:)) は同じ realtime スレッドで
-    /// 動くため atomic にしない。
+    /// 積む側 (observeOutputLevel) と読む側 (read(into:frames:)) は同じ realtime スレッドで動くため atomic にしない。
     private var silentOutputFrames = 0
 
     private(set) var metrics: AudioRuntimeMetrics
 
-    /// seqlock 経由 (書き込み中に読んでしまい破棄した回は更新しない)。realtime スレッドの
-    /// readCounter とは別カーソル。
+    /// seqlock 経由 (書き込み中に読んでしまい破棄した回は更新しない)。realtime スレッドの readCounter とは別カーソル。
     private var lastTimeSnapshot: (writeCounter: UInt64, hostTime: UInt64)?
 
     /// read(into:frames:) (realtime) のみが読み書きする。
@@ -263,8 +258,8 @@ final class SharedRingReader {
         }
         let stage1Base = UnsafeRawPointer(stage1Mapped)
 
-        // acquire ロードが「他の初期化フィールドも既に可視」であることの根拠。これより後でなければ
-        // layoutVersion 以降を読んではならない。
+        // acquire ロードが「他の初期化フィールドも既に可視」であることの根拠。
+        // これより後でなければ layoutVersion 以降を読んではならない。
         guard simpleeq_ring_load_magic_acquire(stage1Base) == simpleeq_ring_expected_magic() else {
             munmap(stage1Mapped, stage1Size)
             close(fd)
@@ -339,8 +334,7 @@ final class SharedRingReader {
     /// 読む側も同じ realtime 経路に限る (非アトミック)。
     var silentOutputFrameCount: Int { silentOutputFrames }
 
-    /// 要求はキューイングしない (連続する事象は 1 回のリセットへ束ねてよい)。realtime スレッド外
-    /// から呼ぶ。
+    /// 要求はキューイングしない (連続する事象は 1 回のリセットへ束ねてよい)。realtime スレッド外から呼ぶ。
     func requestOccupancyReset() {
         occupancyResetRequestFlag.store(1)
     }
@@ -406,8 +400,8 @@ final class SharedRingReader {
         return discard
     }
 
-    /// 実際に読めたフレーム数を返す (呼び出し側がアンダーラン検知に使う)。不足分は直前フレームへ
-    /// 継ぎ目の包絡ゲインを掛けた値で埋める。
+    /// 実際に読めたフレーム数を返す (呼び出し側がアンダーラン検知に使う)。
+    /// 不足分は直前フレームへ継ぎ目の包絡ゲインを掛けた値で埋める。
     func read(into dst: UnsafeMutablePointer<Float>, frames: Int) -> Int {
         let now = mach_absolute_time()
 
@@ -427,8 +421,8 @@ final class SharedRingReader {
         // acquire ロード: この値までの ring[] 書き込みが可視であることの根拠。
         let writeCounter = simpleeq_ring_load_counter_acquire(mappedBase)
 
-        // 世代カウンタは書き手の IO 再起動 (レート変更含む) のたびに進む。初回呼び出しは比較対象が
-        // 無いため記録のみ行う。
+        // 世代カウンタは書き手の IO 再起動 (レート変更含む) のたびに進む。
+        // 初回呼び出しは比較対象が無いため記録のみ行う。
         let currentEpoch = simpleeq_ring_load_epoch_acquire(mappedBase)
         let epochChanged = lastObservedEpoch.map { $0 != currentEpoch } ?? false
         lastObservedEpoch = currentEpoch
@@ -474,8 +468,8 @@ final class SharedRingReader {
             metrics.recordOccupancyBounds(targetFrames: targetOccupancy, maxFrames: maxOccupancy)
             lastRecordedOccupancyBounds = (targetOccupancy, maxOccupancy)
         }
-        // 上限超過を伴わないリセット契機の評価はここに置く (涸れ検知より後段だと、自分がリセット
-        // したバッファ量を同じ回の涸れ検知が読み、原因の切り分けができなくなる)。
+        // 上限超過を伴わないリセット契機の評価はここに置く
+        // (涸れ検知より後段だと、自分がリセットしたバッファ量を同じ回の涸れ検知が読み、原因の切り分けができなくなる)。
         if let cause = pendingOccupancyResetCause(available: available) {
             performOccupancyReset(
                 cause: cause, writeCounter: writeCounter, available: &available, requestedFrames: frames
@@ -560,8 +554,8 @@ final class SharedRingReader {
             }
         }
 
-        // プライミング: バッファ量が targetOccupancy に達するまで消費を止める (再生開始直後のクリック
-        // ノイズ防止)。primingEnabled: false は常に消費する (テスト用)。
+        // プライミング: バッファ量が targetOccupancy に達するまで消費を止める (再生開始直後のクリックノイズ防止)。
+        // primingEnabled: false は常に消費する (テスト用)。
         if !primed {
             if available < targetOccupancy {
                 // 掛ける前の値 (lastEmittedFrame) を控える: dst の値を控えるとゼロ埋め中にゲインが2乗で掛かる。
@@ -575,10 +569,9 @@ final class SharedRingReader {
                 silentOutputFrames = 0
                 return 0
             }
-            // 着地の切り詰め: 推定と食い違う回は目標を超えた位置で完了しうるため、超過をここで
-            // 捨てる (削り過ぎる側には倒れない)。
-            // 混ぜる相手は要らない。この時点までは実データを出しておらず (上の分岐が包絡を掛けた
-            // 値を返している)、継ぎ目は戻る側の包絡が担う。
+            // 着地の切り詰め: 推定と食い違う回は目標を超えた位置で完了しうるため、超過をここで捨てる (削り過ぎる側には倒れない)。
+            // 混ぜる相手は要らない。
+            // この時点までは実データを出しておらず (上の分岐が包絡を掛けた値を返している)、継ぎ目は戻る側の包絡が担う。
             let excess = OccupancyPolicy.framesToDiscard(
                 available: available, targetOccupancyFrames: targetOccupancy
             )
@@ -638,8 +631,8 @@ final class SharedRingReader {
         return toRead
     }
 
-    /// realtime の読み出しからは呼ばない。値の実体は共有ヘッダにあり、この reader インスタンスには
-    /// 保持しない。
+    /// realtime の読み出しからは呼ばない。
+    /// 値の実体は共有ヘッダにあり、この reader インスタンスには保持しない。
     func refreshDriverObservations() {
         metrics.recordDriverWritePositionObservations(
             presentationStallCount: simpleeq_ring_presentation_stall_count(mappedBase),
@@ -731,8 +724,8 @@ final class SharedRingReader {
         return Double(ioCycleFrames) / sampleRate * writerStallSafetyFactor
     }
 
-    /// seqlock 読み取り。前後の連番が一致しなければ書き込み中に読んでしまったとして再試行せず、
-    /// 直前の有効値を使う。
+    /// seqlock 読み取り。
+    /// 前後の連番が一致しなければ書き込み中に読んでしまったとして再試行せず、直前の有効値を使う。
     private func readTimeSnapshot() -> (writeCounter: UInt64, hostTime: UInt64)? {
         let seq1 = simpleeq_ring_load_ts_seq_acquire(mappedBase)
         if seq1 % 2 == 0 {
@@ -748,8 +741,8 @@ final class SharedRingReader {
         return lastTimeSnapshot
     }
 
-    /// 判定はヘッダの読み取りのみで完結する (HAL への問い合わせを含まない)。非稼働の間は経過が
-    /// 伸びても停止とみなさない。
+    /// 判定はヘッダの読み取りのみで完結する (HAL への問い合わせを含まない)。
+    /// 非稼働の間は経過が伸びても停止とみなさない。
     func checkWriterStalled(now: UInt64 = mach_absolute_time()) -> Bool {
         let running = simpleeq_ring_load_writer_io_is_running_acquire(mappedBase) != 0
         guard let snapshot = readTimeSnapshot() else {

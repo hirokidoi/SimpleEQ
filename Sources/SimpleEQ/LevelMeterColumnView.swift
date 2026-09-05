@@ -48,8 +48,8 @@ enum LevelMeterRenderer {
         barWidth(compact: true) * 2 + channelGap(compact: true)
     }
 
-    /// dBFS を 0 (下限) ... 1 (0dB) の充填比率へ変換する。下限値は Settings で調整可能な
-    /// 現在値を使い、各バンドビジュアライザと同じ設定に追従させる。
+    /// dBFS を 0 (下限) ... 1 (0dB) の充填比率へ変換する。
+    /// 下限値は Settings で調整可能な現在値を使い、各バンドビジュアライザと同じ設定に追従させる。
     @MainActor
     static func levelRatio(_ db: Double, viewModel: EQViewModel) -> Double {
         let floor = viewModel.floorDb

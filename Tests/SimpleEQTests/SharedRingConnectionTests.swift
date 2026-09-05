@@ -2,8 +2,7 @@ import XCTest
 import SimpleEQRingC
 @testable import SimpleEQ
 
-/// 実際のドライバ・CoreAudio を使わず、共有メモリファイルを模したフィクスチャをディスク上に
-/// 作成して実クラスのまま検証する。
+/// 実際のドライバ・CoreAudio を使わず、共有メモリファイルを模したフィクスチャをディスク上に作成して実クラスのまま検証する。
 final class SharedRingConnectionTests: XCTestCase {
     private static let magicOffset = 0
     private static let layoutVersionOffset = 4

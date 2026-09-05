@@ -35,8 +35,7 @@ struct DiagnosticsView: View {
         )
         .background(EQLayout.textPanelBackground)
         .foregroundColor(EQLayout.Palette.text)
-        // ネイティブ由来のコントロールはシステムのカラースキームに従うため、常時ダーク固定の
-        // このアプリに合わせて明示する。
+        // ネイティブ由来のコントロールはシステムのカラースキームに従うため、常時ダーク固定のこのアプリに合わせて明示する。
         .colorScheme(.dark)
         // 定期更新の入口。body の中で依頼を投入すると自己駆動ループになるため、body の外に限定する。
         .task(id: model.active) {
@@ -94,8 +93,8 @@ struct DiagnosticsView: View {
         PanelRow(title: title, subtitle: subtitle ?? Self.reservedSubtitleSpace, control: control)
     }
 
-    /// 副題の位置を空けたままにするための埋め。空文字だと行の高さに数えられないことがあるため
-    /// 空白 1 文字を置く。
+    /// 副題の位置を空けたままにするための埋め。
+    /// 空文字だと行の高さに数えられないことがあるため空白 1 文字を置く。
     private static let reservedSubtitleSpace = " "
 
     // MARK: - 操作
@@ -185,8 +184,8 @@ struct DiagnosticsView: View {
     }
 }
 
-/// バッファ量 (available) を空(左)〜上限バッファ量(右)の位置として見せるゲージ。位置の比率は呼び出し側が
-/// 導出したものを渡す。
+/// バッファ量 (available) を空(左)〜上限バッファ量(右)の位置として見せるゲージ。
+/// 位置の比率は呼び出し側が導出したものを渡す。
 private struct OccupancyGaugeView: View {
     let currentFraction: Double
     let targetFraction: Double

@@ -8,8 +8,8 @@ enum PresetHoverPreview {
 }
 
 /// プリセットレール: プリセットボタンと Settings ボタン。
-/// EQ が音に効いていない間はプリセットボタン群を減光して操作不能にする (Settings ボタンは
-/// 減光も無効化もしない)。プリセットボタンは長押しで保存ダイアログを開く。
+/// EQ が音に効いていない間はプリセットボタン群を減光して操作不能にする (Settings ボタンは減光も無効化もしない)。
+/// プリセットボタンは長押しで保存ダイアログを開く。
 struct PresetRailView: View {
     @ObservedObject var viewModel: EQViewModel
     @ObservedObject var mixer: MixerModel
@@ -29,8 +29,8 @@ struct PresetRailView: View {
                 }
             }
             .allowsHitTesting(viewModel.processingInEffect)
-            // 減光はプリセット群だけにかける。レール全体へかけると、EQ に依存しない Settings ボタンまで
-            // 効かないように見える。
+            // 減光はプリセット群だけにかける。
+            // レール全体へかけると、EQ に依存しない Settings ボタンまで効かないように見える。
             .opacity(viewModel.processingInEffect ? 1 : EQLayout.disabledOpacity)
             // ボタン群 (ボタン間の隙間含む) の hover でハンドル表示を継続し、ボタン間移動での点滅を防ぐ。
             // 群から完全に離れたらプレビューを解除して現在値へ戻す。
@@ -141,11 +141,11 @@ struct PresetRailView: View {
                 .onEnded { _ in
                     // 保存するのは今のゲインカーブであり、それが見えない状態では保存させない。
                     guard !mixer.shown else { return }
-                    // 保存対象を確定させる瞬間、プレビューをそのプリセットの保存済みカーブから
-                    // 今ライブで鳴っているカーブ (= これから保存される値) へアニメーションで戻す。
+                    // 保存対象を確定させる瞬間、
+                    // プレビューをそのプリセットの保存済みカーブから今ライブで鳴っているカーブ (= これから保存される値) へアニメーションで戻す。
                     viewModel.previewPreset = nil
-                    // ダイアログ表示中はホバー状態が false になりうるため、保存中状態を別に立てて
-                    // ハンドル表示条件を独立して保つ。
+                    // ダイアログ表示中はホバー状態が false になりうるため、
+                    // 保存中状態を別に立ててハンドル表示条件を独立して保つ。
                     viewModel.savingPreset = true
                     editingTitle = viewModel.title(for: preset)
                     editingPreset = preset

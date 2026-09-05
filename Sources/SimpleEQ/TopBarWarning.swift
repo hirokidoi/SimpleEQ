@@ -1,5 +1,5 @@
-/// 上部バーの警告の識別子。識別子だけを表し、文言・誘導先は持たない。表示内容は
-/// 対応表として別に持つ。
+/// 上部バーの警告の識別子。識別子だけを表し、文言・誘導先は持たない。
+/// 表示内容は対応表として別に持つ。
 enum TopBarWarningIdentifier: Equatable {
     /// 音に関わる資源を持つ直列キューが応答していない。
     case audioWorldUnresponsive
@@ -61,8 +61,8 @@ enum TopBarWarningPolicy {
     static func content(for identifier: TopBarWarningIdentifier) -> TopBarWarningContent {
         switch identifier {
         case .audioWorldUnresponsive:
-            // 是正手段がアプリの中に無い (相手は音声系の常駐)。誘導先を持たせても行き先が無いため
-            // 状態を伝えるに留める。
+            // 是正手段がアプリの中に無い (相手は音声系の常駐)。
+            // 誘導先を持たせても行き先が無いため状態を伝えるに留める。
             return TopBarWarningContent(message: "音声システムが応答していません", destination: .none)
         case .driverNotFound:
             return TopBarWarningContent(message: "ドライバが見つかりません", destination: .settings)

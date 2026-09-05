@@ -22,8 +22,8 @@ final class AudioWorldTests: XCTestCase {
         XCTAssertEqual(executed.value, ["second"], "未処理の同種の依頼は最新の1件だけが実行される")
     }
 
-    // 同じ key への再投入は、キュー上の実行位置も最新の投入位置 (末尾) へ動く。先に別の key で
-    // 確保されていた位置を追い越して古い値のまま実行されてはならない。
+    // 同じ key への再投入は、キュー上の実行位置も最新の投入位置 (末尾) へ動く。
+    // 先に別の key で確保されていた位置を追い越して古い値のまま実行されてはならない。
     func testSubmitCoalescingMovesQueuePositionSoLaterKeyDoesNotOvertakeEarlierOne() {
         let queue = DispatchQueue(label: "AudioWorldTests.reorder")
         queue.suspend()
@@ -115,8 +115,8 @@ final class AudioWorldTests: XCTestCase {
 
     // MARK: - submitUncoalescedAndWait (終了シーケンス専用の同期待ち)
 
-    // 終了シーケンスがオーディオ世界の完了を実際に待ってから戻ることを固定する。work の完了より
-    // 前に制御が戻ると、既定出力の復帰とドライバの非表示化がプロセスの終了に間に合わない。
+    // 終了シーケンスがオーディオ世界の完了を実際に待ってから戻ることを固定する。
+    // work の完了より前に制御が戻ると、既定出力の復帰とドライバの非表示化がプロセスの終了に間に合わない。
     func testSubmitUncoalescedAndWaitBlocksUntilWorkCompletes() {
         let world = AudioWorld()
         let completedInsideWork = Recorded<Bool>(false)

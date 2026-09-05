@@ -60,8 +60,8 @@ final class AudioActivationCoordinator: Sendable {
         self.waitBeforeRetry = waitBeforeRetry
     }
 
-    /// 共有メモリを開く → 未掌握なら可視化 → 未占有ならデフォルト出力を切替 → 出力先を解決 →
-    /// エンジンを組み立てる。解決・組み立てに失敗した場合、この試行で切替を行っていればのみ復帰させる。
+    /// 共有メモリを開く → 未掌握なら可視化 → 未占有ならデフォルト出力を切替 → 出力先を解決 → エンジンを組み立てる。
+    /// 解決・組み立てに失敗した場合、この試行で切替を行っていればのみ復帰させる。
     /// attempt が .launch のときだけヘッダ無効を再試行する (.resume は繰り返し通るため待たない)。
     @discardableResult
     func activate(
@@ -99,9 +99,10 @@ final class AudioActivationCoordinator: Sendable {
         return outcome(activeOutputDevice: outputDevice)
     }
 
-    /// ドライバ可用性とバージョンを確定する。共有メモリを開く結果だけから導かれ CoreAudio を
-    /// 呼ばないため、音に関わる資源を持つ直列キューの上で呼ばないこと (呼ぶと確定が
-    /// coreaudiod の応答待ちに巻き込まれる)。待ちを含むのでメインスレッドでも呼ばないこと。
+    /// ドライバ可用性とバージョンを確定する。
+    /// 共有メモリを開く結果だけから導かれ CoreAudio を呼ばないため、
+    /// 音に関わる資源を持つ直列キューの上で呼ばないこと (呼ぶと確定が coreaudiod の応答待ちに巻き込まれる)。
+    /// 待ちを含むのでメインスレッドでも呼ばないこと。
     func probeDriver() -> DriverProbe {
         DriverProbe(openResult: Self.openRetryingHeaderInvalid(
             maxAttempts: Self.headerInvalidRetryMaxAttempts,

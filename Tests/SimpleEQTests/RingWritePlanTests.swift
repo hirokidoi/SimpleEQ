@@ -2,8 +2,9 @@ import XCTest
 import SimpleEQRingC
 
 /// 書き込み位置を決定する純関数を、ドライバ本体を経由せず試験ターゲットから直接叩いて検証する。
-/// アンカー・絶対位置の算術は符号なし 64bit の巻き戻りを前提にしており、Swift の既定の算術演算子は
-/// オーバーフローで trap するため、この関数と同じ意味を保つには wrapping 演算子 (`&-`/`&+`) を使う。
+/// アンカー・絶対位置の算術は符号なし 64bit の巻き戻りを前提にしており、
+/// Swift の既定の算術演算子はオーバーフローで trap するため、
+/// この関数と同じ意味を保つには wrapping 演算子 (`&-`/`&+`) を使う。
 final class RingWritePlanTests: XCTestCase {
     private func computePlan(
         anchor: UInt64, anchorValid: Bool,

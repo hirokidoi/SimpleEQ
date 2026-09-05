@@ -66,8 +66,8 @@ final class RingBufferTests: XCTestCase {
 
     // MARK: - 並行性 (SPSC の writeFrame/readFrame アトミック化の回帰テスト)
 
-    /// producer/consumer を実スレッドで並行に走らせ、reader が観測する値列が単調増加である
-    /// ことを検証する恒久テスト。`swift test --sanitize=thread` 実行時の TSan 警告 0 件を回帰ゲートとして担保する。
+    /// producer/consumer を実スレッドで並行に走らせ、reader が観測する値列が単調増加であることを検証する恒久テスト。
+    /// `swift test --sanitize=thread` 実行時の TSan 警告 0 件を回帰ゲートとして担保する。
     func testConcurrentWriteReadIsRaceFreeUnderThreadSanitizer() {
         let channels = 1
         let iterations = 8192

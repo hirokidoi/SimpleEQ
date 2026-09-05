@@ -7,9 +7,8 @@ struct EQStreamFormat {
 }
 
 /// AUNBandEQ (Apple の N バンド EQ AudioUnit) を直列チェーンしてグラフィック EQ を実現する。
-/// 1 ユニットのバンド数は kAUNBandEQProperty_MaxNumberOfBands が上限のため、超える構成は
-/// ユニットを分割して直列につなぐ (パラメトリックピーキングは直列でも各帯域が独立に効くため、
-/// 単一 EQ と等価な合成応答が得られる)。
+/// 1 ユニットのバンド数は kAUNBandEQProperty_MaxNumberOfBands が上限のため、超える構成はユニットを分割して直列につなぐ
+/// (パラメトリックピーキングは直列でも各帯域が独立に効くため、単一 EQ と等価な合成応答が得られる)。
 final class EQUnit {
     /// units[0] が入力 (ring) 側から pull され、units[last] が render 対象。
     private var units: [AudioUnit] = []
@@ -157,8 +156,7 @@ final class EQUnit {
         }
     }
 
-    /// 最終ユニットへ render を依頼すると、チェーン接続をたどって先頭ユニットの input render
-    /// callback まで自動で pull される。
+    /// 最終ユニットへ render を依頼すると、チェーン接続をたどって先頭ユニットの input render callback まで自動で pull される。
     func render(
         flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
         timestamp: UnsafePointer<AudioTimeStamp>,

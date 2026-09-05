@@ -52,8 +52,8 @@ struct MixerView: View {
                         separator
                     }
                 }
-                // 並べ替えは行ではなくこの面が受ける。行に付けると、並べ替えでその行の
-                // ビューが作り直され、進行中のジェスチャが失われる。
+                // 並べ替えは行ではなくこの面が受ける。
+                // 行に付けると、並べ替えでその行のビューが作り直され、進行中のジェスチャが失われる。
                 .gesture(reorderGesture)
             }
         } else if model.channels.isEmpty {

@@ -137,8 +137,8 @@ final class WindowContextMenuTests: XCTestCase {
         XCTAssertEqual(offMenu.item(withTitle: AlwaysOnTopMenu.title)?.state, .off)
     }
 
-    /// 項目を実際に送って効果まで見る。押して働くものと状態を持つもののどちらも、送り先が
-    /// 生きていなければここで落ちる。
+    /// 項目を実際に送って効果まで見る。
+    /// 押して働くものと状態を持つもののどちらも、送り先が生きていなければここで落ちる。
     func testSendingAnItemReachesWhatItStandsFor() throws {
         let models = makeModels()
         var hidden = false

@@ -18,9 +18,9 @@ final class LevelMeter {
     private var captureRing: RingBuffer
     private let downmixScratch: UnsafeMutablePointer<Float>
 
-    // L/R マスターレベル用の第二のリングバッファ (SPSC)。capture() のダウンミックスループに
-    // 便乗して 1 コールバックぶんの (L, R) ピーク絶対振幅だけを運ぶ。stereoCaptureEnabled が
-    // false の間は producer 側で集計を止める。
+    // L/R マスターレベル用の第二のリングバッファ (SPSC)。
+    // capture() のダウンミックスループに便乗して 1 コールバックぶんの (L, R) ピーク絶対振幅だけを運ぶ。
+    // stereoCaptureEnabled が false の間は producer 側で集計を止める。
     private let stereoPeakRing: RingBuffer
     /// 作業バッファ (サイズ = 出力チャンネル数)。
     private let stereoPeakWriteScratch: UnsafeMutablePointer<Float>
@@ -130,8 +130,8 @@ final class LevelMeter {
         magnitudes.deallocate()
     }
 
-    /// realtime 出力コールバックから呼ぶ。print/alloc/lock を行わず、事前確保済みバッファへの
-    /// 書き込みのみを行う。
+    /// realtime 出力コールバックから呼ぶ。
+    /// print/alloc/lock を行わず、事前確保済みバッファへの書き込みのみを行う。
     func capture(_ interleaved: UnsafePointer<Float>, frameCount: Int, channels: Int) {
         guard captureEnabled else { return }
         let n = min(frameCount, AudioConfig.maxRenderFrames)
@@ -232,8 +232,7 @@ final class LevelMeter {
         os_unfair_lock_unlock(&levelsLock)
     }
 
-    /// フラグの書き込みと (無効→有効時の) リセットを同一ロック内で行い、中途半端な状態で
-    /// advancePeak が走らないようにする。
+    /// フラグの書き込みと (無効→有効時の) リセットを同一ロック内で行い、中途半端な状態で advancePeak が走らないようにする。
     func setPeakHoldEnabled(_ enabled: Bool) {
         os_unfair_lock_lock(&levelsLock)
         if enabled && !peakHoldEnabled {
@@ -356,8 +355,8 @@ final class LevelMeter {
         )
     }
 
-    /// ホールド残り時間が尽きたら decayDbPerSec で表示レベルへ向けて下げる。decayDbPerSec=0 は
-    /// ホールド終了後に瞬時に表示レベルまで落ちる。
+    /// ホールド残り時間が尽きたら decayDbPerSec で表示レベルへ向けて下げる。
+    /// decayDbPerSec=0 はホールド終了後に瞬時に表示レベルまで落ちる。
     static func advancePeak(
         level: Double, peak: Double, holdRemaining: inout Double,
         dt: Double, holdSeconds: Double, decayDbPerSec: Double

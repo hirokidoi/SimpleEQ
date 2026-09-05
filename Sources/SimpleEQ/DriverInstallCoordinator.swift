@@ -1,7 +1,7 @@
 import Foundation
 
-/// 専用ドライバのインストール/更新/アンインストールフロー。安全性ガード・実行・
-/// 成功時の再検出リトライを一元化する。
+/// 専用ドライバのインストール/更新/アンインストールフロー。
+/// 安全性ガード・実行・成功時の再検出リトライを一元化する。
 final class DriverInstallCoordinator: Sendable {
     enum ActionError: Error {
         /// 自ドライバのデバイスがデフォルト出力のままで安全な実デバイスへ切り替えられなかった。
@@ -23,8 +23,8 @@ final class DriverInstallCoordinator: Sendable {
     }
 
     /// 実行前に安全性ガードを通し、安全が確認できた場合のみ beforeExecuting を呼んでから実行する。
-    /// afterReprobe は再検出と同じキュー entry の中で呼ばれる。成功時は再検出結果を completion に
-    /// 渡す (音声エンジン自体はライブ再初期化しない。EQ 処理の再開には再起動を要する)。
+    /// afterReprobe は再検出と同じキュー entry の中で呼ばれる。
+    /// 成功時は再検出結果を completion に渡す (音声エンジン自体はライブ再初期化しない。EQ 処理の再開には再起動を要する)。
     /// completion は必ずメインキュー上で呼ぶ。
     func installOrUpdate(
         beforeExecuting: @escaping @Sendable (AudioWorldToken) -> Void = { _ in },

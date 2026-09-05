@@ -6,8 +6,8 @@ final class AudioRuntimeMetricsTests: XCTestCase {
 
     // MARK: - ドライバの書き込み位置決定の観測量 (基準値の張り直し)
 
-    /// ドライバが再ロードされると共有側の累積カウンタは 0 から数え直しになる。基準値を据え置くと
-    /// ドライバ自身の失敗が見えなくなる。
+    /// ドライバが再ロードされると共有側の累積カウンタは 0 から数え直しになる。
+    /// 基準値を据え置くとドライバ自身の失敗が見えなくなる。
     func testDriverWritePositionObservationsReanchorWhenTheSharedCountersRestartFromZero() {
         let metrics = AudioRuntimeMetrics()
         metrics.recordDriverWritePositionObservations(

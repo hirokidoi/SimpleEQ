@@ -1,8 +1,7 @@
 import Foundation
 import SimpleEQAtomicC
 
-/// realtime 書き込み側 (release store) / 非 realtime 読み取り側 (acquire load) 間で単一の UInt64 を
-/// 受け渡す最小のアトミックカウンタ。
+/// realtime 書き込み側 (release store) / 非 realtime 読み取り側 (acquire load) 間で単一の UInt64 を受け渡す最小のアトミックカウンタ。
 final class AtomicUInt64 {
     private let storage: UnsafeMutableRawPointer
 
@@ -23,8 +22,9 @@ final class AtomicUInt64 {
     func add(_ delta: UInt64) { store(value + delta) }
 }
 
-/// 音声ランタイムの内部観測量。realtime からの書き込みは単一 store または SPSC 前提の
-/// load+store add のみ。ロック・メモリ確保・print は realtime 経路に持ち込まない。
+/// 音声ランタイムの内部観測量。
+/// realtime からの書き込みは単一 store または SPSC 前提の load+store add のみ。
+/// ロック・メモリ確保・print は realtime 経路に持ち込まない。
 final class AudioRuntimeMetrics {
 
     private let appVersion: String
@@ -93,8 +93,7 @@ final class AudioRuntimeMetrics {
         let medianFrames: Int
     }
 
-    /// ソートを伴うためオーディオ世界の直列キュー専用 (realtime では呼ばない)。reset() 以降の
-    /// 書き込みだけを対象にする。
+    /// ソートを伴うためオーディオ世界の直列キュー専用 (realtime では呼ばない)。reset() 以降の書き込みだけを対象にする。
     var availableWindowStats: AvailableWindowStats? {
         let totalWrites = availableWindowWriteCount.value
         let baselineWrites = min(resetBaseline.availableWindowWriteCount, totalWrites)
@@ -191,8 +190,8 @@ final class AudioRuntimeMetrics {
 
     // MARK: - プライミングの着地の切り詰め
 
-    /// 目標バッファ量を超えて着地したぶんを捨てた回数と量 (切り詰めが働いたのか超過がそもそも無かった
-    /// のかを切り分けるための計数)。
+    /// 目標バッファ量を超えて着地したぶんを捨てた回数と量
+    /// (切り詰めが働いたのか超過がそもそも無かったのかを切り分けるための計数)。
     private let primingTrimEventCounter = AtomicUInt64(0)
     private let primingTrimDiscardedFramesCounter = AtomicUInt64(0)
 
@@ -255,8 +254,8 @@ final class AudioRuntimeMetrics {
         Self.sinceBaseline(occupancyResetDiscardedFramesTotalCounter.value, resetBaseline.occupancyResetDiscardedFrameCountTotal)
     }
 
-    /// 直近のリセットで破棄する直前のバッファ量と、その回の目標バッファ量。累積ではなく直近の値のため
-    /// reset() では 0 へ戻す。
+    /// 直近のリセットで破棄する直前のバッファ量と、その回の目標バッファ量。
+    /// 累積ではなく直近の値のため reset() では 0 へ戻す。
     var lastOccupancyResetAvailableFrames: Int { Int(lastOccupancyResetAvailableStorage.value) }
     var lastOccupancyResetTargetOccupancyFrames: Int { Int(lastOccupancyResetTargetStorage.value) }
 
@@ -288,8 +287,7 @@ final class AudioRuntimeMetrics {
     private let writeDeadlineMissedCountStorage = AtomicUInt64(0)
     private let silenceFilledGapCountStorage = AtomicUInt64(0)
 
-    /// HAL から渡される提示時刻が前サイクルと同じだった (書き込み位置が進まなかった) サイクルの
-    /// 累計回数。
+    /// HAL から渡される提示時刻が前サイクルと同じだった (書き込み位置が進まなかった) サイクルの累計回数。
     var presentationStallCount: UInt64 {
         Self.sinceBaseline(presentationStallCountStorage.value, resetBaseline.presentationStallCount)
     }
@@ -307,8 +305,7 @@ final class AudioRuntimeMetrics {
         Self.sinceBaseline(silenceFilledGapCountStorage.value, resetBaseline.silenceFilledGapCount)
     }
 
-    /// 取り込む値がストレージの現在値を下回った回はドライバ側が 0 へ戻った合図とみなし、基準値も
-    /// 0 へ立て直す。
+    /// 取り込む値がストレージの現在値を下回った回はドライバ側が 0 へ戻った合図とみなし、基準値も 0 へ立て直す。
     private static func reanchoredBaseline(storedValue: UInt64, incomingValue: UInt64, baseline: UInt64) -> UInt64 {
         incomingValue < storedValue ? 0 : baseline
     }
@@ -350,14 +347,14 @@ final class AudioRuntimeMetrics {
     private let writerIOCycleFramesStorage = AtomicUInt64(0)
     private let readerObservedStorage = AtomicUInt64(0)
 
-    /// 読み手が居て、読み手が書く値を今の状態として読めているか。実効書き手ブロック長・目標／上限バッファ量・
-    /// リング容量も読み手が書くため、読み手が居ない間はそれらを現在の状態として見せないための判別に使う。
+    /// 読み手が居て、読み手が書く値を今の状態として読めているか。
+    /// 実効書き手ブロック長・目標／上限バッファ量・リング容量も読み手が書くため、
+    /// 読み手が居ない間はそれらを現在の状態として見せないための判別に使う。
     var readerObserved: Bool { readerObservedStorage.value != 0 }
 
     var writerIOIsRunning: Bool { writerIOIsRunningStorage.value != 0 }
     var writerIOCycleFrames: Int { Int(writerIOCycleFramesStorage.value) }
-    /// ドライバが共有領域を用意し直すたびに 0 から始まるため、離れた 2 時点の値を比べても
-    /// 増分にはならない。
+    /// ドライバが共有領域を用意し直すたびに 0 から始まるため、離れた 2 時点の値を比べても増分にはならない。
     var writerEpoch: UInt64 { writerEpochStorage.value }
     var writerEpochAdvanceCount: UInt64 { Self.sinceBaseline(writerEpochStorage.value, resetBaseline.writerEpoch) }
 
@@ -394,8 +391,7 @@ final class AudioRuntimeMetrics {
 
     var driverLayoutVersion: UInt32 { UInt32(truncatingIfNeeded: driverLayoutVersionStorage.value) }
 
-    /// ドライバだけが入れ替わる経路があるため、書き手の申告と同じく
-    /// 転記のたびに読み直した値で上書きする。
+    /// ドライバだけが入れ替わる経路があるため、書き手の申告と同じく転記のたびに読み直した値で上書きする。
     func recordDriverVersions(driverVersion: DriverVersion, layoutVersion: UInt32) {
         driverVersionMajorStorage.store(UInt64(driverVersion.major))
         driverVersionMinorStorage.store(UInt64(driverVersion.minor))
@@ -512,9 +508,9 @@ final class AudioRuntimeMetrics {
 
     // MARK: - リセット (累積カウンタ・窓統計は基準値方式、走行最大値と直近イベントの値は書き直し)
 
-    /// 基準値 (reset 時点の値) を控えるだけで、カウンタそのものには書き込まない (直接 0 書き込みは
-    /// realtime 側の加算と競合しうる)。走行最大値・直近イベントの値・現在の状態を表す値は基準値
-    /// 方式の対象にしない (「現在値 − 基準値」に意味がないため)。
+    /// 基準値 (reset 時点の値) を控えるだけで、カウンタそのものには書き込まない
+    /// (直接 0 書き込みは realtime 側の加算と競合しうる)。
+    /// 走行最大値・直近イベントの値・現在の状態を表す値は基準値方式の対象にしない (「現在値 − 基準値」に意味がないため)。
     func reset() {
         resetBaseline.partialReadCount = partialReadCounter.value
         resetBaseline.missingFrameCount = missingFrameCounter.value
@@ -538,8 +534,7 @@ final class AudioRuntimeMetrics {
         resetBaseline.reprimeDueToTargetGrowthCount = reprimeDueToTargetGrowthCounter.value
         peakStorage.store(0)
         peakBeforeVolumeStorage.store(0)
-        // 0 ではなくリセット時点の目標を起点にする (現在値を下回らないため)。読めていない間は
-        // 0 から数え直す。
+        // 0 ではなくリセット時点の目標を起点にする (現在値を下回らないため)。読めていない間は 0 から数え直す。
         targetOccupancyRunningMaxStorage.store(readerObserved ? UInt64(max(0, targetOccupancyFrames)) : 0)
         lastOccupancyResetAvailableStorage.store(0)
         lastOccupancyResetTargetStorage.store(0)

@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// UI レイアウト・タイミング・配色の定数。レイアウトを支配する寸法・タイミング・配色は
-/// ここに集約し、定数から導出できる値をベタ書きしない。字サイズや細かな余白などの cosmetic 値は、
-/// View 側に置くことがある (支配的でなく集約する利得が小さいため)。
+/// UI レイアウト・タイミング・配色の定数。
+/// レイアウトを支配する寸法・タイミング・配色はここに集約し、定数から導出できる値をベタ書きしない。
+/// 字サイズや細かな余白などの cosmetic 値は、View 側に置くことがある (支配的でなく集約する利得が小さいため)。
 enum EQLayout {
 
     // MARK: - ウィンドウ / 上部バー / レール
@@ -46,8 +46,9 @@ enum EQLayout {
     /// Diagnostics ウィンドウの高さの下限。
     static let diagnosticsWindowMinHeight: CGFloat = settingsWindowMinHeight
 
-    /// About ウィンドウの幅 (固定)。面としての見え方で決める値で、下限は載せる行が折り返さずに
-    /// 収まること。高さは内容が決めるため定数を持たない。
+    /// About ウィンドウの幅 (固定)。
+    /// 面としての見え方で決める値で、下限は載せる行が折り返さずに収まること。
+    /// 高さは内容が決めるため定数を持たない。
     static let aboutWindowWidth: CGFloat = 450
 
     /// ミキサーの寸法。面はビジュアライザ領域を覆い、行はその中央に置く列へ収める。
@@ -122,8 +123,8 @@ enum EQLayout {
     static let presetButtonMinHeight: CGFloat = 56
     /// 長押しが成立するまでの時間 (秒)。
     static let longPressDuration: Double = 0.5
-    /// プリセットタイトルの最大幅。全角 = 2・半角 = 1 として計算し、全角20文字・半角40文字
-    /// 相当を上限とする (ASCII のみを半角とみなす簡易換算)。
+    /// プリセットタイトルの最大幅。
+    /// 全角 = 2・半角 = 1 として計算し、全角20文字・半角40文字相当を上限とする (ASCII のみを半角とみなす簡易換算)。
     static let presetTitleMaxWidth: Int = 40
 
     /// 指定文字列を presetTitleMaxWidth に収まるよう先頭から切り詰める。
@@ -205,12 +206,12 @@ enum EQLayout {
     static let handleHitTolerance: CGFloat = 6
     /// 連続クリックを同じ列とみなす押下位置のずれの上限 (px、設計値)。
     static let clickSequenceMaxDrift: CGFloat = 4
-    /// ハンドル関連要素のレイヤを、アルファがこれ未満なら isHidden にする閾値。ハンドルのアルファ
-    /// 自体もこの値を対称に使って 0/1 へ吸着させる。
+    /// ハンドル関連要素のレイヤを、アルファがこれ未満なら isHidden にする閾値。
+    /// ハンドルのアルファ自体もこの値を対称に使って 0/1 へ吸着させる。
     static let handleVisibilityThreshold: Double = 0.004
 
-    /// ハンドル線の表示値が目標値へ指数イージングで寄るとき、この幅を
-    /// 下回ったら目標へ吸着させる。出荷時のウィンドウ寸法で 1 ピクセル未満に相当する値。
+    /// ハンドル線の表示値が目標値へ指数イージングで寄るとき、この幅を下回ったら目標へ吸着させる。
+    /// 出荷時のウィンドウ寸法で 1 ピクセル未満に相当する値。
     static let handleDisplaySettleThresholdDb: Double = 0.02
 
     /// EQ 本体の描画幅 (L/R レベルメーター表示中はその列幅ぶんを差し引く)。
@@ -218,8 +219,8 @@ enum EQLayout {
         totalWidth - (showLevelMeter ? meterColumnWidth(compact: compact) : 0)
     }
 
-    /// dBFS レベル軸の目盛り値 (0 から floorDb まで等間隔)。各目盛りは 0 に向かって 5 刻みに丸める
-    /// (例: -24 → -20、-37 → -35)。
+    /// dBFS レベル軸の目盛り値 (0 から floorDb まで等間隔)。
+    /// 各目盛りは 0 に向かって 5 刻みに丸める (例: -24 → -20、-37 → -35)。
     static func axisDbTicks(floorDb: Double, steps: Int = 3) -> [Double] {
         (0...steps).map { roundTowardZero(floorDb * Double($0) / Double(steps), to: 5) }
     }
@@ -275,8 +276,8 @@ enum EQLayout {
         }
     }
 
-    /// LED セグメントの縦方向グリッド。段数・各段の縦範囲・点灯段数/キャップ段の判定を持ち、
-    /// EQ 本体とレベルメーターの双方が使う。
+    /// LED セグメントの縦方向グリッド。
+    /// 段数・各段の縦範囲・点灯段数/キャップ段の判定を持ち、EQ 本体とレベルメーターの双方が使う。
     struct SegmentGrid {
         /// 画素境界へ丸めた段の下端 (プロット/メーター領域の下端)。
         let bottomY: CGFloat
@@ -346,8 +347,8 @@ enum EQLayout {
             return min(rowCount - 1, max(0, n - 1))
         }
 
-        /// 点灯段数 n から点灯レイヤの高さを導く (n=0 のときは 0)。下端・段の刻みが画素境界に
-        /// 乗っているため、この高さぶん切り取った上端も自動的に画素境界へ乗る。
+        /// 点灯段数 n から点灯レイヤの高さを導く (n=0 のときは 0)。
+        /// 下端・段の刻みが画素境界に乗っているため、この高さぶん切り取った上端も自動的に画素境界へ乗る。
         func litHeight(forRowCount n: Int) -> CGFloat {
             guard n > 0 else { return 0 }
             return CGFloat(n) * rowStep
@@ -390,18 +391,17 @@ enum EQLayout {
             }
         }
 
-        /// レベルメーター (バーの点灯段と L/R マスターレベル) の非対称平滑化係数。立ち上がり
-        /// (attack) を速く、下がり (release) をゆっくりにするほどピークに機敏かつ暴れない見栄えになる。
+        /// レベルメーター (バーの点灯段と L/R マスターレベル) の非対称平滑化係数。
+        /// 立ち上がり (attack) を速く、下がり (release) をゆっくりにするほどピークに機敏かつ暴れない見栄えになる。
         static let attack = LevelScale(values: [0.30, 0.50, 0.65, 0.80, 1.0], defaultLevel: 5)
 
         static let release = LevelScale(values: [0.04, 0.08, 0.18, 0.30, 0.65], defaultLevel: 3)
 
-        /// ハンドル表示アルファの指数フェードの時間定数 (秒)。フレームレートに依存せず、経過時間 dt から
-        /// `1 - exp(-dt/tau)` で目標へ寄せる (小さいほど速く追従して速く消える)。
+        /// ハンドル表示アルファの指数フェードの時間定数 (秒)。
+        /// フレームレートに依存せず、経過時間 dt から `1 - exp(-dt/tau)` で目標へ寄せる (小さいほど速く追従して速く消える)。
         static let handleFade = LevelScale(values: [0.32, 0.22, 0.15, 0.10, 0.06], defaultLevel: 3)
 
-        /// ハンドル線の表示値がプレビュー対象 (hover 中プリセット or 現在値) へ寄る指数イージングの
-        /// 時間定数 (秒)。
+        /// ハンドル線の表示値がプレビュー対象 (hover 中プリセット or 現在値) へ寄る指数イージングの時間定数 (秒)。
         static let handlePreview = LevelScale(values: [0.28, 0.20, 0.13, 0.07, 0.04], defaultLevel: 3)
 
         /// ピークホールド表示の有効/無効。
@@ -451,8 +451,8 @@ enum EQLayout {
         static let panel = Color(hex: 0x0b0d12)
         /// 境界線色。
         static let line = Color(hex: 0x191c24)
-        /// 非アクティブなボタン (プリセット・レベル選択) の枠線色。line はパネル背景と同化して
-        /// ボタンの輪郭が判別しづらいため、ボタン専用にコントラストを上げた色を使う。
+        /// 非アクティブなボタン (プリセット・レベル選択) の枠線色。
+        /// line はパネル背景と同化してボタンの輪郭が判別しづらいため、ボタン専用にコントラストを上げた色を使う。
         static let buttonLine = Color.white.opacity(0.14)
         /// 本文文字色。
         static let text = Color(hex: 0xe9edf4)
@@ -464,8 +464,8 @@ enum EQLayout {
         static let cyan = Color(hex: 0x63e9ff)
         /// 警告色 (ドライバ未検出・音声取得失敗などの異常状態表示)。
         static let danger = Color(hex: 0xff5d6c)
-        /// フルスケール超過を伝えるレベルメーター最上段の色。異常状態の警告色とは別に持つ
-        /// (伝えるのは利用者の設定が生んだ結果であって、アプリの不調ではない)。
+        /// フルスケール超過を伝えるレベルメーター最上段の色。
+        /// 異常状態の警告色とは別に持つ (伝えるのは利用者の設定が生んだ結果であって、アプリの不調ではない)。
         static let clip = Color(hex: 0xff2033)
         /// 淡いシアン。
         static let cyanSoft = Color(hex: 0xa8f2ff)
@@ -496,8 +496,8 @@ enum EQLayout {
         let r, g, b: Double
         init(_ r: Double, _ g: Double, _ b: Double) { self.r = r; self.g = g; self.b = b }
         func opacity(_ a: Double) -> Color { Color(red: r / 255, green: g / 255, blue: b / 255, opacity: a) }
-        /// 指定色 target へ向けて amount (0...1) だけ寄せた色 (既定は白)。ピークホールドの LED を
-        /// 同系色のまま明るく見せるのに使う。
+        /// 指定色 target へ向けて amount (0...1) だけ寄せた色 (既定は白)。
+        /// ピークホールドの LED を同系色のまま明るく見せるのに使う。
         func brightened(_ amount: Double, toward target: RGB = RGB(255, 255, 255)) -> RGB {
             RGB(r + (target.r - r) * amount, g + (target.g - g) * amount, b + (target.b - b) * amount)
         }
@@ -516,8 +516,8 @@ enum EQLayout {
     static let bypassLitAlpha: Double = 0.42
     static let bypassDimAlpha: Double = 0.15
 
-    /// ピークホールド表示 (LED キャップ) のアルファ (固定値)。色相を保ったまま白へ寄せる度合いは
-    /// Settings で調整可能なため別の集約先に置く。
+    /// ピークホールド表示 (LED キャップ) のアルファ (固定値)。
+    /// 色相を保ったまま白へ寄せる度合いは Settings で調整可能なため別の集約先に置く。
     static let peakCapAlpha: Double = 1.0
 
     /// バー内の垂直位置比率 (0=下端..1=上端) からセグメント発光色を補間する (定数から導出、色をベタ書きしない)。
@@ -535,15 +535,15 @@ enum EQLayout {
 
     /// ハンドル線 (ゲイン設定ライン) の色。
     static let handleLineColor = handleTintRGB.opacity(1)
-    /// 0dB ラインからゲイン設定ライン (ハンドル) までの範囲に重ねる半透明オーバーレイ色。ハンドル線と
-    /// 同系色 (handleLineColor) を使う。リアルタイムのレベル表示 (lit/dim/peak) はそのまま描いた上に、
-    /// この色を重ね塗りする。
+    /// 0dB ラインからゲイン設定ライン (ハンドル) までの範囲に重ねる半透明オーバーレイ色。
+    /// ハンドル線と同系色 (handleLineColor) を使う。
+    /// リアルタイムのレベル表示 (lit/dim/peak) はそのまま描いた上に、この色を重ね塗りする。
     static let gainRangeFillColor = handleLineColor.opacity(0.15)
-    /// ドラッグ中のバンドのみ、0dB ラインから現在ゲインまでの範囲を最前面 (バーより手前) で
-    /// 塗りつぶす色。ハンドル線と同系色。
+    /// ドラッグ中のバンドのみ、0dB ラインから現在ゲインまでの範囲を最前面 (バーより手前) で塗りつぶす色。
+    /// ハンドル線と同系色。
     static let dragBandFillColor = handleLineColor.opacity(1)
-    /// ドラッグ中の現在値ツールチップの背景色。バー・白塗りとの重なりに関係なく常に読める
-    /// 不透明度を確保する。
+    /// ドラッグ中の現在値ツールチップの背景色。
+    /// バー・白塗りとの重なりに関係なく常に読める不透明度を確保する。
     static let dragBadgeBackgroundColor = Palette.panel.opacity(0.92)
     /// 0dB 基準の破線の色と破線パターン。
     static let baselineColor = Color(white: 1, opacity: 0.14)

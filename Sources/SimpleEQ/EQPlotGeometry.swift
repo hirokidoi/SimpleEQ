@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// EQ プロットの座標変換と、バンドごとのバー矩形の物理ピクセル境界への丸めを担う。
-/// CALayer 側の描画と当たり判定の双方がここを経由することで、chrome とバー矩形の位置関係が
-/// 常に一致する。
+/// CALayer 側の描画と当たり判定の双方がここを経由することで、chrome とバー矩形の位置関係が常に一致する。
 struct EQPlotGeometry {
     let size: CGSize
     /// ビジュアライザ (バーレベル) の dBFS 下限。Settings で調整可能なため呼び出し側から受け取る。

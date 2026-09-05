@@ -5,8 +5,8 @@ final class MixerAppResolverTests: XCTestCase {
     private static let appPath = "/Applications/Player.app/Contents/MacOS/Player"
     private static let appURL = URL(fileURLWithPath: "/Applications/Player.app")
 
-    /// 観測値をすべて注入する。シンボル解決自体も注入点にし、シンボルが無い環境の挙動を実機に
-    /// 依存せず確かめる。
+    /// 観測値をすべて注入する。
+    /// シンボル解決自体も注入点にし、シンボルが無い環境の挙動を実機に依存せず確かめる。
     private func makeResolver(
         responsibleForPID: (@Sendable (pid_t) -> pid_t)? = nil,
         parents: [pid_t: pid_t] = [:],

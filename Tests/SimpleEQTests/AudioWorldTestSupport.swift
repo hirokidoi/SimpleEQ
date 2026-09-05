@@ -32,11 +32,12 @@ func makeTestAudioWorld() -> AudioWorld {
     AudioWorld(queue: DispatchQueue(label: "AudioWorldTestSupport.world.\(UUID().uuidString)"))
 }
 
-/// 投入した work の完了を待つ。直列キューへ空の work を同期投入すると、それより前に投入された
-/// work がすべて終わるまで戻らない性質を使う。`DispatchQueue.main.async` への委譲分は RunLoop を短く回して処理させる。
+/// 投入した work の完了を待つ。
+/// 直列キューへ空の work を同期投入すると、それより前に投入された work がすべて終わるまで戻らない性質を使う。
+/// `DispatchQueue.main.async` への委譲分は RunLoop を短く回して処理させる。
 ///
-/// 用途は「変化しないことの見届け」に限る。値が動くのを待つ場合は条件が成立するまで見張る
-/// waitForAudioWorld を使うこと (固定時間では、着地前に先の検証へ進みうる)。
+/// 用途は「変化しないことの見届け」に限る。
+/// 値が動くのを待つ場合は条件が成立するまで見張る waitForAudioWorld を使うこと (固定時間では、着地前に先の検証へ進みうる)。
 func drainAudioWorld(_ audioWorld: AudioWorld, settlingMainQueueFor seconds: TimeInterval = 0.05) {
     audioWorld.queue.sync {}
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))

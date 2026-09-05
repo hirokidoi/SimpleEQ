@@ -1,8 +1,8 @@
 import XCTest
 @testable import SimpleEQ
 
-/// パス解決とクォート処理のラウンドトリップのみを検証する。管理者権限昇格・ドライバの実際の
-/// インストール/削除は自動テスト対象外 (実機検証で担保する)。
+/// パス解決とクォート処理のラウンドトリップのみを検証する。
+/// 管理者権限昇格・ドライバの実際のインストール/削除は自動テスト対象外 (実機検証で担保する)。
 final class DriverInstallerTests: XCTestCase {
     func testResolveScriptPathDerivesPathFromResourcesURL() {
         let resourcesURL = URL(fileURLWithPath: "/foo/SimpleEQ.app/Contents/Resources")

@@ -261,8 +261,8 @@ enum DiagnosticsReport {
 
     // MARK: - 書き出しテキスト
 
-    /// 画面と同じ項目定義から作る平文。行の副題を併記することで、複数の値が並ぶ行でも
-    /// どの順序で何が並んでいるかが、この 1 通だけで読み取れる。
+    /// 画面と同じ項目定義から作る平文。
+    /// 行の副題を併記することで、複数の値が並ぶ行でもどの順序で何が並んでいるかが、この 1 通だけで読み取れる。
     static func text(_ s: AudioRuntimeMetrics.Snapshot, exportedAt: Date) -> String {
         let stamp = timestampFormatter
         var lines: [String] = ["書き出し: \(stamp.string(from: exportedAt))"]
@@ -303,8 +303,8 @@ enum DiagnosticsReport {
     /// 振幅を dBFS へ換算したときの丸め桁数。
     private static let peakDbFractionDigits = 1
 
-    /// 走行最大振幅。振幅は無次元のため、フルスケールを基準にした dBFS を併記する。振幅 0 は
-    /// 対数が定義できないため、数値ではなく下限であることを綴りで示す。
+    /// 走行最大振幅。振幅は無次元のため、フルスケールを基準にした dBFS を併記する。
+    /// 振幅 0 は対数が定義できないため、数値ではなく下限であることを綴りで示す。
     private static func peakText(_ peak: Float) -> String {
         let amplitude = String(format: "%.\(peakFractionDigits)f", peak)
         guard peak > 0 else { return "\(amplitude) (-inf. dBFS)" }

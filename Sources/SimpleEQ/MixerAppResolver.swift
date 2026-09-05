@@ -40,8 +40,8 @@ struct MixerAppResolver: Sendable {
     }
 
     struct Environment: Sendable {
-        /// nil は「シンボルを引けなかった」。宣言を書いて直接呼ぶ形にすると、シンボルが無い OS で
-        /// 起動不能になる。
+        /// nil は「シンボルを引けなかった」。
+        /// 宣言を書いて直接呼ぶ形にすると、シンボルが無い OS で起動不能になる。
         var responsibleForPID: (@Sendable (pid_t) -> pid_t)?
         var parentPID: @Sendable (pid_t) -> pid_t?
         var executablePath: @Sendable (pid_t) -> String?

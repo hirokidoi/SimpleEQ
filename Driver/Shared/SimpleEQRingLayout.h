@@ -73,8 +73,8 @@ typedef struct
     _Atomic uint32_t appliedGainBits;
 } SimpleEQMixerClientSlot;
 
-// float を整数で運ぶのは、_Atomic float の lock-free 性が実装依存で、リアルタイム経路に
-// 暗黙のロックが生じうるため。
+// float を整数で運ぶのは、_Atomic float の lock-free 性が実装依存で、
+// リアルタイム経路に暗黙のロックが生じうるため。
 static inline uint32_t SimpleEQMixerFloatToBits(float inValue)
 {
     uint32_t theBits;

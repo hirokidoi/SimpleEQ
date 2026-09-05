@@ -51,8 +51,8 @@ final class AudioConfigTests: XCTestCase {
         XCTAssertEqual(asbd.mSampleRate, 44100)
         XCTAssertEqual(asbd.mChannelsPerFrame, 2)
         XCTAssertEqual(asbd.mFramesPerPacket, 1)
-        // 非interleaved は 1 AudioBuffer = 1ch ぶんのみを保持するため、2ch でも ch 数を
-        // 掛けた値 (2 * bytesPerSample) とは一致しない。
+        // 非interleaved は 1 AudioBuffer = 1ch ぶんのみを保持するため、
+        // 2ch でも ch 数を掛けた値 (2 * bytesPerSample) とは一致しない。
         XCTAssertEqual(asbd.mBytesPerFrame, bytesPerSample)
         XCTAssertEqual(asbd.mBytesPerPacket, bytesPerSample)
         XCTAssertNotEqual(asbd.mBytesPerFrame, 2 * bytesPerSample)
