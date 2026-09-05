@@ -202,6 +202,26 @@ final class OutputDeviceControllerTests: XCTestCase {
         XCTAssertEqual(mock.setDefaultOutputCalls, [], "デフォルト出力を動かしてはならない")
     }
 
+    // デフォルト出力が既に自ドライバのとき、その UID を復帰先に記録してはならない。記録すると
+    // 切り戻し先が自ドライバのままになり、戻しても無音が解けない。
+    func testDoesNotOccupyWhenCurrentDefaultOutputIsDriverItselfWithoutPendingRestore() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = loopbackDeviceID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        XCTAssertFalse(settings.switchPending, "復帰の義務を負っていない状態から始める")
+
+        let controller = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let ok = controller.occupyDefaultOutputForDriver(testToken)
+
+        XCTAssertFalse(ok)
+        XCTAssertNil(controller.currentRestoreState(testToken).uid, "自ドライバ自身を復帰先に記録してはならない")
+        XCTAssertFalse(controller.currentRestoreState(testToken).pending, "切り替えていない以上、復帰の義務も負わない")
+        XCTAssertEqual(mock.setDefaultOutputCalls, [], "デフォルト出力を動かしてはならない")
+    }
+
     func testPendingRestartReusesSavedUIDWithoutOverwriting() {
         let mock = MockAudioDeviceDirectory()
         // 前回が復帰せず終了した状態: デフォルト出力は自ドライバのデバイス単独のまま。
@@ -868,6 +888,45 @@ final class OutputDeviceControllerTests: XCTestCase {
         XCTAssertTrue(controller.ensureDefaultOutputIsSafeToMutateDriver(driverDeviceUID: testDriverDeviceUID, testToken))
         XCTAssertEqual(mock.setDefaultOutputCalls, [loopbackDeviceID])
         XCTAssertFalse(controller.currentRestoreState(testToken).pending)
+    }
+
+    // 保存済み UID が自ドライバを内包する構成を指す場合、退避してもガードが防ごうとしている状態の
+    // ままになるため、書き込まずに失敗を返す。
+    func testEnsureSafeDefaultOutputFailsWhenRestoreTargetContainsDriver() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = loopbackDeviceID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[multiOutputUID] = multiOutputID
+        mock.containsDriverDeviceIDs = [multiOutputID]
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.savedDefaultOutputUID = multiOutputUID
+        settings.switchPending = true
+
+        let controller = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+
+        XCTAssertFalse(controller.ensureDefaultOutputIsSafeToMutateDriver(driverDeviceUID: testDriverDeviceUID, testToken))
+        XCTAssertTrue(mock.setDefaultOutputCalls.isEmpty, "危険な退避先へは書き込まない")
+        XCTAssertTrue(controller.currentRestoreState(testToken).pending, "退避していない場合は復帰の義務も畳まない")
+    }
+
+    // 保存済み UID が自ドライバ自身を指す場合も、退避先として受け付けない。
+    func testEnsureSafeDefaultOutputFailsWhenRestoreTargetIsDriverItself() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = multiOutputID
+        mock.uidsByDeviceID[multiOutputID] = multiOutputUID
+        mock.containsDriverDeviceIDs = [multiOutputID]
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.savedDefaultOutputUID = testDriverDeviceUID
+        settings.switchPending = true
+
+        let controller = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+
+        XCTAssertFalse(controller.ensureDefaultOutputIsSafeToMutateDriver(driverDeviceUID: testDriverDeviceUID, testToken))
+        XCTAssertTrue(mock.setDefaultOutputCalls.isEmpty, "危険な退避先へは書き込まない")
+        XCTAssertTrue(controller.currentRestoreState(testToken).pending, "退避していない場合は復帰の義務も畳まない")
     }
 
     // 一致するが保存済み UID が解決できない (集約デバイス削除等) 場合は復帰できず失敗を返す。

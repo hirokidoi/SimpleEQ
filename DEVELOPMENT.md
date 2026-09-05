@@ -400,6 +400,7 @@ Before performing an operation that rewrites or deletes the dedicated driver's b
 Performing such an operation as-is while the dedicated driver's binary is being referenced as the system's current default output can destabilize coreaudiod itself.
 
 The guard switches to a safe real device before permitting the operation to run, and it does so only when the current default output is either the dedicated driver's own device or an Aggregate/Multi-Output device that contains it.
+Where it moves to is the restore target, but it holds that destination to a condition the restore path itself does not impose: a destination that reaches the dedicated driver is refused rather than written, since moving there would leave the very state the guard exists to rule out. An Aggregate/Multi-Output containing the driver can be the restore target (→ Managing the Output Device Route), so that is a destination actually met rather than a hypothetical one.
 If it cannot move away to a safe destination, the operation itself is not run.
 
 Running the operation (an external process that involves elevating to administrator privileges) does not occupy the serial queue that owns the audio-related resources.

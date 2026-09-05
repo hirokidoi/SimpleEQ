@@ -122,8 +122,8 @@ final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
     }
 }
 
-/// 専用ドライバのデバイスの見え方 (可視性と表示名) のライフサイクル。アプリ起動時に出現させ、
-/// 終了時に既定の見え方へ戻す。既定は非表示かつ固定名。
+/// 専用ドライバのデバイスの見え方 (可視性と表示名) のライフサイクル。
+/// アプリ起動時に出現させ、終了時に既定の見え方へ戻す。既定は非表示かつ固定名。
 final class DriverLifecycleController: @unchecked Sendable {
     private let directory: AudioDeviceDirectory
     private let targetDeviceUID: String
@@ -258,8 +258,8 @@ final class OutputDeviceController: @unchecked Sendable {
         discardRestoreObligation()
     }
 
-    /// 義務を負っている間 (switchPending) に限り記録する。自ドライバ自身の UID は記録しない
-    /// (復帰先が自ドライバを指したままだと無音が解けない)。
+    /// 義務を負っている間 (switchPending) に限り記録する。
+    /// 自ドライバ自身の UID は記録しない (復帰先が自ドライバを指したままだと無音が解けない)。
     func noteOutputDeviceDidConfirm(uid: String) {
         guard switchPending else { return }
         guard uid != targetDeviceUID else { return }
@@ -287,8 +287,8 @@ final class OutputDeviceController: @unchecked Sendable {
         return !occupiesDefaultOutput(token)
     }
 
-    /// システムのデフォルト出力を自ドライバのデバイスが占有しているか。読み取れない場合は確証が
-    /// 持てないため安全側 (占有しているとみなす) に倒す。切り戻しの要否を決める側が呼ぶ。
+    /// システムのデフォルト出力を自ドライバのデバイスが占有しているか。
+    /// 読み取れない場合は確証が持てないため安全側 (占有しているとみなす) に倒す。切り戻しの要否を決める側が呼ぶ。
     func occupiesDefaultOutput(_ token: AudioWorldToken) -> Bool {
         guard let uid = currentDefaultOutputUID(token) else { return true }
         return uid == targetDeviceUID
@@ -299,13 +299,11 @@ final class OutputDeviceController: @unchecked Sendable {
         currentDefaultOutputUID(token) == targetDeviceUID
     }
 
-    /// 自ドライバ自身に加え、自ドライバを内包する Aggregate/Multi-Output も真とする。
     /// 読み取れない場合は安全側 (届いているとみなす) に倒す。
     func defaultOutputReachesDriver(_ token: AudioWorldToken) -> Bool {
         guard let id = directory.defaultOutputDeviceID(token),
               let uid = directory.uid(forDeviceID: id, token) else { return true }
-        if uid == targetDeviceUID { return true }
-        return directory.containsDriverDevice(id, driverDeviceUID: targetDeviceUID, token)
+        return reachesDriver(deviceID: id, uid: uid, driverDeviceUID: targetDeviceUID, token)
     }
 
     /// 復帰の義務を畳む (切り戻しは行わない)。占有が既に解けている場合に使う。
@@ -318,12 +316,23 @@ final class OutputDeviceController: @unchecked Sendable {
     @discardableResult
     private func performRestore(_ token: AudioWorldToken) -> Bool {
         guard let uid = savedDefaultOutputUID, let id = directory.deviceID(forUID: uid, token) else { return false }
+        return applyRestore(toDeviceID: id, token)
+    }
+
+    private func applyRestore(toDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
         guard directory.setDefaultOutputDeviceID(id, token) else { return false }
         discardRestoreObligation()
         return true
     }
 
+    private func reachesDriver(
+        deviceID: AudioDeviceID, uid: String, driverDeviceUID: String, _ token: AudioWorldToken
+    ) -> Bool {
+        uid == driverDeviceUID || directory.containsDriverDevice(deviceID, driverDeviceUID: driverDeviceUID, token)
+    }
+
     /// 保存済み UID を引き継ぐのは、前回の切替が現に占有中のままである場合だけ。
+    /// 自ドライバ自身は復帰先にしない (戻しても無音が解けない)。
     /// AirPlay のデバイスは復帰先にしない (二度と解決できない値が残り続ける)。
     private func determineRestoreUID(_ token: AudioWorldToken) -> String? {
         if switchPending, occupiesDefaultOutput(token), let saved = savedDefaultOutputUID {
@@ -331,6 +340,7 @@ final class OutputDeviceController: @unchecked Sendable {
         }
         guard let id = directory.defaultOutputDeviceID(token),
               let uid = directory.uid(forDeviceID: id, token),
+              uid != targetDeviceUID,
               !directory.isAirPlayDevice(id, token) else { return nil }
         return uid
     }
@@ -343,9 +353,12 @@ final class OutputDeviceController: @unchecked Sendable {
         guard let currentID = directory.defaultOutputDeviceID(token), let currentUID = directory.uid(forDeviceID: currentID, token) else {
             return false
         }
-        let isDriverItself = currentUID == driverDeviceUID
-        let containsDriver = directory.containsDriverDevice(currentID, driverDeviceUID: driverDeviceUID, token)
-        guard isDriverItself || containsDriver else { return true }
-        return performRestore(token)
+        guard reachesDriver(deviceID: currentID, uid: currentUID, driverDeviceUID: driverDeviceUID, token) else { return true }
+        guard let restoreUID = savedDefaultOutputUID,
+              let restoreID = directory.deviceID(forUID: restoreUID, token),
+              !reachesDriver(deviceID: restoreID, uid: restoreUID, driverDeviceUID: driverDeviceUID, token) else {
+            return false
+        }
+        return applyRestore(toDeviceID: restoreID, token)
     }
 }
