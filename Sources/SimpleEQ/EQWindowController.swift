@@ -26,6 +26,11 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
             updateDrivenWork()
         }
     }
+    /// 画面そのものが見えているか。
+    private var screenVisibility: ScreenVisibility!
+    /// Diagnostics ウィンドウの可視状態。画面側が動いたときに導き直すために保つ。
+    private var diagnosticsIsVisible = false
+    private var diagnosticsIsMiniaturized = false
 
     convenience init(
         viewModel: EQViewModel, settings: SettingsStore, diagnostics: DiagnosticsModel, mixer: MixerModel
@@ -47,6 +52,10 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         self.diagnostics = diagnostics
         self.mixer = mixer
         self.mixerRenderClock = MixerRenderClock(levelStore: mixer.levelStore, viewModel: viewModel)
+        // 駆動条件が起動直後の購読でこれを読むため、その前に用意する。
+        screenVisibility = ScreenVisibility { [weak self] in
+            MainActor.assumeIsolated { self?.updateGatesForScreenVisibility() }
+        }
         window.delegate = self
         window.onCancel = { [weak mixer] in mixer?.endEditing() }
         applyViewMode(viewModel.viewMode)
@@ -357,33 +366,37 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - 周期処理 (可視性連動)
 
     /// ウィンドウの可視・ミニマイズの状態から、そのウィンドウのための周期処理を有効にすべきかを決める準純粋関数。
-    static func wantsWindowDrivenWorkActive(isVisible: Bool, isMiniaturized: Bool) -> Bool {
-        isVisible && !isMiniaturized
+    static func wantsWindowDrivenWorkActive(isVisible: Bool, isMiniaturized: Bool, screenIsVisible: Bool) -> Bool {
+        isVisible && !isMiniaturized && screenIsVisible
     }
 
     /// 上の結果を診断の保持側へ反映する単一の入口。
     /// fileprivate なのは同一ファイル内の別型からも呼ぶため。
     fileprivate func updateDiagnosticsActive(isVisible: Bool, isMiniaturized: Bool) {
+        diagnosticsIsVisible = isVisible
+        diagnosticsIsMiniaturized = isMiniaturized
         diagnostics.active = EQWindowController.wantsWindowDrivenWorkActive(
-            isVisible: isVisible, isMiniaturized: isMiniaturized
+            isVisible: isVisible, isMiniaturized: isMiniaturized, screenIsVisible: screenVisibility.screenIsVisible
         )
     }
 
     /// 可視状態とビューモードとミキサーの状態から 2 つの駆動条件を導く純粋関数。
     /// コンパクトビューのミキサーは行にメーターを持たない。
     static func drivenWork(
-        windowIsVisible: Bool, viewMode: ViewMode, mixerShown: Bool, editing: Bool
+        windowIsVisible: Bool, viewMode: ViewMode, mixerShown: Bool, editing: Bool, screenIsVisible: Bool
     ) -> (visualizer: Bool, mixerMeters: Bool) {
-        (
-            visualizer: windowIsVisible && !mixerShown,
-            mixerMeters: windowIsVisible && mixerShown && !editing && viewMode == .normal
+        let shows = windowIsVisible && screenIsVisible
+        return (
+            visualizer: shows && !mixerShown,
+            mixerMeters: shows && mixerShown && !editing && viewMode == .normal
         )
     }
 
     /// 上の結果を駆動側へ反映する単一の入口。
     private func applyDrivenWork(viewMode: ViewMode, shown: Bool, editing: Bool) {
         let wants = EQWindowController.drivenWork(
-            windowIsVisible: windowIsVisible, viewMode: viewMode, mixerShown: shown, editing: editing
+            windowIsVisible: windowIsVisible, viewMode: viewMode, mixerShown: shown, editing: editing,
+            screenIsVisible: screenVisibility.screenIsVisible
         )
         viewModel.visualizerActive = wants.visualizer
         mixerRenderClock?.active = wants.mixerMeters
@@ -391,6 +404,12 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateDrivenWork() {
         applyDrivenWork(viewMode: viewModel.viewMode, shown: mixer.shown, editing: mixer.editing)
+    }
+
+    /// 画面の見え方を入力に持つ門をまとめて導き直す単一の入口。
+    private func updateGatesForScreenVisibility() {
+        updateDrivenWork()
+        updateDiagnosticsActive(isVisible: diagnosticsIsVisible, isMiniaturized: diagnosticsIsMiniaturized)
     }
 
     /// ドライバ未検出の間は EQ ウィンドウを開くたびにインストールを促す (TopBar の警告チップとは別に、能動的に知らせる導線)。

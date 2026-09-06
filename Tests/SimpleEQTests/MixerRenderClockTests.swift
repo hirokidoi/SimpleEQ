@@ -63,7 +63,7 @@ final class MixerRenderClockTests: XCTestCase {
         renderClock.add(row)
         renderClock.active = true
 
-        let old = MixerRenderClock.fps(visualizerFps: viewModel.visualizerFps)
+        let old = MixerRenderClock.fps(visualizerFpsCeiling: viewModel.visualizerFpsCeiling)
         // 旧い刻みのまま、窓が満ちる手前まで回す。
         let oldBase = clock.now
         let oldTicks = Int((RenderMetrics.windowSeconds * old).rounded(.up))
@@ -74,7 +74,7 @@ final class MixerRenderClockTests: XCTestCase {
 
         // この tick で刻みが変わる。記録が start より前にあれば、この回は旧窓ごと捨てられる。
         viewModel.visualizerFps = EQLayout.Tuning.idleFps
-        let new = MixerRenderClock.fps(visualizerFps: viewModel.visualizerFps)
+        let new = MixerRenderClock.fps(visualizerFpsCeiling: viewModel.visualizerFpsCeiling)
         XCTAssertNotEqual(new, old, "前提: 設定の変更で Mixer の刻みが変わること")
         clock.setToTick(oldTicks, fps: old, from: oldBase)
         renderClock.tick()
@@ -87,7 +87,7 @@ final class MixerRenderClockTests: XCTestCase {
             renderClock.tick()
         }
 
-        let measured = try XCTUnwrap(viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.firedFps)
+        let measured = try XCTUnwrap(renderSnapshot(viewModel).mixer.firedFps)
         XCTAssertEqual(measured, new, accuracy: 0.001, "刻みが変わる回の tick が新しい窓へ持ち込まれている")
     }
 
@@ -101,23 +101,23 @@ final class MixerRenderClockTests: XCTestCase {
         clock.active = true
 
         XCTAssertTrue(
-            viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.running,
+            renderSnapshot(viewModel).mixer.running,
             "起動が記録されていない"
         )
 
         // 窓は時刻で区切るため、tick を連続で呼んでも満ちない。実タイマに回させる。
         pumpRunLoopUntil(
-            { viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.firedFps != nil },
+            { renderSnapshot(viewModel).mixer.firedFps != nil },
             timeout: RenderMetrics.windowSeconds * 6
         )
 
         XCTAssertNotNil(
-            viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.firedFps,
+            renderSnapshot(viewModel).mixer.firedFps,
             "tick の発火が観測量へ届いていない"
         )
 
         clock.active = false
-        let stopped = viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer
+        let stopped = renderSnapshot(viewModel).mixer
         XCTAssertFalse(stopped.running, "停止が記録されていない")
         XCTAssertNil(stopped.firedFps, "停止後に直前の実測が残っている")
     }
@@ -145,9 +145,9 @@ final class MixerRenderClockTests: XCTestCase {
     /// 刻みは上限で頭打ちにし、それより遅い設定のときはその設定より速く回さない。
     func testClockIsCappedButNeverFasterThanTheVisualizer() {
         let cap = EQLayout.Mixer.meterFpsCap
-        XCTAssertEqual(MixerRenderClock.fps(visualizerFps: cap * 2), cap)
-        XCTAssertEqual(MixerRenderClock.fps(visualizerFps: cap), cap)
-        XCTAssertEqual(MixerRenderClock.fps(visualizerFps: cap / 2), cap / 2)
+        XCTAssertEqual(MixerRenderClock.fps(visualizerFpsCeiling: cap * 2), cap)
+        XCTAssertEqual(MixerRenderClock.fps(visualizerFpsCeiling: cap), cap)
+        XCTAssertEqual(MixerRenderClock.fps(visualizerFpsCeiling: cap / 2), cap / 2)
     }
 
     /// ウィンドウを閉じてもビューはウィンドウに載ったままなので、行の出入りだけでは止まらない。

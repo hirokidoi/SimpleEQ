@@ -123,11 +123,20 @@ struct DiagnosticsView: View {
     }
 
     /// 経過時間は時間の経過そのもので変わるため、この行だけを時間で再描画される単位として切り出す。
+    @ViewBuilder
     private var resetRow: some View {
-        TimelineView(.periodic(from: Date(), by: Self.refreshInterval)) { context in
-            diagnosticsRow(title: "観測量のリセット", subtitle: resetSubtitle(at: context.date)) {
-                actionButton("リセット") { model.reset() }
+        if model.active {
+            TimelineView(.periodic(from: Date(), by: Self.refreshInterval)) { context in
+                resetRowContent(at: context.date)
             }
+        } else {
+            resetRowContent(at: Date())
+        }
+    }
+
+    private func resetRowContent(at now: Date) -> some View {
+        diagnosticsRow(title: "観測量のリセット", subtitle: resetSubtitle(at: now)) {
+            actionButton("リセット") { model.reset() }
         }
     }
 

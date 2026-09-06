@@ -7,11 +7,11 @@ final class RenderMetricsTests: XCTestCase {
     private let settingFps = EQLayout.Tuning.visualizerFpsDefault
 
     private func visualizer(_ metrics: RenderMetrics) -> RenderMetrics.Snapshot.Visualizer {
-        metrics.snapshot(visualizerFps: settingFps).visualizer
+        metrics.snapshot(visualizerFps: settingFps, visualizerFpsCeiling: settingFps).visualizer
     }
 
     private func mixer(_ metrics: RenderMetrics) -> RenderMetrics.Snapshot.Mixer {
-        metrics.snapshot(visualizerFps: settingFps).mixer
+        metrics.snapshot(visualizerFps: settingFps, visualizerFpsCeiling: settingFps).mixer
     }
 
     /// 窓が確定するのに要る発火数。
@@ -167,9 +167,30 @@ final class RenderMetricsTests: XCTestCase {
     func testMixerSettingRateComesFromTheSameExpressionTheClockUses() {
         let metrics = RenderMetrics()
         for fps in EQLayout.Tuning.visualizerFpsChoices {
-            let snapshot = metrics.snapshot(visualizerFps: fps)
+            let snapshot = metrics.snapshot(visualizerFps: fps, visualizerFpsCeiling: fps)
             XCTAssertEqual(snapshot.visualizerSettingFps, fps)
-            XCTAssertEqual(snapshot.mixerEffectiveFps, MixerRenderClock.fps(visualizerFps: fps))
+            XCTAssertEqual(snapshot.mixerEffectiveFps, MixerRenderClock.fps(visualizerFpsCeiling: fps))
         }
+    }
+
+    // 設定の行は利用者が選んだ値を、Mixer の行はクロックが実際に上限として読む値を出す。
+    // Mixer 側は自分の頭打ちを持つため、上限がそれを下回る組でないと取り違えが表に出ない。
+    func testTheSettingRowAndTheMixerRowReadDifferentInputs() {
+        let setting = EQLayout.Tuning.visualizerFpsChoices.last!
+        let ceiling = EQLayout.Tuning.visualizerFpsChoices.first!
+        XCTAssertLessThan(ceiling, EQLayout.Mixer.meterFpsCap, "前提: 上限が Mixer 自身の頭打ちより下")
+        XCTAssertNotEqual(
+            MixerRenderClock.fps(visualizerFpsCeiling: setting),
+            MixerRenderClock.fps(visualizerFpsCeiling: ceiling),
+            "前提: この組なら設定と上限の取り違えが値の違いとして出る"
+        )
+
+        let snapshot = RenderMetrics().snapshot(visualizerFps: setting, visualizerFpsCeiling: ceiling)
+
+        XCTAssertEqual(snapshot.visualizerSettingFps, setting, "設定の行は選んだ値のまま")
+        XCTAssertEqual(
+            snapshot.mixerEffectiveFps, MixerRenderClock.fps(visualizerFpsCeiling: ceiling),
+            "Mixer の行は上限から導く"
+        )
     }
 }

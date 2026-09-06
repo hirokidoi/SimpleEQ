@@ -1347,7 +1347,7 @@ final class EQViewModelTests: XCTestCase {
 
         let snapshot = vm.renderMetricsSnapshot()
         XCTAssertEqual(snapshot.visualizerSettingFps, probeFps)
-        XCTAssertEqual(snapshot.mixerEffectiveFps, MixerRenderClock.fps(visualizerFps: probeFps))
+        XCTAssertEqual(snapshot.mixerEffectiveFps, MixerRenderClock.fps(visualizerFpsCeiling: vm.visualizerFpsCeiling))
     }
 
     func testSessionOutputDeviceUIDRevertsWhenEngineNotSetUp() {
@@ -1860,18 +1860,18 @@ final class EQViewModelTests: XCTestCase {
             vm.noteStartupActivationSettled()
             vm.updateProcessingState(.active, activeDevice: nil)
             pushMeterSnapshotForTesting(pushed, vm: vm, engine: engine)
-            XCTAssertEqual(vm.displayedLevels, pushed.levels, "前提: 効いている間は観測を映す (\(name))")
+            XCTAssertEqual(vm.displayedMeter.levels, pushed.levels, "前提: 効いている間は観測を映す (\(name))")
 
             makeDisabled(vm)
 
             XCTAssertFalse(vm.canToggleBypass, "前提: 効きようが無い状態になっている (\(name))")
-            XCTAssertEqual(vm.displayedLevels, unobserved.levels, name)
-            XCTAssertEqual(vm.displayedPeaks, unobserved.peaks, name)
-            XCTAssertEqual(vm.displayedStereoLevel, unobserved.stereo, name)
+            XCTAssertEqual(vm.displayedMeter.levels, unobserved.levels, name)
+            XCTAssertEqual(vm.displayedMeter.peaks, unobserved.peaks, name)
+            XCTAssertEqual(vm.displayedMeter.stereo, unobserved.stereo, name)
             XCTAssertEqual(vm.levels, pushed.levels, "押し出された値そのものは保つ (\(name))")
 
             pushMeterSnapshotForTesting(pushed, vm: vm, engine: engine)
-            XCTAssertEqual(vm.displayedLevels, unobserved.levels, "効きようが無い間は押し出しても映さない (\(name))")
+            XCTAssertEqual(vm.displayedMeter.levels, unobserved.levels, "効きようが無い間は押し出しても映さない (\(name))")
         }
     }
 
@@ -1911,8 +1911,26 @@ final class EQViewModelTests: XCTestCase {
         pushMeterSnapshotForTesting(pushed, vm: vm, engine: engine)
 
         XCTAssertFalse(vm.processingInEffect, "前提: 素通し中は灰色にする側の判定は偽")
-        XCTAssertEqual(vm.displayedLevels, pushed.levels)
-        XCTAssertEqual(vm.displayedStereoLevel, pushed.stereo)
+        XCTAssertEqual(vm.displayedMeter.levels, pushed.levels)
+        XCTAssertEqual(vm.displayedMeter.stereo, pushed.stereo)
+    }
+
+    // 上限を決め直す入口を通らないと、既定値のまま取り残されて設定より速く回る。
+    // 低電力モードの有無は実行環境で決まるため、それに依存しない不変条件で見る。
+    func testTheCeilingNeverExceedsTheSettingWhicheverWasChosen() {
+        for fps in EQLayout.Tuning.visualizerFpsChoices {
+            let store = SettingsStore(defaults: defaults)
+            store.visualizerFps = fps
+            let vm = makeVM(store)
+            XCTAssertLessThanOrEqual(vm.visualizerFpsCeiling, fps, "起動時の上限が設定を超えている (\(fps))")
+
+            for changed in EQLayout.Tuning.visualizerFpsChoices {
+                vm.visualizerFps = changed
+                XCTAssertLessThanOrEqual(
+                    vm.visualizerFpsCeiling, changed, "設定を動かした後の上限が設定を超えている (\(fps) → \(changed))"
+                )
+            }
+        }
     }
 
     // 動的 tick 発火の回帰テストがこのカウンタに依存するため、健全性をここで担保する。

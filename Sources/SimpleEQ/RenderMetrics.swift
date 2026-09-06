@@ -65,11 +65,11 @@ final class RenderMetrics {
 
     // MARK: - 読み出し
 
-    func snapshot(visualizerFps: Double) -> Snapshot {
+    func snapshot(visualizerFps: Double, visualizerFpsCeiling: Double) -> Snapshot {
         Snapshot(
             visualizerSettingFps: visualizerFps,
             visualizer: visualizer.visualizerSnapshot(),
-            mixerEffectiveFps: MixerRenderClock.fps(visualizerFps: visualizerFps),
+            mixerEffectiveFps: MixerRenderClock.fps(visualizerFpsCeiling: visualizerFpsCeiling),
             mixer: mixer.mixerSnapshot()
         )
     }

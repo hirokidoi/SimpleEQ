@@ -184,47 +184,53 @@ final class EQWindowControllerTests: XCTestCase {
         XCTAssertEqual(EQWindowController.heightLimit(currentHeight: 450, scrollOverflow: -200, minHeight: 420), 420)
     }
 
-    // MARK: - wantsWindowDrivenWorkActive(isVisible:isMiniaturized:)
+    // MARK: - wantsWindowDrivenWorkActive(isVisible:isMiniaturized:screenIsVisible:)
 
-    // isVisible/isMiniaturized の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
+    // 3 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
     func testWantsWindowDrivenWorkActiveIsTrueOnlyWhenVisibleAndNotMiniaturized() throws {
         for isVisible in [true, false] {
             for isMiniaturized in [true, false] {
-                let expected = isVisible && !isMiniaturized
-                XCTAssertEqual(
-                    EQWindowController.wantsWindowDrivenWorkActive(
-                        isVisible: isVisible, isMiniaturized: isMiniaturized
-                    ),
-                    expected,
-                    "isVisible=\(isVisible) isMiniaturized=\(isMiniaturized)"
-                )
+                for screenIsVisible in [true, false] {
+                    let expected = isVisible && !isMiniaturized && screenIsVisible
+                    XCTAssertEqual(
+                        EQWindowController.wantsWindowDrivenWorkActive(
+                            isVisible: isVisible, isMiniaturized: isMiniaturized, screenIsVisible: screenIsVisible
+                        ),
+                        expected,
+                        "isVisible=\(isVisible) isMiniaturized=\(isMiniaturized) screen=\(screenIsVisible)"
+                    )
+                }
             }
         }
     }
 
-    // MARK: - drivenWork(windowIsVisible:viewMode:mixerShown:editing:)
+    // MARK: - drivenWork(windowIsVisible:viewMode:mixerShown:editing:screenIsVisible:)
 
-    // 4 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
+    // 5 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
     func testDrivenWorkFollowsVisibilityAndTheMixerState() {
         for windowIsVisible in [true, false] {
-            for viewMode in ViewMode.allCases {
-                for mixerShown in [true, false] {
-                    for editing in [true, false] {
-                        let wants = EQWindowController.drivenWork(
-                            windowIsVisible: windowIsVisible, viewMode: viewMode,
-                            mixerShown: mixerShown, editing: editing
-                        )
-                        let label =
-                            "visible=\(windowIsVisible) mode=\(viewMode) shown=\(mixerShown) editing=\(editing)"
-                        XCTAssertEqual(wants.visualizer, windowIsVisible && !mixerShown, "ビジュアライザ \(label)")
-                        XCTAssertEqual(
-                            wants.mixerMeters,
-                            windowIsVisible && mixerShown && !editing && viewMode == .normal,
-                            "行のメーター \(label)"
-                        )
-                        XCTAssertFalse(
-                            wants.visualizer && wants.mixerMeters, "両方が同時に回ることはない \(label)"
-                        )
+            for screenIsVisible in [true, false] {
+                for viewMode in ViewMode.allCases {
+                    for mixerShown in [true, false] {
+                        for editing in [true, false] {
+                            let wants = EQWindowController.drivenWork(
+                                windowIsVisible: windowIsVisible, viewMode: viewMode,
+                                mixerShown: mixerShown, editing: editing, screenIsVisible: screenIsVisible
+                            )
+                            let shows = windowIsVisible && screenIsVisible
+                            let label =
+                                "visible=\(windowIsVisible) screen=\(screenIsVisible) mode=\(viewMode) "
+                                + "shown=\(mixerShown) editing=\(editing)"
+                            XCTAssertEqual(wants.visualizer, shows && !mixerShown, "ビジュアライザ \(label)")
+                            XCTAssertEqual(
+                                wants.mixerMeters,
+                                shows && mixerShown && !editing && viewMode == .normal,
+                                "行のメーター \(label)"
+                            )
+                            XCTAssertFalse(
+                                wants.visualizer && wants.mixerMeters, "両方が同時に回ることはない \(label)"
+                            )
+                        }
                     }
                 }
             }
@@ -234,14 +240,33 @@ final class EQWindowControllerTests: XCTestCase {
     // コンパクトの面は行にメーターを持たないため、面が出ていても駆動しない。
     func testCompactMixerDrivesNeitherTheVisualizerNorTheRowMeters() {
         let compact = EQWindowController.drivenWork(
-            windowIsVisible: true, viewMode: .compact, mixerShown: true, editing: false
+            windowIsVisible: true, viewMode: .compact, mixerShown: true, editing: false, screenIsVisible: true
         )
         XCTAssertFalse(compact.mixerMeters, "コンパクトの面では行のメーターを回さない")
         XCTAssertFalse(compact.visualizer, "面が出ている間はビジュアライザも回さない")
 
         let normal = EQWindowController.drivenWork(
-            windowIsVisible: true, viewMode: .normal, mixerShown: true, editing: false
+            windowIsVisible: true, viewMode: .normal, mixerShown: true, editing: false, screenIsVisible: true
         )
         XCTAssertTrue(normal.mixerMeters, "ノーマルの面では回す")
+    }
+
+    // MARK: - ScreenVisibility.isVisible(locked:mainDisplayAsleep:onConsole:)
+
+    // 3 つの入力の全組み合わせを網羅する。OS の実状態の読み取り自体は対象外。
+    func testScreenIsVisibleOnlyWhenUnlockedAwakeAndOnConsole() {
+        for locked in [true, false] {
+            for asleep in [true, false] {
+                for onConsole in [true, false] {
+                    XCTAssertEqual(
+                        ScreenVisibility.isVisible(
+                            locked: locked, mainDisplayAsleep: asleep, onConsole: onConsole
+                        ),
+                        !locked && !asleep && onConsole,
+                        "locked=\(locked) asleep=\(asleep) onConsole=\(onConsole)"
+                    )
+                }
+            }
+        }
     }
 }

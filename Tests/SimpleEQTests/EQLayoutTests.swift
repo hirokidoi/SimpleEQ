@@ -74,6 +74,25 @@ final class EQLayoutTests: XCTestCase {
         XCTAssertTrue(EQLayout.Tuning.visualizerFpsChoices.contains(EQLayout.Tuning.visualizerFpsDefault))
         XCTAssertEqual(EQLayout.Tuning.visualizerFpsChoices, EQLayout.Tuning.visualizerFpsChoices.sorted())
         XCTAssertEqual(Set(EQLayout.Tuning.visualizerFpsChoices).count, EQLayout.Tuning.visualizerFpsChoices.count)
+        XCTAssertTrue(
+            EQLayout.Tuning.visualizerFpsChoices.contains(EQLayout.Tuning.lowPowerFpsCap),
+            "低電力モードの上限は選択肢のいずれかであること"
+        )
+    }
+
+    // 低電力モードは上限を被せるだけで、それより遅い設定を速くはしない。
+    func testVisualizerFpsCeilingCapsOnlyWhileOnLowPower() {
+        for setting in EQLayout.Tuning.visualizerFpsChoices {
+            XCTAssertEqual(
+                EQLayout.Tuning.visualizerFpsCeiling(setting: setting, lowPower: false), setting,
+                "低電力モードでなければ設定のまま (\(setting))"
+            )
+            XCTAssertEqual(
+                EQLayout.Tuning.visualizerFpsCeiling(setting: setting, lowPower: true),
+                min(setting, EQLayout.Tuning.lowPowerFpsCap),
+                "低電力モード中は上限を超えない (\(setting))"
+            )
+        }
     }
 
     // レンジを持つ既定値は、そのレンジ内に収まっていること。

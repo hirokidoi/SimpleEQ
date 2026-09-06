@@ -65,11 +65,11 @@ final class MixerRenderClock {
 
     private var appliedFps: Double?
 
-    private var fps: Double { Self.fps(visualizerFps: viewModel.visualizerFps) }
+    private var fps: Double { Self.fps(visualizerFpsCeiling: viewModel.visualizerFpsCeiling) }
 
     /// ビジュアライザより速くは回さず、上限も超えない。
-    static func fps(visualizerFps: Double) -> Double {
-        min(visualizerFps, EQLayout.Mixer.meterFpsCap)
+    static func fps(visualizerFpsCeiling: Double) -> Double {
+        min(visualizerFpsCeiling, EQLayout.Mixer.meterFpsCap)
     }
 
     private func start() {
@@ -97,7 +97,14 @@ final class MixerRenderClock {
     private func discardValuesAccumulatedWhileStopped() {
         levelStore.takeSamples(into: &samples)
         for index in samples.indices { lastClipCounts[index] = samples[index].clipEventCount }
-        for view in views.allObjects { view.resetDisplayedLevel() }
+        withMergedTransaction { view in view.resetDisplayedLevel() }
+    }
+
+    private func withMergedTransaction(_ body: (MixerRowLayerView) -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        for view in views.allObjects { body(view) }
     }
 
     func tick() {
@@ -114,7 +121,7 @@ final class MixerRenderClock {
             if sample.clipEventCount > lastClipCounts[index] { clippedSlots.insert(index) }
             lastClipCounts[index] = sample.clipEventCount
         }
-        for view in views.allObjects { view.applyFrame(clock: self) }
+        withMergedTransaction { view in view.applyFrame(clock: self) }
     }
 }
 
@@ -327,35 +334,38 @@ final class MixerRowLayerView: NSView {
     }
 
     /// 残しておくと、次のフレームが届くまで止まる前の高さを見せてしまう。
-    func resetDisplayedLevel() {
+    fileprivate func resetDisplayedLevel() {
         smoothedRatio = 0
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         applyMeter(ratio: 0, clipped: false)
-        CATransaction.commit()
     }
 
-    func applyFrame(clock: MixerRenderClock) {
+    fileprivate func applyFrame(clock: MixerRenderClock) {
         let level = clock.level(forClientIDs: clientIDs)
         smoothedRatio = LevelMeter.smoothed(
             prev: smoothedRatio, target: level.ratio, attack: clock.attackCoef, release: clock.releaseCoef
         )
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         applyMeter(ratio: smoothedRatio, clipped: level.clipped)
-        CATransaction.commit()
     }
+
+    /// 反映済みの段の並び。幾何が塗りに影響するのは段数だけで、それはこの値に入っている。
+    private struct AppliedMeter: Equatable {
+        let litRowCount: Int
+        let clipped: Bool
+    }
+    private var appliedMeter: AppliedMeter?
 
     private func applyMeter(ratio: Double, clipped: Bool) {
         guard let segmentGrid else { return }
-        let lit = segmentGrid.litRowCountByRatio(ratio)
+        let meter = AppliedMeter(litRowCount: segmentGrid.litRowCountByRatio(ratio), clipped: clipped)
+        guard appliedMeter != meter else { return }
+        appliedMeter = meter
         let last = segments.count - 1
         for (index, segment) in segments.enumerated() {
             if index == last, clipped {
                 segment.backgroundColor = Self.clipColor
                 continue
             }
-            segment.backgroundColor = index < lit ? Self.litColors[index] : Self.dimColors[index]
+            segment.backgroundColor = index < meter.litRowCount ? Self.litColors[index] : Self.dimColors[index]
         }
     }
 

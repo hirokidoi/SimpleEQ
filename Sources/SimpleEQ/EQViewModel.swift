@@ -134,7 +134,18 @@ final class EQViewModel: ObservableObject {
         didSet {
             guard oldValue != visualizerFps else { return }
             settings.visualizerFps = visualizerFps
+            refreshVisualizerFpsCeiling()
         }
+    }
+    /// 各クロックが上限として読む刻み。
+    /// 毎フレーム読まれるため @Published を通さない (Combine の getter は 1 回ごとに型検査を伴う)。
+    private(set) var visualizerFpsCeiling: Double = EQLayout.Tuning.visualizerFpsDefault
+    private var powerStateSubscription: AnyCancellable?
+    /// 上限を決め直す唯一の入口。
+    private func refreshVisualizerFpsCeiling() {
+        visualizerFpsCeiling = EQLayout.Tuning.visualizerFpsCeiling(
+            setting: visualizerFps, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled
+        )
     }
     /// ビジュアライザ (バーレベル) の dBFS 下限。
     @Published var floorDb: Double {
@@ -293,10 +304,11 @@ final class EQViewModel: ObservableObject {
     /// 観測が届いていない状態を表す値。
     private static let unobservedMeter = LevelMeter.Snapshot.silent(bandCount: EQSpec.bandCount)
     /// ビジュアライザが実際に映す値 (描画はこちらだけを読む)。
-    var displayedLevels: [Double] { canToggleBypass ? levels : Self.unobservedMeter.levels }
-    var displayedPeaks: [Double] { canToggleBypass ? peaks : Self.unobservedMeter.peaks }
-    var displayedStereoLevel: LevelMeter.Snapshot.Stereo {
-        canToggleBypass ? stereoLevel : Self.unobservedMeter.stereo
+    /// 個別に読むと届く経路の判定がそのたびに走るため、まとめて読む口を置く。
+    var displayedMeter: LevelMeter.Snapshot {
+        canToggleBypass
+            ? LevelMeter.Snapshot(levels: levels, peaks: peaks, stereo: stereoLevel)
+            : Self.unobservedMeter
     }
     /// ハンドル群 (設定ライン/軸の記号/0dB 基準線) の表示アルファ (0...1)。フェードイン/アウト込み。
     private(set) var handleAlpha: Double = 0 { didSet { displayRevision += 1 } }
@@ -345,7 +357,7 @@ final class EQViewModel: ObservableObject {
 
     /// 診断へ渡す観測量。刻みの設定の在処をここに閉じる。
     func renderMetricsSnapshot() -> RenderMetrics.Snapshot {
-        renderMetrics.snapshot(visualizerFps: visualizerFps)
+        renderMetrics.snapshot(visualizerFps: visualizerFps, visualizerFpsCeiling: visualizerFpsCeiling)
     }
 
     init(
@@ -410,6 +422,14 @@ final class EQViewModel: ObservableObject {
         engine.levelMeter.captureEnabled = visualizerActive
         applyProcessingSettingsToEngine()
         autoPreamp?.didDerive = { [weak self] db in self?.applyDerivedPreamp(db) }
+
+        refreshVisualizerFpsCeiling()
+        powerStateSubscription = NotificationCenter.default
+            .publisher(for: .NSProcessInfoPowerStateDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshVisualizerFpsCeiling() }
+            }
     }
 
     // MARK: - 出力デバイス
@@ -623,7 +643,7 @@ final class EQViewModel: ObservableObject {
     func tick(now: Date, processingInEffect: Bool? = nil) {
         tickInvocationCount += 1
         let dtCap = EQLayout.Tuning.visualizerTickIntervalCap
-        let dt = lastTick.map { max(0, min(dtCap, now.timeIntervalSince($0))) } ?? (1.0 / visualizerFps)
+        let dt = lastTick.map { max(0, min(dtCap, now.timeIntervalSince($0))) } ?? (1.0 / visualizerFpsCeiling)
         lastTick = now
         let inEffect = processingInEffect ?? self.processingInEffect
         pullMeter(dt: dt, processingInEffect: inEffect)

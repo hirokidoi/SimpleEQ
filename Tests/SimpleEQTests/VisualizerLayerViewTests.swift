@@ -17,6 +17,54 @@ final class VisualizerTimerGateTests: XCTestCase {
     }
 }
 
+/// 段の並びが同じでも幾何が組み直されたら描き直すこと。
+/// 反映済みの並びを持って書き込みを省く実装が、その持ち越しを捨て損ねると絵が古いまま残る。
+@MainActor
+final class BandColumnTests: XCTestCase {
+    private func makeGrid(plotHeight: CGFloat) -> EQLayout.SegmentGrid {
+        EQLayout.SegmentGrid(
+            height: plotHeight, bottomY: plotHeight, pixelGrid: EQLayout.PixelGrid(scale: 2), rowCount: nil
+        )
+    }
+
+    // 列の位置と幅は apply の引数に現れないため、段の並びが一致していても組み直しを見落としうる。
+    func testTheLitFrameFollowsAReLayoutThatMovesOnlyTheColumn() throws {
+        let pixelGrid = EQLayout.PixelGrid(scale: 2)
+        let plotHeight = pixelGrid.snap(200)
+        let imageSet = try XCTUnwrap(
+            BandImageBaker.bake(
+                plotHeight: plotHeight, pixelGrid: pixelGrid, peakCapBrightenAmount: 0.3,
+                rowCount: nil, includesChrome: false
+            )
+        )
+        let column = BandColumn(container: CALayer())
+        let grid = makeGrid(plotHeight: plotHeight)
+
+        column.layout(localX: 0, barWidth: 10, plotHeight: plotHeight, imageSet: imageSet, inEffect: true)
+        column.apply(litRowCount: 3, capRowIndex: 6, grid: grid, plotHeight: plotHeight)
+
+        column.layout(localX: 50, barWidth: 24, plotHeight: plotHeight, imageSet: imageSet, inEffect: true)
+        column.apply(litRowCount: 3, capRowIndex: 6, grid: grid, plotHeight: plotHeight)
+
+        XCTAssertEqual(column.litLayer.frame.minX, 50, accuracy: 0.001, "点灯帯が新しい列位置へ移ること")
+        XCTAssertEqual(column.litLayer.frame.width, 24, accuracy: 0.001, "点灯帯が新しい列幅を取ること")
+        XCTAssertEqual(column.capLayer.frame.minX, 50, accuracy: 0.001, "キャップが新しい列位置へ移ること")
+        XCTAssertEqual(column.capLayer.frame.width, 24, accuracy: 0.001, "キャップが新しい列幅を取ること")
+    }
+
+    func testTheCapIsHiddenAgainAfterItWasShown() {
+        let column = BandColumn(container: CALayer())
+        let plotHeight: CGFloat = 200
+        let grid = makeGrid(plotHeight: plotHeight)
+
+        column.apply(litRowCount: 3, capRowIndex: 6, grid: grid, plotHeight: plotHeight)
+        XCTAssertFalse(column.capLayer.isHidden)
+
+        column.apply(litRowCount: 3, capRowIndex: nil, grid: grid, plotHeight: plotHeight)
+        XCTAssertTrue(column.capLayer.isHidden, "キャップが外れた回は反映されること")
+    }
+}
+
 /// 焼き込みと段位置が同一の情報源から出ていることを、透明/不透明のサンプリングで確認する。
 @MainActor
 final class BandImageBakerTests: XCTestCase {
@@ -1261,14 +1309,14 @@ final class VisualizerHostViewTests: XCTestCase {
         let (_, window) = makeTimerDrivenHostView(vm)
         defer { window.orderOut(nil) }
 
-        XCTAssertTrue(vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.running, "起動が記録されていない")
+        XCTAssertTrue(renderSnapshot(vm).visualizer.running, "起動が記録されていない")
 
         // 窓が満ちるまで回し、実測が立つことで発火が数えられていることを見る。
         pumpRunLoopUntil(
-            { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps != nil },
+            { renderSnapshot(vm).visualizer.firedFps != nil },
             timeout: RenderMetrics.windowSeconds * 4
         )
-        let clock = vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer
+        let clock = renderSnapshot(vm).visualizer
         XCTAssertNotNil(clock.firedFps, "タイマの発火が観測量へ届いていない")
         XCTAssertEqual(clock.scheduledFps, vm.visualizerFps, "起動時の刻みが記録されていない")
     }
@@ -1278,18 +1326,18 @@ final class VisualizerHostViewTests: XCTestCase {
         let (hostView, window) = makeTimerDrivenHostView(vm)
         defer { window.orderOut(nil) }
         pumpRunLoopUntil(
-            { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps != nil },
+            { renderSnapshot(vm).visualizer.firedFps != nil },
             timeout: RenderMetrics.windowSeconds * 4
         )
         XCTAssertNotNil(
-            vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps,
+            renderSnapshot(vm).visualizer.firedFps,
             "前提: 停止させる前に窓が確定していること"
         )
 
         vm.visualizerActive = false
         hostView.updateTimerRunning()
 
-        let clock = vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer
+        let clock = renderSnapshot(vm).visualizer
         XCTAssertFalse(clock.running, "停止が記録されていない")
         XCTAssertNil(clock.firedFps, "停止後に直前の実測が残っている")
     }
@@ -1302,8 +1350,8 @@ final class VisualizerHostViewTests: XCTestCase {
         vm.visualizerFps = EQLayout.Tuning.visualizerFpsDefault
         let (_, window) = makeTimerDrivenHostView(vm)
         defer { window.orderOut(nil) }
-        func measured() -> Double? { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps }
-        func scheduled() -> Double? { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.scheduledFps }
+        func measured() -> Double? { renderSnapshot(vm).visualizer.firedFps }
+        func scheduled() -> Double? { renderSnapshot(vm).visualizer.scheduledFps }
 
         pumpRunLoopUntil({ measured() != nil }, timeout: RenderMetrics.windowSeconds * 8)
         XCTAssertNotNil(measured(), "前提: 刻みを変える前に窓が確定していること")

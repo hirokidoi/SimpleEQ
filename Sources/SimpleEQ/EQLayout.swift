@@ -373,8 +373,14 @@ enum EQLayout {
         /// ビジュアライザを描き直す頻度の上限 (fps)。
         static let visualizerFpsChoices: [Double] = [10, 12, 15, 20, 30, 60]
         static let visualizerFpsDefault: Double = 30
+        /// 低電力モード中に被せる上限 (fps、設計値)。
+        static let lowPowerFpsCap: Double = 30
         /// 描画 tick の間隔として想定する上限 (秒)。
         static let visualizerTickIntervalCap: Double = 1.0 / min(visualizerFpsChoices.min()!, idleFps)
+
+        static func visualizerFpsCeiling(setting: Double, lowPower: Bool) -> Double {
+            lowPower ? min(setting, lowPowerFpsCap) : setting
+        }
 
         /// ビジュアライザ (バーレベル) の dBFS 下限。バー全高 = [下限..0]dBFS として扱う。
         static let floorDbDefault: Double = -60

@@ -1,6 +1,8 @@
 import XCTest
 @testable import SimpleEQ
 
+private let defaultFps = EQLayout.Tuning.visualizerFpsDefault
+
 @MainActor
 final class DiagnosticsTests: XCTestCase {
 
@@ -704,7 +706,7 @@ final class DiagnosticsTests: XCTestCase {
         let metrics = RenderMetrics()
         metrics.visualizerDidStart(scheduledFps: EQLayout.Tuning.idleFps)
         metrics.mixerDidStart()
-        let rows = drawingRows(metrics.snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault))
+        let rows = drawingRows(metrics.snapshot(visualizerFps: defaultFps, visualizerFpsCeiling: defaultFps))
 
         XCTAssertEqual(rows["ビジュアライザの駆動"], ["稼働中"], "窓が満ちる前に停止中と出てはならない")
         XCTAssertEqual(rows["Mixer メーターの駆動"], ["稼働中"], "窓が満ちる前に停止中と出てはならない")
@@ -766,14 +768,14 @@ final class DiagnosticsTests: XCTestCase {
             clock.setToTick(i, fps: mixerFps, from: 0)
             metrics.mixerDidFire()
         }
-        return metrics.snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault)
+        return metrics.snapshot(visualizerFps: defaultFps, visualizerFpsCeiling: defaultFps)
     }
 
     // MARK: - 組み立て
 
     /// どのクロックも回っていない状態の観測量。描画の行を見ないテストが使う。
     private func idleRender() -> RenderMetrics.Snapshot {
-        RenderMetrics().snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault)
+        RenderMetrics().snapshot(visualizerFps: defaultFps, visualizerFpsCeiling: defaultFps)
     }
 
     private func makeModel(renderMetrics: RenderMetrics = RenderMetrics()) -> (DiagnosticsModel, AudioWorld) {
@@ -789,7 +791,7 @@ final class DiagnosticsTests: XCTestCase {
         let engine = AudioEngine(audioWorld: audioWorld)
         let model = DiagnosticsModel(
             engine: engine, audioWorld: audioWorld,
-            renderSnapshot: { renderMetrics.snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault) },
+            renderSnapshot: { renderMetrics.snapshot(visualizerFps: defaultFps, visualizerFpsCeiling: defaultFps) },
             exportDirectory: exportDirectory
         )
         return (model, engine, audioWorld)

@@ -84,9 +84,10 @@ final class VisualizerHostView: NSView {
     private var idleFrameCount = 0
     private var lastSeenPrimingSilenceCount: UInt64 = 0
     private var effectiveFps: Double {
-        idleFrameCount >= EQLayout.Tuning.idleFrameThreshold
-            ? min(viewModel.visualizerFps, EQLayout.Tuning.idleFps)
-            : viewModel.visualizerFps
+        let ceiling = viewModel.visualizerFpsCeiling
+        return idleFrameCount >= EQLayout.Tuning.idleFrameThreshold
+            ? min(ceiling, EQLayout.Tuning.idleFps)
+            : ceiling
     }
     /// 反映済みの描画リビジョン。nil は「まだ何も反映していない」。
     private var appliedDisplayRevision: Int?
@@ -403,9 +404,10 @@ final class VisualizerHostView: NSView {
         let showLevelMeter: Bool
 
         init(_ viewModel: EQViewModel, inEffect: Bool) {
-            levels = viewModel.displayedLevels
-            peaks = viewModel.displayedPeaks
-            stereo = viewModel.displayedStereoLevel
+            let meter = viewModel.displayedMeter
+            levels = meter.levels
+            peaks = meter.peaks
+            stereo = meter.stereo
             leftClipped = inEffect && viewModel.leftClipHolding
             rightClipped = inEffect && viewModel.rightClipHolding
             floorDb = viewModel.floorDb
@@ -509,7 +511,8 @@ final class VisualizerHostView: NSView {
             ? grid.capRowIndexByRatio(LevelMeterRenderer.levelRatio(peak, viewModel: viewModel))
             : nil
         if clipped && capIndex == grid.rowCount - 1 { capIndex = nil }
-        clipCells[index].isHidden = !clipped
+        let hidesClip = !clipped
+        if clipCells[index].isHidden != hidesClip { clipCells[index].isHidden = hidesClip }
         meterColumns[index].apply(litRowCount: litCount, capRowIndex: capIndex, grid: grid, plotHeight: plotHeight)
     }
 }
@@ -529,6 +532,13 @@ final class BandColumn {
     let capLayer = CALayer()
     private var localX: CGFloat = 0
     private var barWidth: CGFloat = 0
+    /// 反映済みの段の並び。
+    private struct AppliedRows: Equatable {
+        let litRowCount: Int
+        let capRowIndex: Int?
+        let plotHeight: CGFloat
+    }
+    private var appliedRows: AppliedRows?
 
     init(container: CALayer) {
         for layer in [dimLayer, litLayer, capLayer] {
@@ -542,6 +552,7 @@ final class BandColumn {
     func layout(localX: CGFloat, barWidth: CGFloat, plotHeight: CGFloat, imageSet: BandImageSet, inEffect: Bool) {
         self.localX = localX
         self.barWidth = barWidth
+        appliedRows = nil
         dimLayer.frame = CGRect(x: localX, y: 0, width: barWidth, height: plotHeight)
         dimLayer.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
         for layer in [dimLayer, litLayer, capLayer] {
@@ -566,6 +577,9 @@ final class BandColumn {
     /// 反映するフレームで呼ぶ。点灯帯とキャップは排他 (同じ段を両方で塗らない):
     /// 重なる場合は点灯帯をその1段ぶん短くし、その段はキャップの色だけで描く。
     func apply(litRowCount: Int, capRowIndex: Int?, grid: EQLayout.SegmentGrid, plotHeight: CGFloat) {
+        let rows = AppliedRows(litRowCount: litRowCount, capRowIndex: capRowIndex, plotHeight: plotHeight)
+        guard appliedRows != rows else { return }
+        appliedRows = rows
         let litRowCount = capRowIndex == litRowCount - 1 ? litRowCount - 1 : litRowCount
         let litHeight = grid.litHeight(forRowCount: litRowCount)
         litLayer.frame = CGRect(x: localX, y: plotHeight - litHeight, width: barWidth, height: litHeight)
