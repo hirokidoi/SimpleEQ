@@ -1336,6 +1336,20 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(store.floorDb, -90)
     }
 
+    /// 診断へ渡す観測量は、刻みの設定を今の値から読む。
+    func testRenderMetricsSnapshotCarriesTheCurrentVisualizerFps() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+
+        // 既定値のままだと、読み違えていても一致してしまう。
+        let probeFps = EQLayout.Tuning.visualizerFpsChoices.first { $0 != EQLayout.Tuning.visualizerFpsDefault }!
+        vm.visualizerFps = probeFps
+
+        let snapshot = vm.renderMetricsSnapshot()
+        XCTAssertEqual(snapshot.visualizerSettingFps, probeFps)
+        XCTAssertEqual(snapshot.mixerEffectiveFps, MixerRenderClock.fps(visualizerFps: probeFps))
+    }
+
     func testSessionOutputDeviceUIDRevertsWhenEngineNotSetUp() {
         let store = SettingsStore(defaults: defaults)
         let (vm, audioWorld) = makeVMWithWorld(store)

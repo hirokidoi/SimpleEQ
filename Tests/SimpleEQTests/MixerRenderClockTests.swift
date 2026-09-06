@@ -38,18 +38,88 @@ final class MixerRenderClockTests: XCTestCase {
         XCTAssertLessThan(withoutLevel, boundsMaxX, "ノブが右端からはみ出さないこと")
     }
 
-    private func makeViewModel() -> EQViewModel {
+    private func makeViewModel(renderMetrics: RenderMetrics = RenderMetrics()) -> EQViewModel {
         let settings = SettingsStore(defaults: defaults)
         return EQViewModel(
             engine: AudioEngine(),
             settings: settings,
             outputController: OutputDeviceController(settings: settings, targetDeviceUID: "test-driver-uid"),
-            audioWorld: makeTestAudioWorld()
+            audioWorld: makeTestAudioWorld(),
+            renderMetrics: renderMetrics
         )
     }
 
     private func makeClock(levelStore: MixerLevelStore = MixerLevelStore(slotCount: 4)) -> MixerRenderClock {
         MixerRenderClock(levelStore: levelStore, viewModel: makeViewModel())
+    }
+
+    /// 刻みが変わる回の tick は旧タイマが出したものなので、記録は作り直し (start) より前に置く。
+    /// 後ろに置くとその 1 本が新しい窓の頭に混ざり、確定値が 1/窓長 ぶん過大になる。
+    func testTheTickOnASchedulingChangeIsNotCountedIntoTheNewWindow() throws {
+        let clock = TestClock()
+        let viewModel = makeViewModel(renderMetrics: RenderMetrics(now: { clock.now }))
+        let renderClock = MixerRenderClock(levelStore: MixerLevelStore(slotCount: 4), viewModel: viewModel)
+        let row = MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: renderClock)
+        renderClock.add(row)
+        renderClock.active = true
+
+        let old = MixerRenderClock.fps(visualizerFps: viewModel.visualizerFps)
+        // 旧い刻みのまま、窓が満ちる手前まで回す。
+        let oldBase = clock.now
+        let oldTicks = Int((RenderMetrics.windowSeconds * old).rounded(.up))
+        for i in 1..<oldTicks {
+            clock.setToTick(i, fps: old, from: oldBase)
+            renderClock.tick()
+        }
+
+        // この tick で刻みが変わる。記録が start より前にあれば、この回は旧窓ごと捨てられる。
+        viewModel.visualizerFps = EQLayout.Tuning.idleFps
+        let new = MixerRenderClock.fps(visualizerFps: viewModel.visualizerFps)
+        XCTAssertNotEqual(new, old, "前提: 設定の変更で Mixer の刻みが変わること")
+        clock.setToTick(oldTicks, fps: old, from: oldBase)
+        renderClock.tick()
+
+        // 新しい刻みで窓を 1 つ確定させる。境界ちょうどで確定するとは限らないため 1 回ぶん余裕を持たせる
+        // (一定間隔なら、何回目で確定しても頻度は刻みと一致する)。
+        let newBase = clock.now
+        for i in 1...Int((RenderMetrics.windowSeconds * new).rounded(.up)) + 1 {
+            clock.setToTick(i, fps: new, from: newBase)
+            renderClock.tick()
+        }
+
+        let measured = try XCTUnwrap(viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.firedFps)
+        XCTAssertEqual(measured, new, accuracy: 0.001, "刻みが変わる回の tick が新しい窓へ持ち込まれている")
+    }
+
+    // MARK: - 描画クロックの観測量への記録
+
+    func testClockRecordsItsRunningStateAndFiringIntoTheRenderMetrics() {
+        let viewModel = makeViewModel()
+        let clock = MixerRenderClock(levelStore: MixerLevelStore(slotCount: 4), viewModel: viewModel)
+        let row = MixerRowLayerView(gain: 1, muted: false, enabled: true, showsLevel: true, clock: clock)
+        clock.add(row)
+        clock.active = true
+
+        XCTAssertTrue(
+            viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.running,
+            "起動が記録されていない"
+        )
+
+        // 窓は時刻で区切るため、tick を連続で呼んでも満ちない。実タイマに回させる。
+        pumpRunLoopUntil(
+            { viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.firedFps != nil },
+            timeout: RenderMetrics.windowSeconds * 6
+        )
+
+        XCTAssertNotNil(
+            viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer.firedFps,
+            "tick の発火が観測量へ届いていない"
+        )
+
+        clock.active = false
+        let stopped = viewModel.renderMetrics.snapshot(visualizerFps: viewModel.visualizerFps).mixer
+        XCTAssertFalse(stopped.running, "停止が記録されていない")
+        XCTAssertNil(stopped.firedFps, "停止後に直前の実測が残っている")
     }
 
     /// 行のメーターの平滑化は、ビジュアライザの調整から切り離して持つ。

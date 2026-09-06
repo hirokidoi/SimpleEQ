@@ -57,7 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoPreamp: autoPreamp
     )
 
-    private lazy var diagnostics: DiagnosticsModel = DiagnosticsModel(engine: engine, audioWorld: audioWorld)
+    private lazy var diagnostics: DiagnosticsModel = DiagnosticsModel(
+        engine: engine, audioWorld: audioWorld,
+        renderSnapshot: { [viewModel] in viewModel.renderMetricsSnapshot() }
+    )
 
     private lazy var mixerCoordinator = MixerCoordinator(
         audioWorld: audioWorld, bridge: engine, levelStore: engine.mixerLevelStore
@@ -80,10 +83,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// タイマーが飛ぶ (省電力による間引き・タイマーの合体) 区間は、ハートビートが投入されていないものとして判定に使わない。
     private static let audioWorldHeartbeatTickGapTolerance: Double = 3
 
-    /// システムスリープ中に進まない時計 (秒)。壁時計だとスリープ復帰直後に必ず応答なしと判定される。
-    nonisolated private static func uptimeSeconds() -> TimeInterval {
-        TimeInterval(DispatchTime.now().uptimeNanoseconds) / TimeInterval(NSEC_PER_SEC)
-    }
     /// 技術的な待ち時間の暫定値。実機検証で調整すること。
     static let terminationWaitTimeout: TimeInterval = 5
 
@@ -108,17 +107,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ハートビートは何にも触らない。実行されたという事実だけが情報。
     private func startAudioWorldHeartbeat() {
-        audioWorldHeartbeatWaitingSince = Self.uptimeSeconds()
+        audioWorldHeartbeatWaitingSince = uptimeSeconds()
         let timer = Timer.scheduledTimer(
             withTimeInterval: Self.audioWorldHeartbeatInterval, repeats: true
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.audioWorld.submit(coalescingKey: AudioRequestKey.heartbeat) { [weak self] _ in
-                    let respondedAt = Self.uptimeSeconds()
+                    let respondedAt = uptimeSeconds()
                     DispatchQueue.main.async { self?.audioWorldLastResponse = respondedAt }
                 }
-                let now = Self.uptimeSeconds()
+                let now = uptimeSeconds()
                 defer { self.audioWorldHeartbeatLastTick = now }
                 // tick が飛んだ区間はハートビートが投入されていないため、判定を飛ばし起点を引き直す。
                 guard audioWorldHeartbeatTickIsContinuous(

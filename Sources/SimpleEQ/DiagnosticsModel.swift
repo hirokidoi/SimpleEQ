@@ -8,6 +8,8 @@ final class DiagnosticsModel: ObservableObject {
     /// 表示・書き出しが読むスナップショット。オーディオ世界の観測量そのものは UI 世界から直接読まず、
     /// 依頼の投入を契機に取ったスナップショットがここへ押し出される単一の入口を持つ。
     @Published private(set) var snapshot: AudioRuntimeMetrics.Snapshot
+    /// 描画クロックの観測量。UI 世界の値のため、オーディオ側とは別に取り込む。
+    @Published private(set) var render: RenderMetrics.Snapshot
     /// 定期更新の可否。Diagnostics ウィンドウの可視性から結線する。
     @Published var active: Bool = false
     /// 書き出しの置き場。起動中だけ保たれ、再起動で既定へ戻る。
@@ -22,21 +24,30 @@ final class DiagnosticsModel: ObservableObject {
 
     private let engine: AudioEngine
     private let audioWorld: AudioWorld
+    /// 描画クロックの観測量の取得口。
+    private let renderSnapshot: @MainActor () -> RenderMetrics.Snapshot
     /// 書き出しのファイル操作を行うキュー。
     /// 置き場は画面から選び直せるため、応答の遅い置き場を選ばれてもメインスレッドを止めないようにする。
     nonisolated private static let fileQueue = DispatchQueue(label: "SimpleEQ.diagnostics.export", qos: .utility)
 
-    init(engine: AudioEngine, audioWorld: AudioWorld, exportDirectory: URL = DiagnosticsExport.defaultDirectory()) {
+    init(
+        engine: AudioEngine, audioWorld: AudioWorld,
+        renderSnapshot: @escaping @MainActor () -> RenderMetrics.Snapshot,
+        exportDirectory: URL = DiagnosticsExport.defaultDirectory()
+    ) {
         self.engine = engine
         self.audioWorld = audioWorld
+        self.renderSnapshot = renderSnapshot
         self.exportDirectory = exportDirectory
         self.snapshot = .initial(appliedSampleRate: AudioConfig.appliedSampleRate)
+        self.render = renderSnapshot()
     }
 
     // MARK: - 観測量
 
     /// 定期更新用。意味があるのは最新の 1 件だけのため畳み込む。
     func refresh() {
+        apply(renderSnapshot())
         audioWorld.submit(coalescingKey: AudioRequestKey.diagnosticsSnapshot) { [engine, weak self] token in
             let snapshot = engine.runtimeMetricsSnapshot(token)
             DispatchQueue.main.async { self?.apply(snapshot) }
@@ -61,6 +72,11 @@ final class DiagnosticsModel: ObservableObject {
         self.snapshot = snapshot
     }
 
+    private func apply(_ render: RenderMetrics.Snapshot) {
+        guard self.render != render else { return }
+        self.render = render
+    }
+
     // MARK: - 書き出し
 
     /// 置き場を選び直す。永続化はしない。
@@ -83,11 +99,12 @@ final class DiagnosticsModel: ObservableObject {
     /// 画面へ押し出された値は画面が開いている間しか更新されないため、書き出しにはそれを使わず、
     /// リセットと同じ単発の依頼で取り直す。
     func export(now: Date = Date()) {
-        // 置き場は UI 世界の値のため、依頼を投げる前 (メインスレッド) に読んで持ち回る。
+        // 置き場と描画の観測量は UI 世界の値のため、依頼を投げる前 (メインスレッド) に読んで持ち回る。
         let directory = exportDirectory
+        let render = renderSnapshot()
         audioWorld.submitUncoalesced { [engine, weak self] token in
             let snapshot = engine.runtimeMetricsSnapshot(token)
-            let text = DiagnosticsReport.text(snapshot, exportedAt: now)
+            let text = DiagnosticsReport.text(snapshot, render: render, exportedAt: now)
             Self.fileQueue.async {
                 let outcome = DiagnosticsExport.write(text, into: directory, at: now)
                 // 書き出した値を表示へ反映し直さない (書き込みの間に定期更新が進んでいた場合、

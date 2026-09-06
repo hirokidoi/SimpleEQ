@@ -51,6 +51,21 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertFalse(model.snapshot.readerObserved)
     }
 
+    // ドライバの申告する稼働状態が、そのまま行の綴りになる。
+    func testWriterRunningStateIsSpelledOutAsObserved() {
+        let metrics = AudioRuntimeMetrics()
+        func stateRow(ioIsRunning: Bool) -> [String]? {
+            metrics.recordWriterState(epoch: 1, ioIsRunning: ioIsRunning, ioCycleFrames: 512)
+            metrics.recordReaderObserved(true)
+            let snapshot = metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
+            return DiagnosticsReport.sections(snapshot, render: idleRender())
+                .flatMap(\.rows).first { $0.title == "ドライバの IO 稼働" }?.values
+        }
+
+        XCTAssertEqual(stateRow(ioIsRunning: true), ["稼働中"])
+        XCTAssertEqual(stateRow(ioIsRunning: false), ["停止中"])
+    }
+
     // 直前のデバイスの値を、今のデバイスの公称値として見せない。
     func testOutputDeviceSampleRateBecomesUnobservedWhileNoOutputIsAttached() {
         let (model, engine, audioWorld) = makeModelWithEngine()
@@ -70,7 +85,7 @@ final class DiagnosticsTests: XCTestCase {
         let metrics = AudioRuntimeMetrics(appVersion: "9.9")
         metrics.recordReaderObserved(true)
         metrics.recordDriverVersions(driverVersion: DriverVersion(major: 7, minor: 3), layoutVersion: 42)
-        let text = DiagnosticsReport.text(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), exportedAt: Date())
+        let text = DiagnosticsReport.text(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender(), exportedAt: Date())
 
         XCTAssertTrue(text.contains("アプリ version"))
         XCTAssertTrue(text.contains("9.9"))
@@ -85,7 +100,7 @@ final class DiagnosticsTests: XCTestCase {
         let metrics = AudioRuntimeMetrics(appVersion: "9.9")
         metrics.recordDriverVersions(driverVersion: DriverVersion(major: 7, minor: 3), layoutVersion: 42)
         metrics.recordReaderObserved(false)
-        let rows = DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate))
+        let rows = DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender())
             .flatMap(\.rows)
 
         XCTAssertEqual(rows.first { $0.title == "ドライバ version" }?.values, [unreadableValue])
@@ -103,9 +118,9 @@ final class DiagnosticsTests: XCTestCase {
     // 画面と書き出しは同じ定義から作られるため、書き出しには全ての面と行の見出しが載る。
     func testExportTextCoversEveryRowOfEverySection() {
         let snapshot = AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
-        let text = DiagnosticsReport.text(snapshot, exportedAt: Date())
+        let text = DiagnosticsReport.text(snapshot, render: idleRender(), exportedAt: Date())
 
-        for section in DiagnosticsReport.sections(snapshot) {
+        for section in DiagnosticsReport.sections(snapshot, render: idleRender()) {
             XCTAssertTrue(text.contains(section.title), "面の見出しが書き出しに載る: \(section.title)")
             for row in section.rows {
                 XCTAssertTrue(text.contains(row.title), "行が書き出しに載る: \(row.title)")
@@ -115,7 +130,7 @@ final class DiagnosticsTests: XCTestCase {
 
     func testExportTextAnnotatesRowsWithTheirSubtitle() {
         let snapshot = AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
-        let text = DiagnosticsReport.text(snapshot, exportedAt: Date())
+        let text = DiagnosticsReport.text(snapshot, render: idleRender(), exportedAt: Date())
 
         XCTAssertTrue(text.contains("再プライミング (書き込みの停止 / 目標拡大)"))
     }
@@ -126,7 +141,7 @@ final class DiagnosticsTests: XCTestCase {
         metrics.recordOccupancyBounds(targetFrames: 1536, maxFrames: 4096)
         let snapshot = metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
 
-        let gauges = DiagnosticsReport.sections(snapshot).flatMap { $0.rows }.compactMap { $0.gauge }
+        let gauges = DiagnosticsReport.sections(snapshot, render: idleRender()).flatMap { $0.rows }.compactMap { $0.gauge }
         XCTAssertEqual(gauges.count, 1, "ゲージを持つ行は 1 つ")
         XCTAssertEqual(gauges.first?.targetFrames, 1536)
         XCTAssertEqual(gauges.first?.maxFrames, 4096)
@@ -134,7 +149,7 @@ final class DiagnosticsTests: XCTestCase {
 
     func testUnobservedRateIsShownAsUnobservedRatherThanZero() {
         let snapshot = AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
-        let identity = DiagnosticsReport.sections(snapshot).first { $0.title == "状態" }
+        let identity = DiagnosticsReport.sections(snapshot, render: idleRender()).first { $0.title == "状態" }
         let outputRate = identity?.rows.first { $0.title == "出力デバイスの実レート" }
 
         XCTAssertEqual(outputRate?.values, [unreadableValue], "0 Hz と見せない")
@@ -148,7 +163,7 @@ final class DiagnosticsTests: XCTestCase {
 
         XCTAssertEqual(snapshot.outputDeviceSampleRate, 96000)
 
-        let identity = DiagnosticsReport.sections(snapshot).first { $0.title == "状態" }
+        let identity = DiagnosticsReport.sections(snapshot, render: idleRender()).first { $0.title == "状態" }
         XCTAssertEqual(identity?.rows.first { $0.title == "出力デバイスの実レート" }?.values, ["96000 Hz"])
     }
 
@@ -184,7 +199,7 @@ final class DiagnosticsTests: XCTestCase {
     func testExportTimestampSharesTheWallClockWithTheFileName() {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let text = DiagnosticsReport.text(
-            AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), exportedAt: date
+            AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender(), exportedAt: date
         )
 
         let localClock = DateFormatter()
@@ -197,7 +212,7 @@ final class DiagnosticsTests: XCTestCase {
     func testExportTimestampCarriesTheUTCOffset() {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let text = DiagnosticsReport.text(
-            AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), exportedAt: date
+            AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender(), exportedAt: date
         )
 
         let expected = ISO8601DateFormatter()
@@ -214,7 +229,7 @@ final class DiagnosticsTests: XCTestCase {
         metrics.recordOutputDeviceSampleRate(96000)
         metrics.recordOutputDeviceSampleRate(0)
 
-        let identity = DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate))
+        let identity = DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender())
             .first { $0.title == "状態" }
         XCTAssertEqual(identity?.rows.first { $0.title == "出力デバイスの実レート" }?.values, [unreadableValue])
     }
@@ -322,7 +337,7 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     private func valuesOfRow(_ title: String, in metrics: AudioRuntimeMetrics) -> [String]? {
-        DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate))
+        DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender())
             .flatMap { $0.rows }.first { $0.title == title }?.values
     }
 
@@ -331,7 +346,7 @@ final class DiagnosticsTests: XCTestCase {
         metrics.recordRead(requestedFrames: Int(AudioConfig.appliedSampleRate), deliveredFrames: 0)
 
         let report = DiagnosticsReport.text(
-            metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), exportedAt: Date()
+            metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender(), exportedAt: Date()
         )
 
         let expectedDuration = OccupancyPolicy.formattedDuration(
@@ -342,19 +357,19 @@ final class DiagnosticsTests: XCTestCase {
 
     func testExportTextShowsUnobservedAvailableWindowExplicitly() {
         let snapshot = AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
-        XCTAssertTrue(DiagnosticsReport.text(snapshot, exportedAt: Date()).contains(unreadableValue), "観測前は読めていないことを明示する (0 で偽装しない)")
+        XCTAssertTrue(DiagnosticsReport.text(snapshot, render: idleRender(), exportedAt: Date()).contains(unreadableValue), "観測前は読めていないことを明示する (0 で偽装しない)")
     }
 
     func testExportTextShowsNoResetWhenNeverResetAndTimestampAfterReset() {
         let neverReset = DiagnosticsReport.text(
-            AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), exportedAt: Date()
+            AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender(), exportedAt: Date()
         )
         XCTAssertTrue(neverReset.contains("リセット: なし"))
 
         let metrics = AudioRuntimeMetrics()
         metrics.reset()
         let afterReset = DiagnosticsReport.text(
-            metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), exportedAt: Date()
+            metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender(), exportedAt: Date()
         )
         XCTAssertFalse(afterReset.contains("リセット: なし"))
         XCTAssertTrue(afterReset.contains("経過時間:"))
@@ -409,7 +424,7 @@ final class DiagnosticsTests: XCTestCase {
             )
         )
 
-        let values = DiagnosticsReport.sections(snapshot).flatMap(\.rows).first { $0.title == "音量経路" }?.values
+        let values = DiagnosticsReport.sections(snapshot, render: idleRender()).flatMap(\.rows).first { $0.title == "音量経路" }?.values
         XCTAssertEqual(values, ["デバイス 0.500 / アプリ ON"])
     }
 
@@ -423,7 +438,7 @@ final class DiagnosticsTests: XCTestCase {
             )
         )
 
-        let values = DiagnosticsReport.sections(snapshot).flatMap(\.rows).first { $0.title == "音量経路" }?.values
+        let values = DiagnosticsReport.sections(snapshot, render: idleRender()).flatMap(\.rows).first { $0.title == "音量経路" }?.values
         XCTAssertEqual(values, ["アプリ (降格) 0.250 / デバイス OFF"])
     }
 
@@ -437,7 +452,7 @@ final class DiagnosticsTests: XCTestCase {
             )
         )
 
-        let values = DiagnosticsReport.sections(snapshot).flatMap(\.rows).first { $0.title == "音量経路" }?.values
+        let values = DiagnosticsReport.sections(snapshot, render: idleRender()).flatMap(\.rows).first { $0.title == "音量経路" }?.values
         XCTAssertEqual(values, ["デバイス \(unreadableValue) / デバイス \(unreadableValue)"])
     }
 
@@ -445,7 +460,7 @@ final class DiagnosticsTests: XCTestCase {
         let metrics = AudioRuntimeMetrics()
         let snapshot = metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
 
-        let values = DiagnosticsReport.sections(snapshot).flatMap(\.rows).first { $0.title == "音量経路" }?.values
+        let values = DiagnosticsReport.sections(snapshot, render: idleRender()).flatMap(\.rows).first { $0.title == "音量経路" }?.values
         XCTAssertEqual(values, ["\(unreadableValue) / \(unreadableValue)"])
     }
 
@@ -518,6 +533,27 @@ final class DiagnosticsTests: XCTestCase {
         let written = try String(contentsOf: directory.appendingPathComponent(fileName), encoding: .utf8)
         XCTAssertTrue(written.contains("部分読み"), "書き出しは項目定義から作られる")
         XCTAssertTrue(written.contains("1 回 / 60 frames"), "撃った時点の観測量が載る")
+    }
+
+    // 画面を開かずに撃っても、描画側の観測量は依頼を投げる前に捕まえて書き出しへ乗る。
+    func testExportCarriesTheDrawingRatesFromTheInjectedMetrics() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("simpleeq-diagnostics-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let renderMetrics = RenderMetrics()
+        let (model, _, audioWorld) = makeModelWithEngine(exportDirectory: directory, renderMetrics: renderMetrics)
+        renderMetrics.visualizerDidStart(scheduledFps: EQLayout.Tuning.idleFps)
+
+        model.export()
+        waitForAudioWorld(audioWorld, timeout: 3) { model.lastExport != nil }
+
+        guard case .written(let fileName) = model.lastExport else { return XCTFail("書き出しの結果が残らない") }
+        let written = try String(contentsOf: directory.appendingPathComponent(fileName), encoding: .utf8)
+        XCTAssertTrue(written.contains("ビジュアライザの駆動: 稼働中"), "撃った時点の駆動状態が載っていない")
+        XCTAssertTrue(
+            written.contains("\(Int(EQLayout.Tuning.idleFps)) fps"),
+            "撃った時点の実効の刻みが載っていない"
+        )
     }
 
     // 置き場の選び直しは永続化されない。
@@ -611,19 +647,151 @@ final class DiagnosticsTests: XCTestCase {
         guard case .failed = outcome else { return XCTFail("失敗が失敗として返らない") }
     }
 
+    // MARK: - 描画の面
+
+    func testDrawingRowsAreUnreadableWhileNoClockRuns() {
+        let rows = drawingRows(idleRender())
+
+        XCTAssertEqual(rows["ビジュアライザの駆動"], ["停止中"])
+        XCTAssertEqual(rows["Mixer メーターの駆動"], ["停止中"])
+        // 設定は設定値そのものなので、回っていなくても読める。
+        XCTAssertEqual(rows["ビジュアライザの刻み"]?.first, "\(Int(EQLayout.Tuning.visualizerFpsDefault)) fps")
+        XCTAssertEqual(rows["ビジュアライザの刻み"]?.last, unreadableValue, "止まっている間に実効の刻みを出してはならない")
+        XCTAssertEqual(rows["ビジュアライザの実測"], [unreadableValue, unreadableValue])
+        XCTAssertEqual(rows["Mixer メーターの刻み"]?.last, unreadableValue)
+    }
+
+    func testDrawingRowsCarryTheObservedRates() {
+        let rows = drawingRows(runningRender())
+
+        XCTAssertEqual(rows["ビジュアライザの駆動"], ["稼働中"])
+        XCTAssertEqual(rows["ビジュアライザの刻み"]?.last, "\(Int(EQLayout.Tuning.idleFps)) fps", "実効の刻みが出ていない")
+        XCTAssertEqual(rows["ビジュアライザの実測"]?.count, 2)
+        XCTAssertFalse(
+            rows["ビジュアライザの実測"]?.contains(unreadableValue) ?? true,
+            "窓が確定していれば発火・反映とも読める"
+        )
+    }
+
+    /// 2 つの刻みの行は別のものを指す。同じ語を並べると、隣り合った数字が同種に見えてしまう。
+    func testTheTwoRateRowsDoNotShareTheSameLabelForDifferentThings() {
+        let snapshot = AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
+        let section = DiagnosticsReport.sections(snapshot, render: idleRender()).first { $0.title == "描画" }
+        let subtitles = Dictionary(
+            uniqueKeysWithValues: (section?.rows ?? []).map { ($0.title, $0.subtitle) }
+        )
+
+        XCTAssertEqual(subtitles["ビジュアライザの刻み"], "設定 / 実効")
+        XCTAssertEqual(subtitles["Mixer メーターの刻み"], "実効 / 実測", "Mixer に出るのは設定そのものではない")
+    }
+
+    /// 2 つのクロックを別の刻みで回し、各行が自分のクロックの値を読んでいることを確かめる。
+    func testEachRowReadsItsOwnClock() {
+        let rows = drawingRows(runningRender())
+
+        XCTAssertEqual(
+            rows["ビジュアライザの実測"]?.first, String(format: "%.1f fps", Self.runningVisualizerFps),
+            "ビジュアライザの実測が別のクロックの値を読んでいる"
+        )
+        XCTAssertEqual(
+            rows["Mixer メーターの刻み"]?.last, String(format: "%.1f fps", Self.runningMixerFps),
+            "Mixer の実測が別のクロックの値を読んでいる"
+        )
+    }
+
+    /// 駆動を確定窓の有無から導くと、動き出してから窓が満ちるまでの間だけ「停止中」という誤った値が出る。
+    func testDrawingRowsReportRunningBeforeTheFirstWindowSettles() {
+        let metrics = RenderMetrics()
+        metrics.visualizerDidStart(scheduledFps: EQLayout.Tuning.idleFps)
+        metrics.mixerDidStart()
+        let rows = drawingRows(metrics.snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault))
+
+        XCTAssertEqual(rows["ビジュアライザの駆動"], ["稼働中"], "窓が満ちる前に停止中と出てはならない")
+        XCTAssertEqual(rows["Mixer メーターの駆動"], ["稼働中"], "窓が満ちる前に停止中と出てはならない")
+        // 駆動していることと、まだ測れていないことは別に出す。
+        XCTAssertEqual(rows["ビジュアライザの実測"], [unreadableValue, unreadableValue])
+    }
+
+    /// 画面を開かずメニューから撃つ経路でも、描画の値が書き出しへ乗ることを固定する。
+    func testExportTextCarriesTheDrawingRatesRatherThanUnreadableValues() {
+        let text = DiagnosticsReport.text(
+            AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate),
+            render: runningRender(), exportedAt: Date()
+        )
+
+        XCTAssertTrue(text.contains("[描画]"), "書き出しに描画の面が含まれていない")
+        XCTAssertTrue(text.contains("ビジュアライザの駆動: 稼働中"), "駆動状態が書き出しへ乗っていない")
+        let measured = text.split(separator: "\n").first { $0.hasPrefix("ビジュアライザの実測") }
+        XCTAssertNotNil(measured)
+        XCTAssertFalse(measured?.contains(unreadableValue) ?? true, "書き出しが実測値ではなく読めない綴りを運んでいる")
+    }
+
+    func testRefreshTakesTheDrawingRatesFromTheInjectedMetrics() {
+        let renderMetrics = RenderMetrics()
+        let (model, _) = makeModel(renderMetrics: renderMetrics)
+        XCTAssertFalse(model.render.visualizer.running, "前提: まだどのクロックも回っていないこと")
+
+        renderMetrics.visualizerDidStart(scheduledFps: EQLayout.Tuning.idleFps)
+        model.refresh()
+
+        XCTAssertTrue(model.render.visualizer.running, "定期更新が描画側の観測量を取り込んでいない")
+        XCTAssertEqual(model.render.visualizer.scheduledFps, EQLayout.Tuning.idleFps)
+    }
+
+    private func drawingRows(_ render: RenderMetrics.Snapshot) -> [String: [String]] {
+        let snapshot = AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
+        let section = DiagnosticsReport.sections(snapshot, render: render).first { $0.title == "描画" }
+        return Dictionary(uniqueKeysWithValues: (section?.rows ?? []).map { ($0.title, $0.values) })
+    }
+
+    /// 実効の刻みが設定値と別であることを見分けられるよう、ビジュアライザは idle 側の刻みで回す。
+    private static let runningVisualizerFps = EQLayout.Tuning.idleFps
+    /// 行が読む値を取り違えたら分かるよう、ビジュアライザとは別の刻みで回す。
+    private static let runningMixerFps = EQLayout.Mixer.meterFpsCap
+
+    /// 両方のクロックが回り、窓が 1 つ確定した状態の観測量。
+    private func runningRender() -> RenderMetrics.Snapshot {
+        let (metrics, clock) = makeMetricsWithTestClock()
+        let visualizerFps = Self.runningVisualizerFps
+        let mixerFps = Self.runningMixerFps
+        XCTAssertNotEqual(visualizerFps, mixerFps, "前提: 2 つのクロックを別の刻みで回すこと")
+
+        metrics.visualizerDidStart(scheduledFps: visualizerFps)
+        metrics.mixerDidStart()
+        for i in 1...Int((RenderMetrics.windowSeconds * visualizerFps).rounded(.up)) {
+            clock.setToTick(i, fps: visualizerFps, from: 0)
+            metrics.visualizerDidFire(applied: true)
+        }
+        for i in 1...Int((RenderMetrics.windowSeconds * mixerFps).rounded(.up)) {
+            clock.setToTick(i, fps: mixerFps, from: 0)
+            metrics.mixerDidFire()
+        }
+        return metrics.snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault)
+    }
+
     // MARK: - 組み立て
 
-    private func makeModel() -> (DiagnosticsModel, AudioWorld) {
-        let (model, _, audioWorld) = makeModelWithEngine()
+    /// どのクロックも回っていない状態の観測量。描画の行を見ないテストが使う。
+    private func idleRender() -> RenderMetrics.Snapshot {
+        RenderMetrics().snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault)
+    }
+
+    private func makeModel(renderMetrics: RenderMetrics = RenderMetrics()) -> (DiagnosticsModel, AudioWorld) {
+        let (model, _, audioWorld) = makeModelWithEngine(renderMetrics: renderMetrics)
         return (model, audioWorld)
     }
 
     private func makeModelWithEngine(
-        exportDirectory: URL = FileManager.default.temporaryDirectory
+        exportDirectory: URL = FileManager.default.temporaryDirectory,
+        renderMetrics: RenderMetrics = RenderMetrics()
     ) -> (DiagnosticsModel, AudioEngine, AudioWorld) {
         let audioWorld = makeTestAudioWorld()
         let engine = AudioEngine(audioWorld: audioWorld)
-        let model = DiagnosticsModel(engine: engine, audioWorld: audioWorld, exportDirectory: exportDirectory)
+        let model = DiagnosticsModel(
+            engine: engine, audioWorld: audioWorld,
+            renderSnapshot: { renderMetrics.snapshot(visualizerFps: EQLayout.Tuning.visualizerFpsDefault) },
+            exportDirectory: exportDirectory
+        )
         return (model, engine, audioWorld)
     }
 }

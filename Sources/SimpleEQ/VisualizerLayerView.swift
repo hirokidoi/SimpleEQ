@@ -262,6 +262,7 @@ final class VisualizerHostView: NSView {
         let fps = max(effectiveFps, 1)
         lastTimerFps = fps
         let interval = 1.0 / fps
+        viewModel.renderMetrics.visualizerDidStart(scheduledFps: fps)
         let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -269,6 +270,8 @@ final class VisualizerHostView: NSView {
                 let inEffect = self.viewModel.processingInEffect
                 self.viewModel.tick(now: Date(), processingInEffect: inEffect)
                 let applied = self.applyGeometry(inEffect: inEffect)
+                // 刻みが変わると advanceIdleTracking がクロックを作り直すため、その前にこの回を今の窓へ数える。
+                self.viewModel.renderMetrics.visualizerDidFire(applied: applied)
                 self.advanceIdleTracking(applied: applied)
             }
         }
@@ -282,6 +285,7 @@ final class VisualizerHostView: NSView {
         timer?.invalidate()
         timer = nil
         lastTimerFps = nil
+        viewModel.renderMetrics.visualizerDidStop()
     }
 
     private func advanceIdleTracking(applied: Bool) {

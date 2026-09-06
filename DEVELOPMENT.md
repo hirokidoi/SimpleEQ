@@ -432,7 +432,8 @@ Intervals where the heartbeat was not actually posted, such as when the timer wa
 
 ## Diagnostics
 
-Diagnostics is a screen for inspecting the audio world's internal state as numbers, and it does not appear in the normal usage flow.
+Diagnostics is a screen for inspecting internal state as numbers, and it does not appear in the normal usage flow.
+Most of what it shows comes from the audio world. The drawing clocks are the exception: they are UI-world values, and they reach the screen and the export by a path of their own (→ Reading the Drawing Clocks).
 
 ### How to Open
 
@@ -447,11 +448,12 @@ The other entry point is the Settings button on the preset rail in the normal vi
 The screen is divided into panels (sections), each of which tries to answer a different question.
 
 - A panel that reflects what configuration it is running in right now. Versions, the sample rates in various places, the driver's IO running state, the ring capacity, the target and ceiling occupancy, and so on are laid out here.
+- A panel that reflects how much the screen is being redrawn and how much of that redrawing changes anything. Whether each drawing clock runs, the rate it is scheduled at, and the rate actually measured are laid out here.
 - A panel that reflects whether the audio is flowing without interruption. Occupancy and its gauge, the recent fluctuation range, the peak amplitude, and so on are laid out here.
 - A panel that reflects what has happened so far. The number of times occupancy was cleared, the number of anomalies observed on the writing side, and so on are laid out as cumulative totals since the last reset.
 - A panel for actually performing a reset or an export (it exists only on the screen and is not included in the exported text).
 
-The item definitions for the upper three panels are produced from the same place for both the on-screen display and the exported text, so it is structurally impossible for the two to diverge.
+The item definitions for every panel but the last are produced from the same place for both the on-screen display and the exported text, so it is structurally impossible for the two to diverge.
 The gauge exists only on screen; the export carries the corresponding numbers.
 
 ### Display When a Value Cannot Be Read
@@ -465,9 +467,31 @@ When the dedicated driver newly re-prepares the shared region, the progress coun
 The side that consumes them does not assume the value increases monotonically; it re-establishes its baseline from the value that was observable at the demarcation point (a reset of the metrics, for instance).
 Without re-establishing the baseline, "progress since the demarcation" would always be reported as 0 no matter how far it advances afterwards.
 
+### Reading the Drawing Clocks
+
+The drawing clocks are the one part of Diagnostics whose values do not come from the audio world, so the constraints that hold them together are different from everything else on the screen.
+
+The rate is settled by the side that produces it, over an observation window of its own, and what crosses to Diagnostics is an instantaneous value rather than a counter. A counter read as a difference has no baseline for the interval nobody watched (→ Rules for UI Rendering), and the export can be fired without the screen ever having been open.
+
+The window is bounded by time, not by the firings themselves. On each firing, if the elapsed time since the window's origin has reached the window length, that firing is counted into the current window and then the window is settled, with that firing's own time becoming the next origin. The rate is the count over the elapsed time, so a clock firing at a steady interval measures exactly the rate it is scheduled at, whatever the window length. Taking the window's first firing as the origin instead would count one firing too many and report a rate too high by the reciprocal of the window length.
+
+Changing the rate of a clock always goes through stopping it and building it again, so a single window never spans two rates and nothing has to reconcile them. Stopping discards the settled value along with the window in progress: a rate measured at the previous scheduling is not the current state. The cost is that while a rate is oscillating, the measured value reads as unavailable rather than as a stale number.
+
+Whether a clock is running is held directly, moved by the start and the stop. Deriving it from whether a window has settled would report "stopped" for the whole interval between a clock starting and its first window filling.
+
+The window is shorter than the interval at which the screen refreshes itself, so a single missed refresh does not leave the row unreadable.
+
 ### How to Read the Numbers
 
-The following is a guide to reading, in actual operation, the values on each of the panels reflecting "the current configuration", "the health of the audio flow", and "what has happened so far".
+The following is a guide to reading, in actual operation, the values on each of the panels reflecting "the current configuration", "the drawing", "the health of the audio flow", and "what has happened so far".
+
+**The visualizer's drawing clock (scheduled, fired, applied)**
+Three values are read down the column. The scheduled rate is what the clock was built to run at, and it sitting below the setting is the visualizer having dropped to its idle step. The fired rate is how often the clock actually came round: it falling short of the scheduled rate means the main thread is not keeping up. The applied rate is how much of that firing reached the layers at all.
+The gap between fired and applied is redrawing that changed nothing. It widens on its own whenever the picture is still — the level bars sitting at the floor with no audio arriving, for instance — so a wide gap is not in itself a fault. What it sizes is how much of the drawing budget is being spent without effect, which is the thing to look at before changing anything about how often the screen is redrawn.
+
+**The Mixer meter's clock (effective, measured)**
+A clock of its own, and only two values are laid out for it. The effective rate is the visualizer's setting held down by a ceiling this meter carries for itself, so on the faster settings it reads lower than the setting shown on the row above. It is derived rather than recorded, because this clock has nothing else that moves it — it never drops to an idle step. There is no applied rate because this clock has no way to measure one: every firing writes the rows through, whether or not what it writes differs from what was there. Its firing rate therefore says how often the rows are rewritten, not how often they change.
+It runs on a narrower condition than the visualizer's: the window visible, the mixer surface shown, the normal view, and not in editing. Reading it as stopped is therefore the ordinary state whenever the surface is not the thing on screen.
 
 **Occupancy (current, target, ceiling)**
 The current occupancy uses the median over the recent observation window (described below), to avoid the noise of a single observation.
@@ -565,6 +589,8 @@ A registration failure means a client could not be placed in the driver's table,
 The export uses a snapshot newly taken from the audio world at the moment it runs, not the values currently shown on screen.
 The on-screen values are only updated while the screen is open, so on the path that exports directly from the menu without opening the screen, the display values have not been updated.
 
+The drawing clocks are read before the request is submitted, on the main thread, and carried along with it — the same treatment the destination directory gets, and for the same reason: they are UI-world values, and the work that assembles the text runs elsewhere. Reading them from inside that work is not open to it.
+
 Times are written through to the offset. The intended use is to lay several exports side by side afterwards and read their ordering, and a missing offset would make that impossible for records taken in different time zones.
 
 When exporting more than once within the same second, a sequence number is appended to avoid an existing file.
@@ -609,6 +635,8 @@ The analysis step size is decided separately from the window length, so this alo
 Rendering and analysis are driven by the same timer. There is no dedicated analysis timer; the render timer asks the analyzer every frame to "analyze what has accumulated" and then retrieves the display values.
 Analysis processes everything that has accumulated, so the number of windows analyzed is pinned to the frequency at which analysis results arrive (the hop arrival rate) and does not change no matter what the drawing step size is set to.
 Rebuilding the analyzer does not clear the values the drawing side is already holding; those are replaced only at the next retrieval. They are dropped at the moment visibility resumes as well, since leaving them shows the previous picture until the next frame lands.
+
+Each drawing clock records its own starting, firing and stopping as it goes, and Diagnostics reads what those records add up to (→ Reading the Drawing Clocks). Where the firing is recorded matters on the frames that change the rate. Each clock has one point in its frame where it notices the rate has moved and rebuilds itself, and the two do not put that point in the same place. What holds for both is that the firing is recorded before it: the frame then belongs to the window it was actually scheduled by, and is discarded along with it. Recording it afterwards would carry a frame from the previous scheduling into the new window.
 
 The level meter's smoothing steps are held as a coefficient per update.
 Because of that, changing the interval at which analysis results arrive changes how the same step behaves in real time. When the analysis step size is moved, the layout of the steps is redrawn as well.

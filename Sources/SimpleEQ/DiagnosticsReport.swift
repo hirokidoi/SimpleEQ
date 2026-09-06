@@ -36,8 +36,34 @@ enum DiagnosticsReport {
 
     // MARK: - 面と行
 
-    static func sections(_ s: AudioRuntimeMetrics.Snapshot) -> [DiagnosticsSection] {
-        [identity(s), flow(s), traces(s)]
+    static func sections(_ s: AudioRuntimeMetrics.Snapshot, render: RenderMetrics.Snapshot) -> [DiagnosticsSection] {
+        [identity(s), drawing(render), flow(s), traces(s)]
+    }
+
+    /// 今どれだけ描き直していて、そのうちどれだけが絵を変えているか。
+    private static func drawing(_ r: RenderMetrics.Snapshot) -> DiagnosticsSection {
+        DiagnosticsSection(title: "描画", rows: [
+            DiagnosticsRow(title: "ビジュアライザの駆動", values: [runningText(r.visualizer.running)]),
+            DiagnosticsRow(
+                title: "ビジュアライザの刻み", subtitle: "設定 / 実効",
+                values: [
+                    scheduledFpsText(r.visualizerSettingFps),
+                    r.visualizer.scheduledFps.map(scheduledFpsText) ?? unobserved,
+                ]
+            ),
+            DiagnosticsRow(
+                title: "ビジュアライザの実測", subtitle: "発火 / 反映",
+                values: [
+                    measuredFpsText(r.visualizer.firedFps),
+                    measuredFpsText(r.visualizer.appliedFps),
+                ]
+            ),
+            DiagnosticsRow(title: "Mixer メーターの駆動", values: [runningText(r.mixer.running)]),
+            DiagnosticsRow(
+                title: "Mixer メーターの刻み", subtitle: "実効 / 実測",
+                values: [scheduledFpsText(r.mixerEffectiveFps), measuredFpsText(r.mixer.firedFps)]
+            ),
+        ])
     }
 
     /// 今どういう構成で動いているか。
@@ -74,7 +100,7 @@ enum DiagnosticsReport {
             // 読み手が居ない間は、読み手が書いていた値を現在の状態として見せない。
             DiagnosticsRow(
                 title: "ドライバの IO 稼働", subtitle: "ドライバの申告値",
-                values: [readerValue(s, s.writerIOIsRunning ? "稼働中" : "停止中")]
+                values: [readerValue(s, runningText(s.writerIOIsRunning))]
             ),
             DiagnosticsRow(
                 title: "ドライバの世代カウンタ (epoch)", subtitle: "IO 開始とレート変更で進む",
@@ -263,7 +289,7 @@ enum DiagnosticsReport {
 
     /// 画面と同じ項目定義から作る平文。
     /// 行の副題を併記することで、複数の値が並ぶ行でもどの順序で何が並んでいるかが、この 1 通だけで読み取れる。
-    static func text(_ s: AudioRuntimeMetrics.Snapshot, exportedAt: Date) -> String {
+    static func text(_ s: AudioRuntimeMetrics.Snapshot, render: RenderMetrics.Snapshot, exportedAt: Date) -> String {
         let stamp = timestampFormatter
         var lines: [String] = ["書き出し: \(stamp.string(from: exportedAt))"]
         if let lastResetAt = s.lastResetAt {
@@ -273,7 +299,7 @@ enum DiagnosticsReport {
             lines.append("リセット: なし")
         }
 
-        for section in sections(s) {
+        for section in sections(s, render: render) {
             lines.append("")
             lines.append("[\(section.title)]")
             for row in section.rows {
@@ -338,6 +364,21 @@ enum DiagnosticsReport {
     private static func leaseText(_ seconds: Double?) -> String {
         guard let seconds else { return "制御なし" }
         return String(format: "%.1f s", max(0, seconds))
+    }
+
+    private static func runningText(_ running: Bool) -> String {
+        running ? "稼働中" : "停止中"
+    }
+
+    /// 設定・実効の刻み。選べる値も idle の落とし先も整数のため、小数を出さない。
+    private static func scheduledFpsText(_ fps: Double) -> String {
+        "\(Int(fps.rounded())) fps"
+    }
+
+    /// 観測窓から求めた頻度。刻みとの差を読む値のため、刻みより 1 桁細かく出す。
+    private static func measuredFpsText(_ fps: Double?) -> String {
+        guard let fps else { return unobserved }
+        return String(format: "%.1f fps", fps)
     }
 
     /// レートは未取得のとき 0 が入るため、数値をそのまま見せず未取得と分かる形にする。

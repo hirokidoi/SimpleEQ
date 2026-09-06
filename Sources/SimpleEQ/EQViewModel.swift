@@ -340,6 +340,14 @@ final class EQViewModel: ObservableObject {
     private(set) var tickInvocationCount = 0
     private var lastTick: Date?
 
+    /// 描画クロックの観測量。描画側が記録し、診断が読む。
+    let renderMetrics: RenderMetrics
+
+    /// 診断へ渡す観測量。刻みの設定の在処をここに閉じる。
+    func renderMetricsSnapshot() -> RenderMetrics.Snapshot {
+        renderMetrics.snapshot(visualizerFps: visualizerFps)
+    }
+
     init(
         engine: AudioEngine, settings: SettingsStore, outputController: OutputDeviceController,
         audioWorld: AudioWorld,
@@ -348,8 +356,10 @@ final class EQViewModel: ObservableObject {
         resolvedOutputDeviceUID: String? = nil,
         deviceRoutingReconciler: DeviceRoutingReconciler? = nil,
         activationCoordinator: AudioActivationCoordinator? = nil,
-        autoPreamp: AutoPreampCoordinator? = nil
+        autoPreamp: AutoPreampCoordinator? = nil,
+        renderMetrics: RenderMetrics = RenderMetrics()
     ) {
+        self.renderMetrics = renderMetrics
         self.engine = engine
         self.settings = settings
         self.audioWorld = audioWorld

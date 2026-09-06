@@ -1254,6 +1254,74 @@ final class VisualizerHostViewTests: XCTestCase {
         XCTAssertFalse(hostView.chromeLayers.handleLinesContainer.isHidden, "Timer 駆動だけでハンドル線が見えるようになること")
     }
 
+    // MARK: - 描画クロックの観測量への記録
+
+    func testTimerDrivenFramesAreCountedIntoTheRenderMetrics() {
+        let vm = makeVM()
+        let (_, window) = makeTimerDrivenHostView(vm)
+        defer { window.orderOut(nil) }
+
+        XCTAssertTrue(vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.running, "起動が記録されていない")
+
+        // 窓が満ちるまで回し、実測が立つことで発火が数えられていることを見る。
+        pumpRunLoopUntil(
+            { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps != nil },
+            timeout: RenderMetrics.windowSeconds * 4
+        )
+        let clock = vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer
+        XCTAssertNotNil(clock.firedFps, "タイマの発火が観測量へ届いていない")
+        XCTAssertEqual(clock.scheduledFps, vm.visualizerFps, "起動時の刻みが記録されていない")
+    }
+
+    func testStoppingTheTimerClearsTheRenderMetrics() {
+        let vm = makeVM()
+        let (hostView, window) = makeTimerDrivenHostView(vm)
+        defer { window.orderOut(nil) }
+        pumpRunLoopUntil(
+            { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps != nil },
+            timeout: RenderMetrics.windowSeconds * 4
+        )
+        XCTAssertNotNil(
+            vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps,
+            "前提: 停止させる前に窓が確定していること"
+        )
+
+        vm.visualizerActive = false
+        hostView.updateTimerRunning()
+
+        let clock = vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer
+        XCTAssertFalse(clock.running, "停止が記録されていない")
+        XCTAssertNil(clock.firedFps, "停止後に直前の実測が残っている")
+    }
+
+    /// 刻みが変わる回のフレームは旧タイマが出したものなので、記録は作り直し (advanceIdleTracking) より前に置く。
+    /// 後ろに置くとその 1 本が新しい窓の頭に混ざり、確定値が 1/窓長 ぶん過大になる。
+    /// 実タイマで回すため、正しい値と誤った値のどちらに寄ったかで判定する。
+    func testTheFrameOnASchedulingChangeIsNotCountedIntoTheNewWindow() throws {
+        let vm = makeVM()
+        vm.visualizerFps = EQLayout.Tuning.visualizerFpsDefault
+        let (_, window) = makeTimerDrivenHostView(vm)
+        defer { window.orderOut(nil) }
+        func measured() -> Double? { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.firedFps }
+        func scheduled() -> Double? { vm.renderMetrics.snapshot(visualizerFps: vm.visualizerFps).visualizer.scheduledFps }
+
+        pumpRunLoopUntil({ measured() != nil }, timeout: RenderMetrics.windowSeconds * 8)
+        XCTAssertNotNil(measured(), "前提: 刻みを変える前に窓が確定していること")
+
+        let slower = EQLayout.Tuning.idleFps
+        vm.visualizerFps = slower
+        pumpRunLoopUntil({ scheduled() == slower && measured() != nil }, timeout: RenderMetrics.windowSeconds * 12)
+
+        let rate = try XCTUnwrap(measured(), "刻みを変えた後に窓が確定しない")
+        // 誤って 1 本多く数えると 1/窓長 ぶん上振れする。その中間より下に居ることで判定する。
+        let overcounted = slower + 1 / RenderMetrics.windowSeconds
+        XCTAssertLessThan(
+            rate, (slower + overcounted) / 2,
+            "刻みが変わる回のフレームが新しい窓へ持ち込まれている (実測 \(rate))"
+        )
+        XCTAssertGreaterThan(rate, slower / 2, "実測が刻みからかけ離れており、判定の前提が崩れている (実測 \(rate))")
+    }
+
     /// ウィンドウを表示してタイマを起動し、以降は自前の駆動だけが反映経路になる状態を作る。
     private func makeTimerDrivenHostView(_ vm: EQViewModel) -> (VisualizerHostView, NSWindow) {
         let hostView = VisualizerHostView(viewModel: vm, compact: false)

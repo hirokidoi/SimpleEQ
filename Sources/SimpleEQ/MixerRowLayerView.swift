@@ -83,12 +83,14 @@ final class MixerRenderClock {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        viewModel.renderMetrics.mixerDidStart()
     }
 
     private func stop() {
         timer?.invalidate()
         timer = nil
         appliedFps = nil
+        viewModel.renderMetrics.mixerDidStop()
     }
 
     /// 止まっている間もピークは溜まり、クリップの数も進む。
@@ -99,6 +101,8 @@ final class MixerRenderClock {
     }
 
     func tick() {
+        // 刻みが変わると start がクロックを作り直すため、その前にこの回を今の窓へ数える。
+        viewModel.renderMetrics.mixerDidFire()
         start()
         levelStore.takeSamples(into: &samples)
         slotIndexByClientID.removeAll(keepingCapacity: true)

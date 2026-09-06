@@ -12,7 +12,7 @@ struct DiagnosticsView: View {
         MeasuredScrollView(onOverflowChange: onScrollOverflowChange) {
             VStack(alignment: .leading, spacing: 0) {
                 // 同じ見出しや同じ値が並びうるため、見た目の文字列ではなく位置で識別する。
-                ForEach(Array(DiagnosticsReport.sections(model.snapshot).enumerated()), id: \.offset) { _, section in
+                ForEach(Array(DiagnosticsReport.sections(model.snapshot, render: model.render).enumerated()), id: \.offset) { _, section in
                     PanelSection(section.title) {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(section.rows.enumerated()), id: \.offset) { _, row in
@@ -42,13 +42,13 @@ struct DiagnosticsView: View {
             guard model.active else { return }
             while !Task.isCancelled {
                 model.refresh()
-                try? await Task.sleep(for: .seconds(refreshInterval))
+                try? await Task.sleep(for: .seconds(Self.refreshInterval))
             }
         }
     }
 
     /// 診断表示の定期更新の周期 (秒)。
-    private let refreshInterval: TimeInterval = 1
+    static let refreshInterval: TimeInterval = 1
 
     // MARK: - 行の中身
 
@@ -124,7 +124,7 @@ struct DiagnosticsView: View {
 
     /// 経過時間は時間の経過そのもので変わるため、この行だけを時間で再描画される単位として切り出す。
     private var resetRow: some View {
-        TimelineView(.periodic(from: Date(), by: refreshInterval)) { context in
+        TimelineView(.periodic(from: Date(), by: Self.refreshInterval)) { context in
             diagnosticsRow(title: "観測量のリセット", subtitle: resetSubtitle(at: context.date)) {
                 actionButton("リセット") { model.reset() }
             }

@@ -27,15 +27,6 @@ private final class FakeMixerBridge: MixerAudioBridge, @unchecked Sendable {
     }
 }
 
-/// 押し込みの更新期限を実時間に頼らず動かすための時計。
-private final class TestClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Double = 0
-
-    var now: Double { lock.withLock { value } }
-    func advance(by seconds: Double) { lock.withLock { value += seconds } }
-}
-
 /// メインスレッド外から届く押し出しの受け口。
 private final class UpdateSink: @unchecked Sendable {
     private let lock = NSLock()
