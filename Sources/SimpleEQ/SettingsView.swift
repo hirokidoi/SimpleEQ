@@ -197,6 +197,15 @@ struct SettingsView: View {
                 }
             }
 
+            sliderRow(
+                title: "編集モードの保持時間",
+                subtitle: "ポインタが外れてからハンドルを消すまでの猶予",
+                value: $viewModel.handleRevealHoldSeconds,
+                range: EQLayout.Tuning.handleRevealHoldSecondsRange,
+                step: EQLayout.Tuning.handleRevealHoldSecondsStep,
+                defaultValue: EQLayout.Tuning.handleRevealHoldSecondsDefault
+            ) { String(format: "%.1f 秒", $0) }
+
             levelRow(
                 title: "フェード速度", subtitle: "ゲイン設定ハンドルの表示/非表示の速さ", level: $viewModel.handleFadeLevel,
                 scale: EQLayout.Tuning.handleFade

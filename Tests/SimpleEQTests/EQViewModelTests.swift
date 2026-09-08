@@ -1597,18 +1597,164 @@ final class EQViewModelTests: XCTestCase {
         let store = SettingsStore(defaults: defaults)
         let vm = makeVM(store)
         vm.handleRevealGesture = .click
+        vm.handleRevealHoldSeconds = 0
+        let t0 = Date(timeIntervalSinceReferenceDate: 3000)
 
         vm.noteCanvasPointerDown()
         XCTAssertTrue(vm.handlesRevealed, "キャンバス内の押下で表示が ON になること")
 
-        vm.refreshHandleReveal(pointerInsideCanvas: false, pointerButtonDown: true)
+        vm.refreshHandleReveal(
+            pointerInsideCanvas: false, pointerButtonDown: true, windowIsKey: true, now: t0
+        )
         XCTAssertTrue(vm.handlesRevealed, "ボタンを押している間ははみ出しても OFF にしないこと")
 
-        vm.refreshHandleReveal(pointerInsideCanvas: true, pointerButtonDown: false)
+        vm.refreshHandleReveal(
+            pointerInsideCanvas: true, pointerButtonDown: false, windowIsKey: true, now: t0
+        )
         XCTAssertTrue(vm.handlesRevealed, "離した位置がキャンバス内なら OFF にしないこと")
 
-        vm.refreshHandleReveal(pointerInsideCanvas: false, pointerButtonDown: false)
-        XCTAssertFalse(vm.handlesRevealed, "ボタンを離していてキャンバス外なら OFF にすること")
+        vm.refreshHandleReveal(
+            pointerInsideCanvas: false, pointerButtonDown: false, windowIsKey: true, now: t0
+        )
+        XCTAssertFalse(vm.handlesRevealed, "猶予なしの設定では、離した位置がキャンバス外ならその場で OFF にすること")
+    }
+
+    /// 1 回の読み直しで進める経過には上限があるため、刻みを重ねて渡す。
+    @discardableResult
+    private func pointerAway(
+        _ vm: EQViewModel, from start: Date, seconds: Double, overPresetRail: Bool = false
+    ) -> Date {
+        let step = EQLayout.Tuning.visualizerTickIntervalCap
+        var elapsed: Double = 0
+        vm.hoveringPresetGroup = overPresetRail
+        // 最初の読み直しは基準の時刻を置くだけで猶予を進めないため、経過は次の回から数える。
+        vm.refreshHandleReveal(
+            pointerInsideCanvas: false, pointerButtonDown: false, windowIsKey: true, now: start
+        )
+        while elapsed < seconds {
+            // 頼まれた分を超えて進めると、猶予より刻みが粗いときに検証したい境目を跨いでしまう。
+            elapsed = min(seconds, elapsed + step)
+            vm.refreshHandleReveal(
+                pointerInsideCanvas: false, pointerButtonDown: false, windowIsKey: true,
+                now: start.addingTimeInterval(elapsed)
+            )
+        }
+        return start.addingTimeInterval(elapsed)
+    }
+
+    func testTheHandlesOutliveThePointerLeavingByTheHoldAndDropOnceItElapses() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        let hold = vm.handleRevealHoldSeconds
+        XCTAssertGreaterThan(hold, 0, "前提: 既定は猶予を持つこと")
+        let t0 = Date(timeIntervalSinceReferenceDate: 3000)
+
+        vm.revealHandles()
+        let midway = pointerAway(vm, from: t0, seconds: hold / 2)
+        XCTAssertTrue(vm.handlesRevealed, "猶予の途中では表示を保つこと")
+
+        pointerAway(vm, from: midway, seconds: hold)
+        XCTAssertFalse(vm.handlesRevealed, "猶予を過ぎたら OFF にすること")
+    }
+
+    func testReturningToTheCanvasWithinTheHoldRefillsIt() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        let hold = vm.handleRevealHoldSeconds
+        let t0 = Date(timeIntervalSinceReferenceDate: 3000)
+
+        vm.revealHandles()
+        let returned = pointerAway(vm, from: t0, seconds: hold * 0.9)
+        vm.refreshHandleReveal(
+            pointerInsideCanvas: true, pointerButtonDown: false, windowIsKey: true, now: returned
+        )
+
+        // 戻らなければ落ちていた分だけ進めても、満充填されていれば残る。
+        pointerAway(vm, from: returned, seconds: hold * 0.9)
+        XCTAssertTrue(vm.handlesRevealed, "猶予の途中で戻ったら残りが満充填されること")
+    }
+
+    func testThePresetRailHoldsTheHandlesAndTheHoldStartsOnlyAfterLeavingIt() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        let hold = vm.handleRevealHoldSeconds
+        let t0 = Date(timeIntervalSinceReferenceDate: 3000)
+
+        vm.revealHandles()
+        let left = pointerAway(vm, from: t0, seconds: hold * 3, overPresetRail: true)
+        XCTAssertTrue(vm.handlesRevealed, "プリセットボタン群の上にいる間は猶予を始めないこと")
+
+        pointerAway(vm, from: left, seconds: hold * 1.1)
+        XCTAssertFalse(vm.handlesRevealed, "プリセットからも外れたら猶予を経て OFF にすること")
+    }
+
+    func testThePresetSaveDialogDoesNotHoldTheEditMode() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        let hold = vm.handleRevealHoldSeconds
+        let t0 = Date(timeIntervalSinceReferenceDate: 3000)
+
+        vm.revealHandles()
+        vm.savingPreset = true
+        pointerAway(vm, from: t0, seconds: hold * 1.1)
+        XCTAssertFalse(vm.handlesRevealed, "保存ダイアログ表示中は編集モードを保持しないこと")
+    }
+
+    func testTheWindowLosingKeyDropsTheEditModeWithoutWaitingForTheHold() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        XCTAssertGreaterThan(vm.handleRevealHoldSeconds, 0, "前提: 猶予が残っている状態で見ること")
+        let t0 = Date(timeIntervalSinceReferenceDate: 3000)
+
+        vm.revealHandles()
+        // ポインタは保持条件を満たしたままにして、窓が前面から外れたことだけを理由にする。
+        vm.refreshHandleReveal(
+            pointerInsideCanvas: true, pointerButtonDown: true, windowIsKey: false, now: t0
+        )
+        XCTAssertFalse(vm.handlesRevealed, "窓が前面から外れたら猶予を待たず OFF にすること")
+    }
+
+    // 面が出るとビジュアライザは駆動を降りるため、猶予を数える読み直しごと止まる。
+    func testTheVisualizerGivingUpItsPlaceDropsTheEditMode() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        vm.visualizerActive = true
+        vm.revealHandles()
+        XCTAssertTrue(vm.handlesRevealed, "前提: 編集モードが立っていること")
+
+        vm.visualizerActive = false
+        XCTAssertFalse(vm.handlesRevealed, "ビジュアライザが場を譲ったら編集モードを落とすこと")
+    }
+
+    // 猶予が残っていても、次の操作を始めた時点で終わらせる。
+    func testAPressOffTheHoldingPlacesDropsTheEditModeWithoutWaitingForTheHold() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        XCTAssertGreaterThan(vm.handleRevealHoldSeconds, 0, "前提: 猶予が残っている状態で見ること")
+
+        vm.revealHandles()
+        vm.notePointerPressed(insideCanvas: true)
+        XCTAssertTrue(vm.handlesRevealed, "ビジュアライザ上の押下では落とさないこと")
+
+        vm.hoveringPresetGroup = true
+        vm.notePointerPressed(insideCanvas: false)
+        XCTAssertTrue(vm.handlesRevealed, "プリセットボタン群の上の押下では落とさないこと")
+
+        vm.hoveringPresetGroup = false
+        vm.notePointerPressed(insideCanvas: false)
+        XCTAssertFalse(vm.handlesRevealed, "どちらでもない場所の押下は猶予を待たず落とすこと")
+    }
+
+    // ハンドルを持つのはノーマルビューだけ。
+    func testLeavingTheNormalViewDropsTheEditMode() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        vm.viewMode = .normal
+        vm.revealHandles()
+        XCTAssertTrue(vm.handlesRevealed, "前提: 編集モードが立っていること")
+
+        vm.viewMode = .compact
+        XCTAssertFalse(vm.handlesRevealed, "コンパクトビューへ移ったら編集モードを落とすこと")
     }
 
     func testCanvasPressDoesNotRevealHandlesWhileTheLongPressIsTheChosenGesture() {
@@ -2081,6 +2227,7 @@ final class EQViewModelTests: XCTestCase {
         guard let hostView = found else {
             return XCTFail("SwiftUI の階層からビジュアライザのホストビューが見つからない")
         }
+        hostView.pinWindowKeyState(true)
         let preampLine = hostView.chromeLayers.preampHandleLineLayer
         XCTAssertTrue(preampLine.isHidden, "前提: 表示条件を満たさない間は隠れていること")
 

@@ -34,6 +34,8 @@ final class EQViewModel: ObservableObject {
         didSet {
             guard oldValue != viewMode else { return }
             settings.viewMode = viewMode
+            // ハンドルを持つのはノーマルビューだけなので、離れたら編集モードを残さない。
+            if viewMode != .normal { hideHandles() }
         }
     }
     @Published var handleRevealGesture: HandleRevealGesture {
@@ -231,6 +233,13 @@ final class EQViewModel: ObservableObject {
             settings.ledDimAmount = ledDimAmount
         }
     }
+    /// ポインタが保持条件から外れてからハンドル表示を落とすまでの猶予 (秒)。
+    @Published var handleRevealHoldSeconds: Double {
+        didSet {
+            guard oldValue != handleRevealHoldSeconds else { return }
+            settings.handleRevealHoldSeconds = handleRevealHoldSeconds
+        }
+    }
 
     /// ハンドル群 (設定ライン/軸の記号/0dB 基準線) が見えているか。
     var handlesVisible: Bool { handleAlpha >= EQLayout.handleVisibilityThreshold }
@@ -279,10 +288,15 @@ final class EQViewModel: ObservableObject {
                 engine.levelMeter.captureEnabled = true
             } else {
                 engine.levelMeter.captureEnabled = false
+                // 場を譲った先ではハンドルを掴めないため、編集モードを残さない。
+                hideHandles()
             }
         }
     }
     var handlesRevealed: Bool = false
+    /// 保持条件から外れてから表示を落とすまでの残り (秒)。
+    private var handleRevealHoldRemaining: Double = 0
+    private var lastHandleRevealRefresh: Date?
     var hoveringPresetGroup: Bool = false
     var hoveringPreset: Bool {
         PresetHoverPreview.showsHandles(hoveringGroup: hoveringPresetGroup, previewing: previewPreset != nil)
@@ -425,6 +439,7 @@ final class EQViewModel: ObservableObject {
         peakDecayDbPerSec = settings.peakDecayDbPerSec
         peakCapBrightenAmount = settings.peakCapBrightenAmount
         ledDimAmount = settings.ledDimAmount
+        handleRevealHoldSeconds = settings.handleRevealHoldSeconds
 
         selectedPreset = settings.preset
         syncSelectedPresetIfInvalid()
@@ -562,14 +577,45 @@ final class EQViewModel: ObservableObject {
 
     func revealHandles() {
         handlesRevealed = true
+        handleRevealHoldRemaining = handleRevealHoldSeconds
+        lastHandleRevealRefresh = nil
     }
 
-    func refreshHandleReveal(pointerInsideCanvas: Bool, pointerButtonDown: Bool) {
-        guard handlesRevealed else { return }
-        guard !HandleRevealPolicy.staysRevealed(
-            pointerButtonDown: pointerButtonDown, pointerInsideCanvas: pointerInsideCanvas
-        ) else { return }
+    /// 編集モードを落とす唯一の口。
+    func hideHandles() {
         handlesRevealed = false
+        handleRevealHoldRemaining = 0
+        lastHandleRevealRefresh = nil
+    }
+
+    /// 押下が起きるたびに呼ぶ。
+    func notePointerPressed(insideCanvas: Bool) {
+        guard handlesRevealed else { return }
+        guard !HandleRevealPolicy.staysRevealedAt(
+            pointerInsideCanvas: insideCanvas, pointerOverPresetRail: hoveringPresetGroup
+        ) else { return }
+        hideHandles()
+    }
+
+    /// ポインタの読み直しごとに呼ぶ。経過はこの呼び出しの間隔から取る。
+    func refreshHandleReveal(
+        pointerInsideCanvas: Bool, pointerButtonDown: Bool, windowIsKey: Bool, now: Date
+    ) {
+        guard handlesRevealed else { return }
+        let dt = lastHandleRevealRefresh.map {
+            max(0, min(EQLayout.Tuning.visualizerTickIntervalCap, now.timeIntervalSince($0)))
+        } ?? 0
+        lastHandleRevealRefresh = now
+        let advanced = HandleRevealPolicy.advanced(
+            holdRemaining: handleRevealHoldRemaining, dt: dt, holdSeconds: handleRevealHoldSeconds,
+            staysRevealed: HandleRevealPolicy.staysRevealed(
+                pointerButtonDown: pointerButtonDown, pointerInsideCanvas: pointerInsideCanvas,
+                pointerOverPresetRail: hoveringPresetGroup
+            ),
+            windowIsKey: windowIsKey
+        )
+        guard advanced.revealed else { return hideHandles() }
+        handleRevealHoldRemaining = advanced.holdRemaining
     }
 
     /// ドラッグ中のプリアンプ更新。値の決め方 (y→dB) は呼び出し側の責務。

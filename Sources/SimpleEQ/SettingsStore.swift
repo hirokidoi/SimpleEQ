@@ -76,6 +76,8 @@ final class SettingsStore {
         var fadeLevel = EQLayout.Tuning.handleFade.defaultLevel
         var previewLevel = EQLayout.Tuning.handlePreview.defaultLevel
         var ledDimAmount = EQLayout.Tuning.ledDimAmountDefault
+        /// nil は既定を意味する。
+        var revealHoldSeconds: Double?
     }
 
     private struct MixerState: Codable {
@@ -151,6 +153,9 @@ final class SettingsStore {
         p.handles.fadeLevel = clamped(p.handles.fadeLevel, to: EQLayout.Tuning.handleFade)
         p.handles.previewLevel = clamped(p.handles.previewLevel, to: EQLayout.Tuning.handlePreview)
         p.handles.ledDimAmount = clamped(p.handles.ledDimAmount, to: EQLayout.Tuning.ledDimAmountRange)
+        p.handles.revealHoldSeconds = p.handles.revealHoldSeconds.map {
+            clamped($0, to: EQLayout.Tuning.handleRevealHoldSecondsRange)
+        }
         p.mixer.channels = p.mixer.channels.map(normalizedMixerChannels)
         return p
     }
@@ -360,6 +365,12 @@ final class SettingsStore {
     var ledDimAmount: Double {
         get { readState { $0.handles.ledDimAmount } }
         set { writeState { $0.handles.ledDimAmount = newValue } }
+    }
+
+    /// 保持条件から外れてからハンドル表示を落とすまでの猶予 (秒)。
+    var handleRevealHoldSeconds: Double {
+        get { readState { $0.handles.revealHoldSeconds } ?? EQLayout.Tuning.handleRevealHoldSecondsDefault }
+        set { writeState { $0.handles.revealHoldSeconds = newValue } }
     }
 
     /// Sound Lab の操作値。

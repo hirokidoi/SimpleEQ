@@ -745,6 +745,8 @@ Everything that acts on a handle — grabbing it, and the double click that retu
 
 Whether the pointer is still inside the visualizer is read from its position, not from the notifications that report it leaving. Both the hover reporting of the UI framework and a tracking region installed by hand announce a departure while the pointer is still inside that area. Keeping the handles visible while the pointer stays there is therefore driven by reading the position. The preset rail still goes by the notifications, where a spurious departure costs one lost preview.
 
+A departure does not drop the handles at once: a grace runs while nothing holds them, and its expiry is what drops them. It is counted from the interval between the pointer readings, which happen only while the handles are shown. The window off the front is judged in the readings themselves, and drops the editing there without spending the grace. Where the pointer is not read at all — a surface standing in the visualizer's place, the view without handles, the drawing off because the window is not on screen — a grace would never run down, so those drop it where that state is decided instead. A press is watched separately from the readings, and one that lands where nothing holds the handles up drops them at once. The readings cannot stand in for it: what ends the editing is the act of starting something else, not where the pointer came to rest afterwards.
+
 Where elements inside one container fade on separate schedules, the alpha is carried by each layer rather than by the container. It is the alpha alone that moves out of the container; what else the container carries, the compositing order among it, stays where it is.
 
 ---

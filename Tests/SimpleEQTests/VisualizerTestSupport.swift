@@ -28,6 +28,11 @@ extension VisualizerHostView {
         pointerState = { (point, buttonDown) }
     }
 
+    /// テストの窓は前面を取れないため、前面かどうかを固定する。
+    func pinWindowKeyState(_ isKey: Bool) {
+        windowKeyState = { _ in isKey }
+    }
+
     /// ウィンドウが決まる前でも使えるよう、描画領域の中央を毎回求め直す。
     func pinPointerInsideVisualizeArea() {
         pointerState = { [weak self] in

@@ -222,6 +222,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.peakDecayDbPerSec, EQLayout.Tuning.peakDecayDbPerSecDefault)
         XCTAssertEqual(store.peakCapBrightenAmount, EQLayout.Tuning.peakCapBrightenAmountDefault)
         XCTAssertEqual(store.ledDimAmount, EQLayout.Tuning.ledDimAmountDefault)
+        XCTAssertEqual(store.handleRevealHoldSeconds, EQLayout.Tuning.handleRevealHoldSecondsDefault)
     }
 
     func testDirectValueTuningRoundTrip() {
@@ -234,6 +235,13 @@ final class SettingsStoreTests: XCTestCase {
         store.peakDecayDbPerSec = 50
         store.peakCapBrightenAmount = 0.8
         store.ledDimAmount = 0.35
+        let probeHold = EQLayout.Tuning.handleRevealHoldSecondsDefault
+            + EQLayout.Tuning.handleRevealHoldSecondsStep
+        XCTAssertTrue(
+            EQLayout.Tuning.handleRevealHoldSecondsRange.contains(probeHold),
+            "前提: 隣の刻みがレンジに収まること"
+        )
+        store.handleRevealHoldSeconds = probeHold
         let reloaded = SettingsStore(defaults: defaults)
         XCTAssertEqual(reloaded.visualizerFps, probeFps)
         XCTAssertEqual(reloaded.floorDb, -90)
@@ -241,6 +249,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.peakDecayDbPerSec, 50)
         XCTAssertEqual(reloaded.peakCapBrightenAmount, 0.8)
         XCTAssertEqual(reloaded.ledDimAmount, 0.35)
+        XCTAssertEqual(reloaded.handleRevealHoldSeconds, probeHold)
     }
 
     // MARK: - 外から読んだ値の健全化
@@ -321,6 +330,31 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.releaseLevel, EQLayout.Tuning.release.values.count)
         XCTAssertEqual(store.handleFadeLevel, 1)
         XCTAssertEqual(store.handlePreviewLevel, EQLayout.Tuning.handlePreview.values.count)
+    }
+
+    func testOutOfRangeHandleRevealHoldSecondsClampsToRangeEnds() {
+        let range = EQLayout.Tuning.handleRevealHoldSecondsRange
+        writeStoredPayload(overriding: ["handles.revealHoldSeconds": range.upperBound + 1])
+        XCTAssertEqual(SettingsStore(defaults: defaults).handleRevealHoldSeconds, range.upperBound)
+
+        writeStoredPayload(overriding: ["handles.revealHoldSeconds": range.lowerBound - 1])
+        XCTAssertEqual(SettingsStore(defaults: defaults).handleRevealHoldSeconds, range.lowerBound)
+    }
+
+    // 欠けている項目だけが既定へ落ちること (他の項目を道連れにしない)。
+    func testAbsentHandleRevealHoldSecondsReadsAsTheDefaultWithoutDiscardingTheRest() {
+        let store = SettingsStore(defaults: defaults)
+        store.handleRevealHoldSeconds = EQLayout.Tuning.handleRevealHoldSecondsRange.upperBound
+        store.ledDimAmount = 0.35
+        var json = try! JSONSerialization.jsonObject(
+            with: defaults.data(forKey: SettingsStore.defaultsKey)!
+        ) as! [String: Any]
+        XCTAssertTrue(Self.removing("handles.revealHoldSeconds", from: &json), "前提: 保存されている項目を落とすこと")
+        defaults.set(try! JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
+
+        let reloaded = SettingsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.handleRevealHoldSeconds, EQLayout.Tuning.handleRevealHoldSecondsDefault)
+        XCTAssertEqual(reloaded.ledDimAmount, 0.35)
     }
 
     func testOutOfRangeLedDimAmountClampsToRangeEnds() {

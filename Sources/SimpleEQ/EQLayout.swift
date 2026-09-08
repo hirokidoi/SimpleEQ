@@ -514,6 +514,11 @@ enum EQLayout {
         static let ledDimAmountDefault: Double = 0.85
         static let ledDimAmountRange: ClosedRange<Double> = 0...1
         static let ledDimAmountStep: Double = 0.05
+
+        /// 保持条件から外れてからハンドル表示を落とすまでの猶予 (秒)。0 は猶予なし。
+        static let handleRevealHoldSecondsDefault: Double = 0.5
+        static let handleRevealHoldSecondsRange: ClosedRange<Double> = 0...5
+        static let handleRevealHoldSecondsStep: Double = 0.5
     }
 
     // MARK: - アイコンモチーフ

@@ -104,6 +104,9 @@ final class VisualizerHostView: NSView {
     private var windowVisibleObservation: NSKeyValueObservation?
     private var appHideObserver: NSObjectProtocol?
     private var appUnhideObserver: NSObjectProtocol?
+    private var mouseDownMonitor: Any?
+    /// 押下の観測が繋がっているか。
+    var mouseDownMonitorInstalled: Bool { mouseDownMonitor != nil }
 
     init(viewModel: EQViewModel, compact: Bool) {
         self.viewModel = viewModel
@@ -134,12 +137,30 @@ final class VisualizerHostView: NSView {
         (NSEvent.mouseLocation, NSEvent.pressedMouseButtons != 0)
     }
 
+    /// 窓が前面にあるかの取得口。
+    var windowKeyState: (NSWindow) -> Bool = { $0.isKeyWindow }
+
+    private func pointerIsInsideVisualizeArea(_ locationOnScreen: NSPoint, window: NSWindow) -> Bool {
+        bounds.contains(convert(window.convertPoint(fromScreen: locationOnScreen), from: nil))
+    }
+
     /// ポインタの位置とボタンの状態を毎フレーム読み直す。
     private func refreshPointerInsideVisualizeArea() {
         guard !compact, viewModel.handlesRevealed, let window, window.isVisible else { return }
         let state = pointerState()
-        let inside = bounds.contains(convert(window.convertPoint(fromScreen: state.locationOnScreen), from: nil))
-        viewModel.refreshHandleReveal(pointerInsideCanvas: inside, pointerButtonDown: state.buttonDown)
+        viewModel.refreshHandleReveal(
+            pointerInsideCanvas: pointerIsInsideVisualizeArea(state.locationOnScreen, window: window),
+            pointerButtonDown: state.buttonDown,
+            windowIsKey: windowKeyState(window), now: Date()
+        )
+    }
+
+    /// 押下が届くたびに読む。
+    func notePointerPressed() {
+        guard !compact, viewModel.handlesRevealed, let window, window.isVisible else { return }
+        viewModel.notePointerPressed(
+            insideCanvas: pointerIsInsideVisualizeArea(pointerState().locationOnScreen, window: window)
+        )
     }
 
     /// レイヤの暗黙アクションを一括で無効化する。
@@ -189,8 +210,10 @@ final class VisualizerHostView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         removeVisibilityObservers()
+        removeMouseDownMonitor()
         if let window {
             addVisibilityObservers(window: window)
+            addMouseDownMonitor()
             appHidden = NSApp.isHidden
         } else {
             windowVisible = false
@@ -246,6 +269,21 @@ final class VisualizerHostView: NSView {
         appUnhideObserver = nil
     }
 
+    private func addMouseDownMonitor() {
+        guard !compact else { return }
+        mouseDownMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            MainActor.assumeIsolated { self?.notePointerPressed() }
+            return event
+        }
+    }
+
+    private func removeMouseDownMonitor() {
+        if let mouseDownMonitor { NSEvent.removeMonitor(mouseDownMonitor) }
+        mouseDownMonitor = nil
+    }
+
     /// タイマ起動可否を再評価する。
     /// ウィンドウの表示状態はビジュアライザの表示要否へ書き戻さない (可視性の門はこのホストビュー内部の局所状態に留める)。
     func updateTimerRunning() {
@@ -253,7 +291,11 @@ final class VisualizerHostView: NSView {
         let shouldRun = VisualizerTimerGate.shouldRun(visualizerActive: viewModel.visualizerActive, hostViewVisible: hostViewVisible)
         let fpsChanged = timer != nil && lastTimerFps != effectiveFps
         guard shouldRun != (timer != nil) || fpsChanged else { return }
-        if !shouldRun { idleFrameCount = 0 }
+        if !shouldRun {
+            idleFrameCount = 0
+            // 読み直しが止まれば猶予を数える回も来ないため、駆動を降りる地点で編集モードを終わらせる。
+            viewModel.hideHandles()
+        }
         stopTimer()
         if shouldRun { startTimer() }
         applyGeometry()

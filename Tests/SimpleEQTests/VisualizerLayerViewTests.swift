@@ -432,6 +432,7 @@ final class VisualizerHostViewTests: XCTestCase {
         hostView.frame = CGRect(origin: .zero, size: CGSize(width: EQLayout.windowDefaultSize.width, height: shippedHostHeight))
         hostView.layoutSubtreeIfNeeded()
         hostView.pinPointerInsideVisualizeArea()
+        hostView.pinWindowKeyState(true)
         return hostView
     }
 
@@ -1375,6 +1376,7 @@ final class VisualizerHostViewTests: XCTestCase {
         let hostView = VisualizerHostView(viewModel: vm, compact: false)
         hostView.frame = CGRect(origin: .zero, size: CGSize(width: EQLayout.windowDefaultSize.width, height: shippedHostHeight))
         hostView.pinPointerInsideVisualizeArea()
+        hostView.pinWindowKeyState(true)
         // 原点とホストのオフセットがどちらも 0 だと screen ↔ window ↔ view の変換が恒等になり、
         // 取り違えても検証が通ってしまう。
         let windowSize = CGSize(width: hostView.frame.width, height: hostView.frame.height + EQLayout.topBarHeight)
@@ -1399,6 +1401,8 @@ final class VisualizerHostViewTests: XCTestCase {
     // 変換の向きを誤ってもテストが通らないよう、期待値はウィンドウ矩形の算術だけから作る。
     func testPointerOutsideTheWindowHidesTheHandlesAndInsideKeepsThem() {
         let vm = makeVM()
+        // 検証の対象は座標変換の向きなので、猶予は挟まない。
+        vm.handleRevealHoldSeconds = 0
         let (hostView, window) = makeTimerDrivenHostView(vm)
         defer { window.orderOut(nil) }
         let frame = window.frame
@@ -1419,9 +1423,79 @@ final class VisualizerHostViewTests: XCTestCase {
         XCTAssertFalse(vm.handlesRevealed, "ウィンドウ外のポインタでは表示を落とすこと")
     }
 
+    // 純粋な判定が正しくても、ホストが窓の状態を読んでいなければ効かない。
+    func testTheHostReadsTheWindowKeyStateAndDropsTheHandlesWhileItIsNotKey() {
+        let vm = makeVM()
+        let (hostView, window) = makeTimerDrivenHostView(vm)
+        defer { window.orderOut(nil) }
+
+        vm.revealHandles()
+        pumpRunLoopUntil({ false }, timeout: 0.2)
+        XCTAssertTrue(vm.handlesRevealed, "前提: 前面にある間はポインタが中にあるので保つこと")
+
+        hostView.pinWindowKeyState(false)
+        pumpRunLoopUntil({ !vm.handlesRevealed })
+        XCTAssertFalse(vm.handlesRevealed, "前面から外れたら、ポインタが中にあっても落とすこと")
+    }
+
+    // 駆動が止まれば猶予を数える回も来ないため、止める地点で終わらせる。
+    func testTheEditModeEndsWhereTheDrivingStops() {
+        let cases: [(name: String, stop: (VisualizerHostView) -> Void)] = [
+            ("ウィンドウが見えなくなる", { $0.windowVisible = false }),
+            ("アプリが隠れる", { $0.appHidden = true }),
+        ]
+        for (name, stop) in cases {
+            let vm = makeVM()
+            vm.visualizerActive = true
+            let hostView = makeLaidOutHostView(vm)
+            hostView.windowVisible = true
+            hostView.appHidden = false
+            hostView.updateTimerRunning()
+            XCTAssertTrue(hostView.visualizerTimerRunning, "前提: 駆動していること (\(name))")
+
+            vm.revealHandles()
+            XCTAssertTrue(vm.handlesRevealed, "前提: 編集モードが立っていること (\(name))")
+
+            stop(hostView)
+            hostView.updateTimerRunning()
+            XCTAssertFalse(hostView.visualizerTimerRunning, "前提: 駆動が止まること (\(name))")
+            XCTAssertFalse(vm.handlesRevealed, "駆動が止まる地点で編集モードを落とすこと (\(name))")
+        }
+    }
+
+    // 押下の観測が繋がっていなければ、判定が正しくても次の操作で落ちない。
+    func testTheHostWatchesPressesAndDropsTheHandlesOnOneOffTheVisualizeArea() {
+        let vm = makeVM()
+        let (hostView, window) = makeTimerDrivenHostView(vm)
+        defer { window.orderOut(nil) }
+        XCTAssertTrue(hostView.mouseDownMonitorInstalled, "窓に載った時点で押下を観測していること")
+        let frame = window.frame
+
+        vm.revealHandles()
+        hostView.notePointerPressed()
+        XCTAssertTrue(vm.handlesRevealed, "描画領域の中の押下では落とさないこと")
+
+        // 上部バーぶんの帯はホストの外。ここを押すのが「次の操作」にあたる。
+        hostView.pinPointer(toScreenPoint: NSPoint(x: frame.minX + 10, y: frame.minY + 10))
+        hostView.notePointerPressed()
+        XCTAssertFalse(vm.handlesRevealed, "描画領域の外の押下は猶予を待たず落とすこと")
+    }
+
+    func testTheHostStopsWatchingPressesOnceItLeavesTheWindow() {
+        let vm = makeVM()
+        let (hostView, window) = makeTimerDrivenHostView(vm)
+        defer { window.orderOut(nil) }
+        XCTAssertTrue(hostView.mouseDownMonitorInstalled, "前提: 観測が繋がっていること")
+
+        hostView.removeFromSuperview()
+        XCTAssertFalse(hostView.mouseDownMonitorInstalled, "窓から外れたら観測を畳むこと")
+    }
+
     // ボタンを押している間は、はみ出しても落とさない (ドラッグ中に消えないこと)。
     func testPointerOutsideWhileTheButtonIsDownKeepsTheHandles() {
         let vm = makeVM()
+        // 猶予が残っているだけで通ってしまわないよう、押下だけが保持の理由になる状態で見る。
+        vm.handleRevealHoldSeconds = 0
         let (hostView, window) = makeTimerDrivenHostView(vm)
         defer { window.orderOut(nil) }
         let frame = window.frame
