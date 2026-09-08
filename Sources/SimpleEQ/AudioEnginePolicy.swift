@@ -58,6 +58,13 @@ func audioWorldHeartbeatTickIsContinuous(
 private let driverVolumeMinDb: Float = simpleeq_ring_volume_min_db()
 private let driverVolumeMaxDb: Float = simpleeq_ring_volume_max_db()
 
+/// ラウドネスが空きを測る相手。押し上げる前のバッファのピーク。
+/// レベル解析が返すのは出力ゲインを掛ける前の値なので、掛けた後の大きさへ直して渡す。
+/// 直さずに渡すと、アプリのゲイン段が音量を担当する構成で空きを実際より狭く見積もる。
+func loudnessHeadroomReference(peakBeforeVolume: Float, outputGain: Float) -> Float {
+    peakBeforeVolume * outputGain
+}
+
 /// VolumeScalar (0...1) をドライバの declared dB レンジへ線形変換したのち振幅へ変換する
 /// (聴感上の効きをスライダー全域で均す)。scalar==0 は dB カーブに乗せず明示的に振幅 0 を返す
 /// (driverVolumeMinDb はゼロではなくわずかに振幅が残るため)。

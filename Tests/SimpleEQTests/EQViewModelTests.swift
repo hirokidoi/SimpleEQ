@@ -56,7 +56,7 @@ final class EQViewModelTests: XCTestCase {
         let engine = AudioEngine()
         let audioWorld = makeTestAudioWorld()
         let coordinator = AutoPreampCoordinator(
-            measure: { curve, rate in responsesByRate[rate]?[curve] ?? responses[curve] },
+            measure: { curve, rate, _ in responsesByRate[rate]?[curve] ?? responses[curve] },
             runMeasurement: { work in work() },
             deliver: { work in MainActor.assumeIsolated { work() } }
         )
@@ -76,7 +76,7 @@ final class EQViewModelTests: XCTestCase {
     ) -> (vm: EQViewModel, runPending: () -> Void) {
         let pending = Recorded<[@Sendable () -> Void]>([])
         let coordinator = AutoPreampCoordinator(
-            measure: { curve, _ in
+            measure: { curve, _, _ in
                 measureCount.update { $0 += 1 }
                 measuredCurves.update { $0.append(curve) }
                 return responses[curve]
@@ -1124,7 +1124,7 @@ final class EQViewModelTests: XCTestCase {
         let newRateResponse = EQMagnitudeResponse(energyWeightedGainDb: 3, worstCaseGainDb: 3)
         let newRate = AudioConfig.baseSampleRate * 2
         let coordinator = AutoPreampCoordinator(
-            measure: { c, rate in
+            measure: { c, rate, _ in
                 guard c == curve else { return nil }
                 return rate == newRate ? newRateResponse : baseRateResponse
             },
@@ -2565,5 +2565,69 @@ final class EQViewModelTests: XCTestCase {
     func testResolvedOutputDevicePickerOptionsReturnsOptionsUnchangedWhenSelectionIsNil() {
         let options = [OutputDeviceOption(uid: "a", name: "A")]
         XCTAssertEqual(resolvedOutputDevicePickerOptions(selection: nil, options: options, fallbackLabel: "fallback"), options)
+    }
+
+    // MARK: - Sound Lab の操作値が出て行く先
+
+    private func liftedSoundLab() -> SoundLabSettings {
+        var s = SoundLabSettings()
+        s.bassHarmonics.enabled = true
+        return s
+    }
+
+    /// 操作値が音へ出て行く経路。
+    /// 導出が測定に失敗する構成で見る。導出がプリアンプを動かすと、その副作用でも
+    /// エンジンへ配られてしまい、この経路が切れていることを見逃す。
+    func testEditingTheSoundLabReachesTheEngine() {
+        let store = SettingsStore(defaults: defaults)
+        let engine = AudioEngine()
+        let audioWorld = makeTestAudioWorld()
+        let coordinator = AutoPreampCoordinator(
+            measure: { _, _, _ in nil },
+            runMeasurement: { work in work() },
+            deliver: { work in MainActor.assumeIsolated { work() } }
+        )
+        let vm = EQViewModel(
+            engine: engine, settings: store, outputController: makeOutputController(settings: store),
+            audioWorld: audioWorld, autoPreamp: coordinator
+        )
+        let lifted = liftedSoundLab()
+        let preampBefore = vm.preampDb
+
+        vm.soundLab = lifted
+
+        XCTAssertEqual(vm.preampDb, preampBefore, "前提: 導出はプリアンプを動かしていない")
+        waitForAudioWorld(audioWorld) { engine.soundLabSettingsInEffect == lifted }
+        XCTAssertEqual(engine.soundLabSettingsInEffect, lifted, "操作値がエンジンの段まで配られる")
+    }
+
+    /// 操作値がプリアンプ導出へ出て行く経路。
+    func testEditingTheSoundLabRedrivesTheDerivation() {
+        let store = SettingsStore(defaults: defaults)
+        let measuredSoundLab = Recorded<[MeasuredSoundLab]>([])
+        let coordinator = AutoPreampCoordinator(
+            measure: { _, _, soundLab in
+                measuredSoundLab.update { $0.append(soundLab) }
+                return EQMagnitudeResponse(energyWeightedGainDb: 3, worstCaseGainDb: 3)
+            },
+            runMeasurement: { work in work() },
+            deliver: { work in MainActor.assumeIsolated { work() } }
+        )
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store,
+            outputController: makeOutputController(settings: store),
+            audioWorld: makeTestAudioWorld(), autoPreamp: coordinator
+        )
+        let lifted = liftedSoundLab()
+        let before = measuredSoundLab.value.count
+
+        vm.soundLab = lifted
+
+        XCTAssertEqual(
+            measuredSoundLab.value.count, before + 1, "勘定に入れる機能が動けば導出をやり直す"
+        )
+        XCTAssertEqual(
+            measuredSoundLab.value.last, MeasuredSoundLab(lifted), "動いた操作値が導出まで届く"
+        )
     }
 }

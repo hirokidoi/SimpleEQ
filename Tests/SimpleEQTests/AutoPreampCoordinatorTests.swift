@@ -21,7 +21,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         cacheCapacity: Int = AutoPreampCoordinator.defaultCacheCapacity
     ) -> AutoPreampCoordinator {
         AutoPreampCoordinator(
-            measure: { c, _ in
+            measure: { c, _, _ in
                 measureCount.update { $0 += 1 }
                 return responses[c]
             },
@@ -39,7 +39,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
     ) -> (coordinator: AutoPreampCoordinator, runNext: () -> Bool) {
         let pending = Recorded<[@Sendable () -> Void]>([])
         let coordinator = AutoPreampCoordinator(
-            measure: { c, _ in
+            measure: { c, _, _ in
                 measureCount.update { $0 += 1 }
                 return responses[c]
             },
@@ -69,7 +69,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         coordinator.didDerive = { last = $0; derivedCount += 1 }
 
         for _ in 0..<10 {
-            coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+            coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         }
 
         XCTAssertEqual(measureCount.value, 1, "同じ入力の再入は不変条件の一致ガードで即 return する")
@@ -89,7 +89,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         coordinator.didDerive = { last = $0 }
 
         for c in [c1, c2, c1, c3, c2] {
-            coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+            coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         }
 
         XCTAssertEqual(measureCount.value, 3, "5 回のうち相異なるカーブは 3 種")
@@ -103,11 +103,11 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let coordinator = makeSyncCoordinator(measureCount: measureCount, responses: [c: autoPreampTestResponse(6)])
         var last: Double = 0
         coordinator.didDerive = { last = $0 }
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 1, "前提")
         let firstDerived = last
 
-        coordinator.refresh(enabled: true, curve: c, targetDb: 4, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 4, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
 
         XCTAssertEqual(measureCount.value, 1, "測定は増えない")
         XCTAssertNotEqual(last, firstDerived)
@@ -123,7 +123,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var derivedCount = 0
         coordinator.didDerive = { _ in derivedCount += 1 }
 
-        coordinator.refresh(enabled: false, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: 0)
+        coordinator.refresh(enabled: false, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0)
 
         XCTAssertEqual(measureCount.value, 0)
         XCTAssertEqual(derivedCount, 0)
@@ -137,13 +137,13 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let coordinator = makeSyncCoordinator(measureCount: measureCount, responses: [c: autoPreampTestResponse(6)])
         var last: Double = 0
         coordinator.didDerive = { last = $0 }
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 1, "前提")
         let derived = last
 
-        coordinator.refresh(enabled: false, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: derived)
+        coordinator.refresh(enabled: false, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: derived)
         let movedWhileOff = derived - 2 // OFF 中に外から動かされた想定値
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: movedWhileOff)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: movedWhileOff)
 
         XCTAssertEqual(measureCount.value, 1, "キャッシュ命中のため測定は増えない")
         XCTAssertEqual(last, derived, "導出値が再適用される")
@@ -157,11 +157,11 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var last: Double = 0
         var derivedCount = 0
         coordinator.didDerive = { last = $0; derivedCount += 1 }
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(derivedCount, 1, "前提")
         let derived = last
 
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: derived - 1)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: derived - 1)
 
         XCTAssertEqual(derivedCount, 2, "memo に含めた適用済み preamp との不一致で再適用される")
         XCTAssertEqual(last, derived)
@@ -174,7 +174,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let c = autoPreampTestCurve(1)
         let newRate = 96000.0
         let coordinator = AutoPreampCoordinator(
-            measure: { _, rate in
+            measure: { _, rate, _ in
                 measureCount.update { $0 += 1 }
                 return rate == newRate ? autoPreampTestResponse(3) : autoPreampTestResponse(6)
             },
@@ -184,15 +184,15 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var last: Double = 0
         coordinator.didDerive = { last = $0 }
 
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 1)
         let at48k = last
 
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: newRate, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: newRate, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 2, "レートが違えば別の測定になる")
         XCTAssertNotEqual(last, at48k)
 
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 2, "元のレートへ戻すと測定は増えない")
         XCTAssertEqual(last, at48k)
     }
@@ -209,9 +209,9 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var last: Double = 0
         coordinator.didDerive = { last = $0 }
 
-        coordinator.refresh(enabled: true, curve: c1, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 実行中
-        coordinator.refresh(enabled: true, curve: c2, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 保留
-        coordinator.refresh(enabled: true, curve: c3, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 保留を上書き
+        coordinator.refresh(enabled: true, curve: c1, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 実行中
+        coordinator.refresh(enabled: true, curve: c2, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 保留
+        coordinator.refresh(enabled: true, curve: c3, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 保留を上書き
         XCTAssertEqual(measureCount.value, 0, "前提: まだ何も完了していない")
 
         XCTAssertTrue(runNext(), "c1 完了 → 保留 (c3) の測定が続けて積まれる")
@@ -229,14 +229,14 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let measureCount = Recorded(0)
         let c = autoPreampTestCurve(1)
         let coordinator = AutoPreampCoordinator(
-            measure: { _, _ in measureCount.update { $0 += 1 }; return nil },
+            measure: { _, _, _ in measureCount.update { $0 += 1 }; return nil },
             runMeasurement: { work in work() },
             deliver: { work in MainActor.assumeIsolated { work() } }
         )
         var derivedCount = 0
         coordinator.didDerive = { _ in derivedCount += 1 }
 
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: 0)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0)
 
         XCTAssertEqual(measureCount.value, 1, "1 回の refresh に対し測定は 1 回だけ (自走しない)")
         XCTAssertEqual(derivedCount, 0, "失敗時は didDerive を呼ばない")
@@ -255,15 +255,15 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var last: Double = 0
         coordinator.didDerive = { last = $0 }
 
-        coordinator.refresh(enabled: true, curve: c1, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
-        coordinator.refresh(enabled: true, curve: c2, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
-        coordinator.refresh(enabled: true, curve: c3, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c1, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c2, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c3, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 3, "前提")
 
-        coordinator.refresh(enabled: true, curve: c1, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c1, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 4, "容量超過で押し出された c1 は再測定される")
 
-        coordinator.refresh(enabled: true, curve: c3, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: c3, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(measureCount.value, 4, "c3 はまだキャッシュに残っている")
     }
 
@@ -274,11 +274,11 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var derivedCount = 0
         coordinator.didDerive = { _ in derivedCount += 1 }
 
-        let firstResult = coordinator.previewPreampDb(curve: c, targetDb: 0, sampleRate: 48000, measureIfMissing: true)
+        let firstResult = coordinator.previewPreampDb(curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), measureIfMissing: true)
         XCTAssertNil(firstResult, "未キャッシュの間は nil を返し、測定を要求する")
         XCTAssertEqual(derivedCount, 0, "previewPreampDb は didDerive を呼ばない")
 
-        let secondResult = coordinator.previewPreampDb(curve: c, targetDb: 0, sampleRate: 48000, measureIfMissing: true)
+        let secondResult = coordinator.previewPreampDb(curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), measureIfMissing: true)
         XCTAssertEqual(
             secondResult, AutoPreampSpec.derivedPreampDb(response: autoPreampTestResponse(6), targetDb: 0),
             "測定完了後はキャッシュから直接返す"
@@ -296,11 +296,11 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var derivedCount = 0
         coordinator.didDerive = { last = $0; derivedCount += 1 }
 
-        coordinator.refresh(enabled: true, curve: derived, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: derived, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         XCTAssertEqual(derivedCount, 1)
 
-        _ = coordinator.previewPreampDb(curve: previewed, targetDb: 0, sampleRate: 48000, measureIfMissing: true)
-        coordinator.refresh(enabled: true, curve: derived, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        _ = coordinator.previewPreampDb(curve: previewed, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), measureIfMissing: true)
+        coordinator.refresh(enabled: true, curve: derived, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
 
         XCTAssertEqual(derivedCount, 1, "問い合わせ後も同じ入力での再入は memo で弾かれること")
     }
@@ -309,7 +309,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let curveA = autoPreampTestCurve(1), curveB = autoPreampTestCurve(2), curveC = autoPreampTestCurve(3)
         let pending = Recorded<[@Sendable () -> Void]>([])
         let coordinator = AutoPreampCoordinator(
-            measure: { c, _ in
+            measure: { c, _, _ in
                 measuredOrder.update { $0.append(c) }
                 return autoPreampTestResponse(c.first ?? 0)
             },
@@ -326,9 +326,9 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var last: Double = 0
         coordinator.didDerive = { last = $0 }
 
-        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 実行中
-        coordinator.refresh(enabled: true, curve: curveB, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 保留 (導出用)
-        _ = coordinator.previewPreampDb(curve: curveC, targetDb: 0, sampleRate: 48000, measureIfMissing: true) // 保留 (プレビュー用)
+        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 実行中
+        coordinator.refresh(enabled: true, curve: curveB, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 保留 (導出用)
+        _ = coordinator.previewPreampDb(curve: curveC, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), measureIfMissing: true) // 保留 (プレビュー用)
 
         runNext() // curveA 完了 → 導出用の保留 (curveB) の測定が続けて積まれる
         runNext() // curveB 完了
@@ -343,8 +343,8 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var derivedCount = 0
         coordinator.didDerive = { _ in derivedCount += 1 }
 
-        coordinator.refresh(enabled: true, curve: curve, targetDb: 0, sampleRate: 48000, currentPreampDb: 0) // 測定中
-        coordinator.refresh(enabled: false, curve: curve, targetDb: 0, sampleRate: 48000, currentPreampDb: -2)
+        coordinator.refresh(enabled: true, curve: curve, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0) // 測定中
+        coordinator.refresh(enabled: false, curve: curve, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: -2)
 
         XCTAssertTrue(runNext(), "前提: 実行中だった測定が完了する")
 
@@ -358,7 +358,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let curveA = autoPreampTestCurve(1), curveB = autoPreampTestCurve(2), curveC = autoPreampTestCurve(3)
         let pending = Recorded<[@Sendable () -> Void]>([])
         let coordinator = AutoPreampCoordinator(
-            measure: { c, _ in
+            measure: { c, _, _ in
                 measuredOrder.update { $0.append(c) }
                 return autoPreampTestResponse(c.first ?? 0)
             },
@@ -376,13 +376,13 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         coordinator.didDerive = { last = $0 }
 
         // curveC を先に測ってキャッシュへ入れておく。
-        coordinator.refresh(enabled: true, curve: curveC, targetDb: 0, sampleRate: 48000, currentPreampDb: last)
+        coordinator.refresh(enabled: true, curve: curveC, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last)
         runNext()
         measuredOrder.update { $0 = [] }
 
-        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 実行中
-        coordinator.refresh(enabled: true, curve: curveB, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 保留
-        coordinator.refresh(enabled: true, curve: curveC, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // キャッシュ命中
+        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 実行中
+        coordinator.refresh(enabled: true, curve: curveB, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 保留
+        coordinator.refresh(enabled: true, curve: curveC, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // キャッシュ命中
 
         runNext() // curveA 完了
         runNext()
@@ -395,7 +395,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let curveA = autoPreampTestCurve(1), curveB = autoPreampTestCurve(2)
         let pending = Recorded<[@Sendable () -> Void]>([])
         let coordinator = AutoPreampCoordinator(
-            measure: { c, _ in
+            measure: { c, _, _ in
                 measuredOrder.update { $0.append(c) }
                 return autoPreampTestResponse(c.first ?? 0)
             },
@@ -410,9 +410,9 @@ final class AutoPreampCoordinatorTests: XCTestCase {
             job?()
         }
 
-        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, currentPreampDb: 0) // 実行中
-        coordinator.refresh(enabled: true, curve: curveB, targetDb: 0, sampleRate: 48000, currentPreampDb: 0) // 保留
-        coordinator.refresh(enabled: false, curve: curveB, targetDb: 0, sampleRate: 48000, currentPreampDb: 0)
+        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0) // 実行中
+        coordinator.refresh(enabled: true, curve: curveB, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0) // 保留
+        coordinator.refresh(enabled: false, curve: curveB, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0)
 
         runNext() // curveA 完了。保留が残っていれば curveB がここで積まれる
         runNext()
@@ -425,7 +425,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         let curveA = autoPreampTestCurve(1), curveB = autoPreampTestCurve(2)
         let pending = Recorded<[@Sendable () -> Void]>([])
         let coordinator = AutoPreampCoordinator(
-            measure: { c, _ in
+            measure: { c, _, _ in
                 measuredOrder.update { $0.append(c) }
                 return autoPreampTestResponse(c.first ?? 0)
             },
@@ -440,9 +440,9 @@ final class AutoPreampCoordinatorTests: XCTestCase {
             job?()
         }
 
-        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, currentPreampDb: 0) // 実行中
-        _ = coordinator.previewPreampDb(curve: curveB, targetDb: 0, sampleRate: 48000, measureIfMissing: true) // 保留
-        coordinator.refresh(enabled: false, curve: curveA, targetDb: 0, sampleRate: 48000, currentPreampDb: 0)
+        coordinator.refresh(enabled: true, curve: curveA, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0) // 実行中
+        _ = coordinator.previewPreampDb(curve: curveB, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), measureIfMissing: true) // 保留
+        coordinator.refresh(enabled: false, curve: curveA, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: 0)
 
         runNext() // curveA 完了。保留が残っていれば curveB がここで積まれる
         runNext()
@@ -458,11 +458,136 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         var last: Double = 0
         coordinator.didDerive = { last = $0 }
 
-        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, currentPreampDb: last) // 実行中 (導出用)
-        _ = coordinator.previewPreampDb(curve: c, targetDb: 0, sampleRate: 48000, measureIfMissing: true) // 同じカーブを保留 (プレビュー用)
+        coordinator.refresh(enabled: true, curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), currentPreampDb: last) // 実行中 (導出用)
+        _ = coordinator.previewPreampDb(curve: c, targetDb: 0, sampleRate: 48000, soundLab: SoundLabSettings(), measureIfMissing: true) // 同じカーブを保留 (プレビュー用)
 
         XCTAssertTrue(runNext(), "導出用の測定が完了しキャッシュへ入る")
         XCTAssertEqual(measureCount.value, 1, "保留 (プレビュー用) は取り出し時点で既にキャッシュ命中しており測定されない")
         XCTAssertFalse(runNext(), "追加の測定は積まれない")
+    }
+
+    // MARK: - Sound Lab を勘定に入れる配線
+
+    /// 勘定に入れる機能が動けば測り直す。ここが繋がっていないと、
+    /// 飽和する機能を入れた瞬間に下げ幅が足りず、ピークインジケーターが点く。
+    func testMovingACountedFeatureMeasuresAgainAndCarriesTheSettings() {
+        let measureCount = Recorded(0)
+        let seen = Recorded<[MeasuredSoundLab]>([])
+        let c = autoPreampTestCurve(1)
+        let coordinator = AutoPreampCoordinator(
+            measure: { _, _, soundLab in
+                measureCount.update { $0 += 1 }
+                seen.update { $0.append(soundLab) }
+                return autoPreampTestResponse(6)
+            },
+            runMeasurement: { work in work() },
+            deliver: { work in MainActor.assumeIsolated { work() } }
+        )
+        var last: Double = 0
+        coordinator.didDerive = { last = $0 }
+
+        coordinator.refresh(
+            enabled: true, curve: c, targetDb: 0, sampleRate: 48000,
+            soundLab: SoundLabSettings(), currentPreampDb: last
+        )
+        XCTAssertEqual(measureCount.value, 1, "前提: 最初の測定が走る")
+
+        var lifted = SoundLabSettings()
+        lifted.bassHarmonics.enabled = true
+        coordinator.refresh(
+            enabled: true, curve: c, targetDb: 0, sampleRate: 48000,
+            soundLab: lifted, currentPreampDb: last
+        )
+
+        XCTAssertEqual(measureCount.value, 2, "勘定に入れる機能が動けばキャッシュに当たらず測り直す")
+        XCTAssertEqual(seen.value.last, MeasuredSoundLab(lifted), "動いた操作値が測定まで届いている")
+    }
+
+    /// 勘定に入れない機能はキャッシュのキーにも入らない。
+    func testMovingAFeatureThatIsNotCountedDoesNotMeasureAgain() {
+        let measureCount = Recorded(0)
+        let c = autoPreampTestCurve(1)
+        let coordinator = makeSyncCoordinator(
+            measureCount: measureCount, responses: [c: autoPreampTestResponse(6)]
+        )
+        var last: Double = 0
+        coordinator.didDerive = { last = $0 }
+
+        coordinator.refresh(
+            enabled: true, curve: c, targetDb: 0, sampleRate: 48000,
+            soundLab: SoundLabSettings(), currentPreampDb: last
+        )
+        XCTAssertEqual(measureCount.value, 1, "前提: 最初の測定が走る")
+
+        var widened = SoundLabSettings()
+        widened.stereoExpander.enabled = true
+        widened.loudness.enabled = true
+        widened.liveSimulation.enabled = true
+        coordinator.refresh(
+            enabled: true, curve: c, targetDb: 0, sampleRate: 48000,
+            soundLab: widened, currentPreampDb: last
+        )
+
+        XCTAssertEqual(measureCount.value, 1, "外した機能をどう動かしても測り直さない")
+    }
+
+    /// プレビューも同じ形で受け取る。カーブが同じでも勘定に入れる機能が違えば別の答えになる。
+    func testThePreviewKeepsTheCountedFeaturesInItsKey() {
+        let c = autoPreampTestCurve(1)
+        let coordinator = makeSyncCoordinator(responses: [c: autoPreampTestResponse(6)])
+
+        var lifted = SoundLabSettings()
+        lifted.bassHarmonics.enabled = true
+
+        XCTAssertNil(
+            coordinator.previewPreampDb(
+                curve: c, targetDb: 0, sampleRate: 48000,
+                soundLab: SoundLabSettings(), measureIfMissing: false
+            ),
+            "前提: まだ何も測っていない"
+        )
+        _ = coordinator.previewPreampDb(
+            curve: c, targetDb: 0, sampleRate: 48000,
+            soundLab: SoundLabSettings(), measureIfMissing: true
+        )
+        XCTAssertNotNil(
+            coordinator.previewPreampDb(
+                curve: c, targetDb: 0, sampleRate: 48000,
+                soundLab: SoundLabSettings(), measureIfMissing: false
+            ),
+            "測った組み合わせは答えられる"
+        )
+        XCTAssertNil(
+            coordinator.previewPreampDb(
+                curve: c, targetDb: 0, sampleRate: 48000,
+                soundLab: lifted, measureIfMissing: false
+            ),
+            "勘定に入れる機能が違えば別のキーであり、まだ答えられない"
+        )
+    }
+
+    /// 既定の測定は EQ とステレオ段を直列に合成する。
+    /// 勘定に入れる機能が切なら段は素通しで、EQ 単独の応答と一致する。
+    func testTheDefaultMeasureAddsTheStereoStageOnTopOfTheEQ() {
+        let measure = AutoPreampCoordinator.makeDefaultMeasure()
+        let curve = autoPreampTestCurve(0)
+        let rate = TestSampleRates.all[0]
+
+        guard let flat = measure(curve, rate, MeasuredSoundLab(SoundLabSettings())) else {
+            XCTFail("EQ の応答を測れない")
+            return
+        }
+        var lifted = SoundLabSettings()
+        lifted.bassHarmonics.enabled = true
+        lifted.trebleExciter.enabled = true
+        guard let raised = measure(curve, rate, MeasuredSoundLab(lifted)) else {
+            XCTFail("合成した応答を測れない")
+            return
+        }
+
+        XCTAssertGreaterThan(
+            raised.energyWeightedGainDb - flat.energyWeightedGainDb, 0.05,
+            "飽和する機能を入れれば合成応答が持ち上がる"
+        )
     }
 }

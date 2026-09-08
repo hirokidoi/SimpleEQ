@@ -55,8 +55,8 @@ enum EQLayout {
     enum Mixer {
         /// 行を収める列の左右に取る余白。列の幅はこれを引いた残り。
         static let columnHorizontalInset: CGFloat = 50
-        /// 列の上下に取る余白。
-        static let columnVerticalInset: CGFloat = 36
+        /// 列の下に取る余白。上はタブ列との間隔が担う。
+        static let columnBottomInset: CGFloat = 36
         /// コンパクトビューで、行を収める列の四辺に取る余白。この帯がウィンドウ移動を受ける。
         static let compactColumnInset: CGFloat = 20
         static let rowHorizontalPadding: CGFloat = 12
@@ -105,6 +105,49 @@ enum EQLayout {
         static var rowPitch: CGFloat { rowHeight + separatorThickness }
     }
 
+    /// 面の上端に置くタブ列。
+    /// 列の地・非選択のタブ・選択中のタブの順に明るくし、選択中だけが中身と同じ色になる。
+    enum SurfaceTab {
+        /// 列の高さ。タブはこの下端に接し、余った上が列の地として見える。
+        static let height: CGFloat = 38
+        static let tabHeight: CGFloat = 31
+        static let horizontalInset: CGFloat = 22
+        static let spacing: CGFloat = 3
+        /// 幅は等分で決まるため、これは文字が縁に触れないための下限。
+        static let buttonHorizontalPadding: CGFloat = 8
+        /// 上の 2 隅だけ丸める。下端は中身と地続きに見せるため角を立てる。
+        static let cornerRadius: CGFloat = 8
+        /// タブの枠と列の下端の線。同じ 1 本に見えなければならないため 1 箇所で決める。
+        static let lineColor = Color.white.opacity(0.08)
+        /// 列の地。
+        static let stripBackground = Palette.bg
+        /// 選んでいないタブの地。選択中は中身と同色に固定されるため、明暗の差はこちらだけで付ける。
+        static let idleTabBackground = Color(hex: 0x1b1f29)
+        /// タブ列と、その下に出る中身との間。どのタブでも同じだけ空ける。
+        static let contentGap: CGFloat = 24
+    }
+
+    /// Sound Lab の面。1 つの機能だけを出す。
+    enum SoundLab {
+        static let horizontalInset: CGFloat = 24
+        /// 下に取る余白。上はタブ列との間隔が担う。
+        static let bottomInset: CGFloat = 16
+
+        /// 見出しの帯と行の間。
+        static let detailHeaderGap: CGFloat = 14
+        /// 副題が説明を担うため、共通の行より広く取る。
+        static let labelWidth: CGFloat = 300
+        static let choiceButtonSpacing: CGFloat = 5
+        /// 面を、行が要求する最小より広く取る量。
+        static let panelWidthSlack: CGFloat = 12
+        /// 行の見出しより小さく保つ。選択肢が見出しより目立つと、行の読み順が崩れる。
+        static let choiceButtonFontSize: CGFloat = 12.5
+        /// 見出しの帯。
+        static let headerBandCornerRadius: CGFloat = 10
+        static let headerBandHorizontalPadding: CGFloat = 15
+        static let headerBandVerticalPadding: CGFloat = 11
+    }
+
     /// 文字主体の面の背景。
     static let textPanelBackground = Color(hex: 0x14171e)
 
@@ -146,6 +189,32 @@ enum EQLayout {
         let sign = rounded > 0 ? "+" : ""
         return "\(sign)\(rounded) dB"
     }
+
+    /// 既定へ戻す点の直径。
+    static let resetDotDiameter: CGFloat = 24
+
+    /// 候補から 1 つ選ぶボタン。
+    static let choiceButtonHeight: CGFloat = 30
+    static let choiceButtonCornerRadius: CGFloat = 10
+    static let choiceButtonHorizontalPadding: CGFloat = 12
+    static let settingsChoiceButtonFontSize: CGFloat = 12.5
+    /// 段を選ぶボタンは数字 1 文字のため、幅を揃える。
+    static let levelButtonWidth: CGFloat = 34
+    static let settingsChoiceButtonSpacing: CGFloat = 5
+
+    /// 並べたボタンの幅を揃える際の 1 つぶん。一番広い文字の実寸から採る。
+    static func choiceButtonWidth(fitting titles: [String], fontSize: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let widest = titles
+            .map { ($0 as NSString).size(withAttributes: [.font: font]).width }
+            .max() ?? 0
+        return (widest + choiceButtonHorizontalPadding * 2).rounded(.up)
+    }
+
+    /// 見出し行の右端に置く現在値の列幅。
+    static let panelValueColumnWidth: CGFloat = 72
+    static let panelLabelWidth: CGFloat = 220
+    static let panelRowSpacing: CGFloat = 14
 
     /// 電源スイッチのトラックサイズ。
     static let powerTrackSize = CGSize(width: 36, height: 19)

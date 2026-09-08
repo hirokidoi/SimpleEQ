@@ -11,16 +11,17 @@ First, let us trace, participant by participant, where the audio passes through 
 
 1. On launch, the app switches the system default output to the dedicated driver. From then on, every sound the system plays — browsers, music players, and so on — flows into the dedicated driver.
 2. The dedicated driver never plays the audio it receives out to the outside. It only writes it into a ring in shared memory, and nothing is ever audible from the dedicated driver itself.
-3. The app's audio engine reads this ring, applies the EQ and the preamp, and then hands the audio to the real output device the user selected (speakers, headphones, and so on). It never writes back to the dedicated driver.
+3. The app's audio engine reads this ring, applies the preamp, the EQ, and the Sound Lab stages, and then hands the audio to the real output device the user selected (speakers, headphones, and so on). It never writes back to the dedicated driver.
 4. The output device actually plays the sound.
 
 In other words, system audio travels a single path: dedicated driver (capture point) → shared memory (handoff) → the app's audio engine (processing) → output device (exit).
-Turning the EQ off to bypass processing does not change the path itself; only the processing stage is skipped.
+Turning the EQ off to bypass processing does not change the path itself; only the processing stages are skipped.
 
 To make this path hold together, the app observes several rules.
 
 - The dedicated driver and the app are separate processes, yet they read and write the same structures across shared memory, so a contract both sides agree on is required (→ The Shared Header Contract)
 - Audio-related processing must keep running without dropping anything, so the places where it may be handled are strictly partitioned (→ Crossing Rules Between the Audio World and the UI World, Constraints on the Realtime Path)
+- The processing beyond the EQ is split across three stages that differ in how they are implemented and where they sit, and one of them deliberately sits outside what the level meter and the preamp can see (→ The Sound Lab)
 - Too much or too little audio accumulating in the ring is a problem either way, so it is controlled to stay within a fixed range at all times (→ Occupancy Control)
 - The output destination can move due to environmental changes (waking from sleep, another device being connected, and so on), so it is kept in sync by continually checking the actual state (→ Managing the Output Device Route, Restore Target and Restore Obligation)
 - Replacing or uninstalling the dedicated driver itself is dangerous while audio is playing, so it is done only after a safety check (→ The Safety Guard Before Driver Operations, Determining Driver Liveness and Automatic Restart)
@@ -43,10 +44,12 @@ All of these states can be inspected as actual numbers from the Diagnostics scre
 - **Control lease** — The expiry the app attaches to the per-application gains it pushes to the dedicated driver, renewed for as long as the app is running, so that gains cannot outlive the app that set them (→ Operating Rules for the Dedicated Driver).
 - **Heartbeat** — A unit of no-op work posted periodically to the audio world's queue. The fact that it runs and returns a timestamp is itself the evidence that the queue is not stuck.
 - **Presentation time** — The time the HAL hands to the dedicated driver on every IO cycle, representing when that audio will be played (→ Constraints on the Realtime Path).
-- **Bypass** — The state in which the EQ and preamp processing is skipped and the input is passed straight to the output, without the audio path itself changing.
-- **Normal view / compact view** — Two ways of presenting the contents of the EQ window. The frame stays as one and only the contents are swapped, so the two are not separate windows, and the window position is held separately per view. Which view is shown and whether the mixer surface is shown are two states that do not constrain each other, so either view can be carrying the mixer.
+- **Bypass** — The state in which the EQ, the preamp and the Sound Lab processing are skipped and the input is passed straight to the output, without the audio path itself changing.
+- **Sound Lab** — The processing offered alongside the EQ, presented as one tab per feature on the surface that covers the visualizer. What each feature does is on the user's side (→ [README](README.md)); what matters here is that the features are carried by three stages that sit in different places.
+- **Stereo stage / AU stage / loudness stage** — The three stages the Sound Lab is carried by. The stereo stage and the loudness stage are the app's own processing running on the realtime path; the AU stage is an Apple audio unit connected onto the end of the EQ chain. Which stage carries which feature, and why each sits where it does, is the subject of → The Sound Lab.
+- **Normal view / compact view** — Two ways of presenting the contents of the EQ window. The frame stays as one and only the contents are swapped, so the two are not separate windows, and the window position is held separately per view. Which view is shown and whether the surface is shown are two states that do not constrain each other, so either view can be carrying it. What the surface can present differs, though: only the normal view carries the tabs, and the compact view shows the rows alone.
 - **Target** — How much of a rise the automatic preamp adjustment is willing to leave in place, measured against the level a typical signal is expected to gain. It is not a ceiling on the peak (→ Deriving the Preamp). Raising it leaves the preamp shallower, which buys level at the cost of the peak indicator lighting more often.
-- **Measurement chain** — An offline EQ chain built solely to measure the composite frequency response used to derive the preamp (→ Deriving the Preamp). It never sits on the audio path, and it is a separate chain from the one actually processing audio.
+- **Measurement chain** — An offline EQ chain built solely to measure the composite frequency response used to derive the preamp (→ Deriving the Preamp). It never sits on the audio path, and it is a separate chain from the one actually processing audio. It is one of two instruments the derivation uses; what the other one measures, and why it has to be a different tool, is in the same section.
 
 ---
 
@@ -197,6 +200,7 @@ Building the UI side itself does not touch the audio world at all. Starting subs
 Values shaped for display (values that have passed through clamping, smoothing, or holding) are not fed back as material for a judgement.
 When processing sits on the path from where a value is produced to where it reaches the display, overshoot and the very instant it occurred can no longer be expressed, so wherever a judgement is needed, the value is read by going back to the unprocessed form.
 The clip indication on the level meter is judged on the amplitude before the system volume is applied, the same point the meter itself is drawn from. Judging it after would leave the indication meaning one thing on an output device that carries its own volume and another where the app carries it, since only in the latter case does the system volume reach the app's gain stage at all.
+What that judgement expresses is the amplitude the output would have at full volume. The one stage whose depth is inversely proportional to the volume sits behind the point the level is read from, and at full volume it contributes nothing, so the judgement means the same thing wherever the volume happens to sit (→ The Sound Lab). Everything ahead of that point is included, so both the indication and the meter carry the rest of the Sound Lab along with the EQ.
 When values for a judgement arrive at a finer interval than the drawing interval, the analyzer itself takes the maximum of what arrived in that drawing interval before judging. The drawing side never accumulates several drawing intervals' worth before reading. How long a judgement's result stays displayed on screen (such as holding a clip indication) is managed by the drawing side using elapsed time.
 Even when a judgement is derived from multiple inputs, the result is not held as state. Holding it would mean chasing "the instant it changed" separately for as many inputs as there are, so the same judgement is re-read each time at the point where drawing and evaluation happen.
 
@@ -230,7 +234,7 @@ A match key that turns out to name the clients of two different applications bel
 
 The output render callback and the paths called from it, and the point where the dedicated driver writes audio into shared memory, all perform no locking, no memory allocation, and no logging.
 This applies to the point where audio is written, not to everything called from the same IO thread (the point that responds to time reporting does take a lock).
-They do nothing but pass values between preallocated buffers. Nor does the writing side make any decision about whether to write. As long as the deadline is met, it always writes, even when the presentation time has not advanced from the previous cycle.
+They do nothing but pass values between preallocated buffers. The app's own Sound Lab processing runs here too and is bound by the same rules (→ The Sound Lab). Nor does the writing side make any decision about whether to write. As long as the deadline is met, it always writes, even when the presentation time has not advanced from the previous cycle.
 
 Where a per-client value on this path needs an atomic float — a gain, a peak — it is carried as a bit-pattern integer instead. A plain atomic float's lock-freedom is implementation-defined, so declaring one could quietly reintroduce a lock here on whatever platform does not provide it lock-free.
 
@@ -260,9 +264,47 @@ The next write fills the gap ahead of it with silence, so old audio never surfac
 
 ---
 
+## The Sound Lab
+
+The processing offered alongside the EQ is carried by three stages. They are separate not by feature but by how they are implemented and where on the path they have to sit.
+
+- **The stereo stage** — The app's own processing, run on the interleaved buffer at the point the EQ's input is prepared. It carries three features: the one that widens the image, which acts on the difference between the channels; the one that adds low harmonics, which acts on what the channels share; and the one that adds high harmonics, which acts on each channel on its own.
+- **The AU stage** — An Apple audio unit connected onto the end of the EQ chain. It carries the feature that adds the sound of a space.
+- **The loudness stage** — The app's own processing, run inside the output callback, behind the point the level is read from.
+
+Two orderings are load-bearing. Harmonics are generated ahead of the EQ so that what they add can still be shaped by it, and the space is added behind the EQ so that it answers to the sound the EQ made. Within the stereo stage, widening comes before both harmonic generators, since generating harmonics is what breaks the relationship widening depends on. What each harmonic generator acts on is decided by where its frequencies sit: low ones are at the centre, and distorting the two sides separately unsettles where they sit, while up high the two sides carry different content.
+
+The loudness stage sits behind the level reading for a different reason. It is the only processing whose depth is inversely proportional to the volume, so putting it ahead of the reading would raise both the clip judgement and the meter by an amount the output gain is about to take back again — counting as a warning something that never leaves. Being linear, it sounds the same on either side of that gain, so nothing is lost by moving it behind.
+
+Each stage is handed only the settings it carries, so adding a feature does not move another stage's entrance. They are all fed from a single point, which is what keeps a stage from being missed: reflecting a bypass and following a change of volume both go through it. A bypass is carried out by handing the stages neutral settings rather than by branching the render path, so what the audio travels through does not depend on it. Because the stages are rebuilt whenever the output is assembled, the settings being held are handed out again immediately after a rebuild. The volume is one of the inputs, so the entrance is reached from the point the volume is decided rather than from each of the several places that write it.
+
+That entrance being shared means a stage can be handed the same settings many times over, once for every move of the volume. Writing them through unconditionally is not free: the audio unit's configuration is what carries the sound of the space, and rewriting it cuts the tail that is still sounding. So the stage that owns a unit keeps a record of what it last wrote and writes nothing when the settings have not moved. The record is seeded when the stage is built, which is what makes it safe to trust.
+
+The audio unit has to accept the stream format before it can be connected, and it can refuse. What decides that is the channel count, not the rate: the unit will not take a mono output, and in stereo it accepts every rate the driver can declare. The audio path's channel count is fixed, so on that path the stage always builds, and there is nothing for the screen to report — which is why a feature that would otherwise degrade in silence is left without an indication, unlike the resolution step in the per-application mixer. The premise is pinned by the tests; if it breaks, whether the screen has to report it is the first thing to reconsider. A refusal is met by dropping the stage rather than the whole chain, so the EQ still runs. The one path that does build in mono is the EQ's own response measurement, and it asks for the chain without this stage attached (→ Deriving the Preamp).
+
+### What the Realtime Stages May Do
+
+The two stages that run on the realtime path perform no allocation, no locking and no logging. Filter state is held as scalars and as arrays sized once at construction; control values are written on the audio world's queue and read by the render side, the same treatment the preamp's gain gets. The saturation that generates harmonics is expressed so that it costs a single division.
+
+Each feature is skipped entirely while it is doing nothing, rather than run with neutral values. Skipping is not only about cost: decomposing the two channels and putting them back together is not exact in floating point, so a feature left running at a neutral setting would still change the signal. Whether a feature does anything is settled when its settings are applied rather than per sample, and the features within a stage are guarded one by one, since they touch different parts of the signal and do not constrain each other.
+
+The stage the audio unit belongs to is a control path and is not bound by these rules.
+
+### The Bounds on the Loudness Boost
+
+How much the loudness stage raises depends on the volume, and the volume is taken from the scalar the dedicated driver's device carries — the same window the system's volume keys and volume UI operate through — so the same value arrives whether the volume is being carried out by the device or by the app's own gain stage. Whatever a device attenuates below that, in its own analogue domain, is not observable from anywhere and is out of scope.
+
+That scalar is mapped onto the dB range the shared header defines, so the attenuation the volume stage applies and the boost this stage applies are both proportional to the same quantity. Their ratio is capped by the settings' own upper bound divided by the width of that range, and is therefore constant wherever the volume sits. Where the app's gain stage is the one carrying the volume, this makes it structurally impossible for the boost to exceed the attenuation.
+
+Where the device carries the volume, that guarantee does not hold: the app's output gain stays neutral and the attenuation happens outside the app, so a boost that takes the signal past full scale has its head removed before the attenuation is applied, and what is left is a flattened waveform made quieter. So the boost is held to the smaller of two things — what the settings and the volume allow, and the headroom actually free at that moment. The free headroom is read from the block's peak before the boost, which the stage's position behind the level reading guarantees does not include its own output; the judgement never takes its own result as its input.
+
+When the headroom runs short the boost is dropped at once, and it is returned slowly. Waiting to drop it means clipping for as long as the wait lasts. How slowly it returns is one of the settings: the longer it is, the further the behaviour moves from following each block toward settling at the quietest point of the whole material.
+
+---
+
 ## Deriving the Preamp
 
-While automatic adjustment is on, the preamp is not an independent piece of state; it is a dependent variable of the curve, the target, and the rate the driver has declared.
+While automatic adjustment is on, the preamp is not an independent piece of state; it is a dependent variable of the curve, the target, the rate the driver has declared, and the Sound Lab features that are counted in.
 
 This differs from the "derive it again each time" pattern used for the top-bar warning and for dimming/disabling controls (→ Crossing Rules Between the Audio World and the UI World). Deriving the preamp is not cheap, so rather than deriving on every frame, it derives only when the input changes and caches the result. Staying at zero cost while idle is the property given the highest priority.
 
@@ -272,19 +314,41 @@ It remembers whether the value it currently holds is the derived value for the c
 
 Measurement runs on a queue of its own, so the relationship is established after the fact rather than at the moment an input changes. Until the first derivation lands, what is shown and applied is the value carried over from the previous run.
 
-The chain's default dependency is built behind a lazily populated box rather than as the default argument itself, because Swift evaluates a default-argument expression at the call site: constructing it there would build the chain on the caller's thread instead of on the measurement queue it has to stay on.
+The default dependency is built behind a lazily populated box rather than as the default argument itself, because Swift evaluates a default-argument expression at the call site: constructing it there would build the instruments on the caller's thread instead of on the measurement queue they have to stay on.
 
-Measurement results are cached keyed by the curve and the declared rate. The target does not affect measurement.
+Measurement results are cached keyed by the curve, the declared rate, and the settings of the counted-in features. The target does not affect measurement.
 
-A rate change has no dedicated follow-up mechanism of its own: a mismatch between the requested rate and the rate the measurement chain was built for is itself what triggers rebuilding it.
+A rate change has no dedicated follow-up mechanism of its own: a mismatch between the requested rate and the rate a measuring instrument was built for is itself what triggers rebuilding it.
+
+### What Is Measured, and With What
+
+Two instruments are in play, each matched to what it measures. The EQ is measured with an impulse and an FFT. That tool does not fit the features that saturate: saturation is non-linear, so its behaviour depends on the input amplitude, and a full-scale impulse is flattened outright — the measurement would answer that the feature attenuates. The EQ's own chain is also built in mono, which leaves nothing for a feature operating on the difference between channels to act on.
+
+So the counted-in features are measured by passing decorrelated stereo noise straight through the stereo stage and taking the ratio of input to output. The stage is a plain type that touches no CoreAudio, so a buffer through it is the whole measurement. Both instruments are cheap, and their results are combined into one composite response held in a single cache.
+
+Measuring saturation requires choosing one input level. It is derived from the crest factor of the input rather than held as a constant, so that the measurement sits where material that actually reaches full scale sits. Where neither counted-in feature is on, the stage is a pass-through and the noise is not run at all.
+
+Summarising follows the same rule as the response measurement — the greater of the average ratio and the peak ratio less a margin. The results are in series, so their terms add. The rules for rounding and clamping the depth are stated over the composite alone and hold whatever the number of terms.
+
+### Which Features Are Counted In
+
+Only the two that saturate. The type that carries them into the derivation names them, so moving anything about the rest changes neither the depth nor the cache key.
+
+The rest are left out for reasons of their own.
+
+- The stage whose depth is inversely proportional to the volume sits behind the point the level is read from, so what it does is outside the judgement altogether. Measuring it and lowering by what it adds would cancel exactly what it was added to supply — the feature would negate itself. Where the stage sits is what guarantees this rather than a rule that has to be remembered.
+- The feature that adds the sound of a space raises the level by less than the rounding step even at its strongest, and in the smaller spaces it attenuates. Measuring it would also mean building the same chain the audio runs on, which costs an order of magnitude more than the other instruments.
+- The feature that widens the image can only be measured with decorrelated noise, and that is the worst case rather than a representative one. Real material carries far less of the component it acts on, and the rise there does not reach the rounding step. Measuring it would lower the preamp against a rise that does not exist, and the gap widens the lower the frequency it starts widening from. Choosing a representative amount instead would put a calibrated constant into the derivation, which would drift silently every time the processing is touched.
 
 Automatic mode blocks none of the preamp's controls: placing a value through any of them drops automatic mode, and the controls that hand it back take it back to automatic. What gates them is the same rule that gates every other control — while there is no way for the setting to reach the audio, they are dimmed and refused. The one that sets the target carries a second condition of its own, since it has nothing to act on while the derivation is off. Deriving still continues there, so the value is already right at the moment the audio comes back.
 
-What a preview shows is only ever what applying it would produce. Since applying a preset moves the preamp as well, hovering one shows the value derived from that preset's curve, asked for without disturbing the value being held. Where the answer is not yet at hand, the value currently in effect is shown until it is.
+What a preview shows is only ever what applying it would produce. Since applying a preset moves the preamp as well, hovering one shows the value derived from that preset's curve, asked for without disturbing the value being held. Applying a preset moves only the curve, so the preview asks with the rest of the inputs left as they stand. Where the answer is not yet at hand, the value currently in effect is shown until it is.
 
-The point where it is applied to the audio sits ahead of the EQ, so what it takes away offsets what the EQ adds at the same place in the chain. How much it takes away is not the whole of what the EQ adds: the target leaves that much of the expected rise in place, and the result is bounded at both ends and rounded toward the deeper side.
+The point where it is applied to the audio sits ahead of everything it offsets, so what it takes away lands at the same place in the chain as what is added. How much it takes away is not the whole of that: the target leaves that much of the expected rise in place, and the result is bounded at both ends and rounded to the nearest step, with a tie going to the deeper side. The target is not a ceiling, so there is no reason to bias the whole result deep; rounding always down would drop a flat curve by a step on measurement noise alone.
 
-What the EQ adds is read two ways, and the deeper of the two decides. One is the rise a typical signal would see, which is what the target is measured against. The other is the steepest rise anywhere in the band, allowed to sit a fixed distance above the first; it is there so that lifting one narrow band steeply is not waved through by an average that barely moves. Where the second decides, the peak can still land above the target.
+What is added is read two ways, and the deeper of the two decides. One is the rise a typical signal would see, which is what the target is measured against. The other is the steepest rise anywhere in the band, allowed to sit a fixed distance above the first; it is there so that lifting one narrow band steeply is not waved through by an average that barely moves. Where the second decides, the peak can still land above the target.
+
+Running both counted-in features near their upper bounds can stack up enough that the depth needed exceeds the lower bound the preamp can reach. That bound is shared with the EQ and is not moved for the Sound Lab's sake. The settings that far up do not stand up to ordinary listening, so the shortfall is accepted.
 
 ---
 
@@ -491,7 +555,7 @@ The gap between fired and applied is redrawing that changed nothing. It widens o
 
 **The Mixer meter's clock (effective, measured)**
 A clock of its own, and only two values are laid out for it. The effective rate is the ceiling the visualizer reads, held down again by a ceiling this meter carries for itself, so on the faster settings it reads lower than the setting shown on the row above. It is derived rather than recorded, because this clock has nothing else that moves it — it never drops to an idle step. There is no applied rate because nothing records whether a firing changed anything: a firing that finds the same segment count and the same clip state writes nothing, so this rate says how often the rows were looked at rather than how often they moved.
-It runs on a narrower condition than the visualizer's: the screen visible, the window visible, the mixer surface shown, the normal view, and not in editing. Reading it as stopped is therefore the ordinary state whenever the surface is not the thing on screen.
+It runs on a narrower condition than the visualizer's: the screen visible, the window visible, the surface shown and showing the rows rather than one of the Sound Lab tabs, the normal view, and not in editing. Reading it as stopped is therefore the ordinary state whenever the rows are not the thing on screen.
 
 **Occupancy (current, target, ceiling)**
 The current occupancy uses the median over the recent observation window (described below), to avoid the noise of a single observation.
@@ -514,9 +578,9 @@ The fact of the jump, read together with the number of re-primings (on the targe
 
 **Peak**
 Two running maximums of the amplitude, each held since the last reset: one taken before the system volume is applied, one after.
-The one before is the output of the EQ and the preamp alone, and does not move with the system volume. The one after is what actually leaves for the output device: where the app's own gain stage carries volume or mute it follows what the app applies, and where the real output device carries both, the two agree.
+The one before is the output of everything ahead of the level reading — the preamp, the EQ, and the Sound Lab but for the stage that sits behind that point — and does not move with the system volume. The one after is what actually leaves for the output device, so it carries the whole of the path, that last stage included: where the app's own gain stage carries volume or mute it follows what the app applies, and where the real output device carries both, the app's gain is neutral and the two agree except for whatever that stage is adding.
 The amplitude itself and dBFS relative to full scale are shown together. The amplitude is dimensionless, so where it will clip is read on the dBFS side.
-The one before is what tells whether the EQ or the preamp is boosting too much. The gap between the two is how far the system volume is pulling the output down.
+The one before is what tells whether the processing ahead of the level reading is boosting too much. The gap between the two is what the system volume takes off less what the stage behind that point puts back, so on a quiet setting with that stage on, the gap reads narrower than the volume alone would make it.
 
 **The driver's generation counter**
 A value that advances each time the dedicated driver starts IO and each time it changes the sample rate. Only whether it differs from the value read last time carries meaning; the value itself does not.
@@ -693,6 +757,8 @@ There is no intermediate state in which only some items return to their defaults
 An item added to the format therefore takes the Optional form, its absence being read as that item's default, unless discarding what is already saved is itself the decision: a non-Optional addition takes the curve, the presets, the mixer's channels and the window positions along with it, for the sake of the one item it adds.
 Optional is also the form for an item whose absence is the value — that nothing has been settled yet, or that a value should keep following automatically.
 
+The structure is grouped by the area each item belongs to rather than laid out flat. What an item is saved under is therefore a path, and a group carries the same weight as an item: renaming or regrouping discards everything already saved, exactly as removing an item would. Grouping buys nothing at decode time — the granularity of failure is still the whole structure — so it is worth doing only for what it makes readable.
+
 The output device selection has two independent pieces of state: the persistence as the default to use at the next launch, and the selection actually switched to in the current session.
 Changing the former does not affect the latter, and the latter is session-only and not persisted.
 
@@ -719,10 +785,12 @@ Installing and removing the driver requires administrator privileges, so they ar
 The tests create a disposable storage area. macOS leaves a preferences file behind for each such name, so `make test` also cleans up after the tests.
 If the tests failed and stopped partway, running `make clean-test-prefs` on its own recovers from it.
 
-Some tests drive the real assembly against a real output device, since an audio unit cannot be built without one. Those reach the machine the tests are running on in two ways, and both have to be closed off.
+Some tests drive the real assembly against a real output device, since an output unit cannot be built without one. Those reach the machine the tests are running on in two ways, and both have to be closed off.
 
 The first is the volume. The volume route binds the dedicated driver's volume to the output device's and mirrors between them, so driving it moves that machine's volume, and the end it converges to is unity. What keeps it out is a stand-in for the device reads and writes the route reaches for.
 The second is the sound itself. The output stage really starts, so whatever is in the ring reaches the speakers. What keeps that silent is muting the app's own gain stage, and the mute has to be in place before the assembly runs, since the assembly is what reads it and carries it into the route. It is the app's stage rather than the device's because muting the device would be the very write the first point rules out.
+
+An effect unit needs no output device, so the AU stage is tested by rendering an impulse through the real unit offline. Building the stage is not enough on its own: a setting that never arrives leaves the feature silently doing nothing, so what the tests read is that the sound itself moves. The unit needs settling before it answers, so the impulse goes behind a warm-up.
 
 Before reporting the number of tests, run `swift package clean` (`make clean` does not delete that area). Incremental builds drop diagnostics.
 

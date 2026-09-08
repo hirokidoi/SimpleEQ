@@ -62,10 +62,10 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 
         // 駆動条件はミキサーの状態が動くたびに導き直す。
         // @Published は変更前に流すため、モデルを読み直さず流れてきた値を使う。
-        viewModel.$viewMode.combineLatest(mixer.$shown, mixer.$editing)
-            .sink { [weak self] viewMode, shown, editing in
+        viewModel.$viewMode.combineLatest(mixer.$shown, mixer.$tab, mixer.$editing)
+            .sink { [weak self] viewMode, shown, tab, editing in
                 MainActor.assumeIsolated {
-                    self?.applyDrivenWork(viewMode: viewMode, shown: shown, editing: editing)
+                    self?.applyDrivenWork(viewMode: viewMode, shown: shown, tab: tab, editing: editing)
                 }
             }
             .store(in: &cancellables)
@@ -382,28 +382,32 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
 
     /// 可視状態とビューモードとミキサーの状態から 2 つの駆動条件を導く純粋関数。
     /// コンパクトビューのミキサーは行にメーターを持たない。
+    /// 面が Sound Lab を出している間も行は無いが、ビジュアライザは覆われたままとなる。
     static func drivenWork(
-        windowIsVisible: Bool, viewMode: ViewMode, mixerShown: Bool, editing: Bool, screenIsVisible: Bool
+        windowIsVisible: Bool, viewMode: ViewMode, mixerShown: Bool, mixerTab: MixerSurfaceTab,
+        editing: Bool, screenIsVisible: Bool
     ) -> (visualizer: Bool, mixerMeters: Bool) {
         let shows = windowIsVisible && screenIsVisible
         return (
             visualizer: shows && !mixerShown,
-            mixerMeters: shows && mixerShown && !editing && viewMode == .normal
+            mixerMeters: shows && mixerShown && mixerTab == .appMixer && !editing && viewMode == .normal
         )
     }
 
     /// 上の結果を駆動側へ反映する単一の入口。
-    private func applyDrivenWork(viewMode: ViewMode, shown: Bool, editing: Bool) {
+    private func applyDrivenWork(viewMode: ViewMode, shown: Bool, tab: MixerSurfaceTab, editing: Bool) {
         let wants = EQWindowController.drivenWork(
-            windowIsVisible: windowIsVisible, viewMode: viewMode, mixerShown: shown, editing: editing,
-            screenIsVisible: screenVisibility.screenIsVisible
+            windowIsVisible: windowIsVisible, viewMode: viewMode, mixerShown: shown, mixerTab: tab,
+            editing: editing, screenIsVisible: screenVisibility.screenIsVisible
         )
         viewModel.visualizerActive = wants.visualizer
         mixerRenderClock?.active = wants.mixerMeters
     }
 
     private func updateDrivenWork() {
-        applyDrivenWork(viewMode: viewModel.viewMode, shown: mixer.shown, editing: mixer.editing)
+        applyDrivenWork(
+            viewMode: viewModel.viewMode, shown: mixer.shown, tab: mixer.tab, editing: mixer.editing
+        )
     }
 
     /// 画面の見え方を入力に持つ門をまとめて導き直す単一の入口。

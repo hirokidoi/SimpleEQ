@@ -13,7 +13,7 @@ final class AutoPreampCoordinator {
 
     private static let measurementQueue = DispatchQueue(label: "com.simpleeq.autopreamp.measurement", qos: .utility)
 
-    private let measure: @Sendable ([Double], Double) -> EQMagnitudeResponse?
+    private let measure: @Sendable ([Double], Double, MeasuredSoundLab) -> EQMagnitudeResponse?
     private let runMeasurement: (@escaping @Sendable () -> Void) -> Void
     private let deliver: @Sendable (@escaping @MainActor () -> Void) -> Void
 
@@ -28,6 +28,7 @@ final class AutoPreampCoordinator {
         let curve: [Double]
         let sampleRate: Double
         let targetDb: Double
+        let soundLab: MeasuredSoundLab
     }
 
     private struct Memo: Equatable {
@@ -38,20 +39,24 @@ final class AutoPreampCoordinator {
     private struct ResponseKey: Hashable {
         let curve: [Double]
         let sampleRate: Double
+        let soundLab: MeasuredSoundLab
     }
 
     private struct PendingRequest {
         let curve: [Double]
         let sampleRate: Double
+        let soundLab: MeasuredSoundLab
     }
 
     /// 既定引数は呼び出し側 (main) で評価されるため、CoreAudio 資源の生成を初回の測定まで遅らせる。
     private final class LazyProbeBox: @unchecked Sendable {
-        var probe: EQResponseProbe?
+        var eq: EQResponseProbe?
+        var stereo: SoundLabStereoProbe?
+        var stereoSampleRate: Double?
     }
 
     init(
-        measure: @escaping @Sendable ([Double], Double) -> EQMagnitudeResponse? = AutoPreampCoordinator.makeDefaultMeasure(),
+        measure: @escaping @Sendable ([Double], Double, MeasuredSoundLab) -> EQMagnitudeResponse? = AutoPreampCoordinator.makeDefaultMeasure(),
         runMeasurement: @escaping (@escaping @Sendable () -> Void) -> Void = { work in
             AutoPreampCoordinator.measurementQueue.async(execute: work)
         },
@@ -66,45 +71,62 @@ final class AutoPreampCoordinator {
         self.responses = ResponseCache(capacity: cacheCapacity)
     }
 
-    private static func makeDefaultMeasure() -> @Sendable ([Double], Double) -> EQMagnitudeResponse? {
+    /// EQ とステレオ段は直列なので、それぞれの応答をまとめて 1 つの合成応答として返す。
+    static func makeDefaultMeasure() -> @Sendable ([Double], Double, MeasuredSoundLab) -> EQMagnitudeResponse? {
         let box = LazyProbeBox()
-        return { curve, sampleRate in
-            if box.probe == nil { box.probe = EQResponseProbe() }
-            return box.probe?.measure(curve: curve, sampleRate: sampleRate)
+        return { curve, sampleRate, soundLab in
+            if box.eq == nil { box.eq = EQResponseProbe() }
+            guard let eq = box.eq?.measure(curve: curve, sampleRate: sampleRate) else { return nil }
+            guard soundLab.raisesLevel else { return eq }
+            if box.stereo == nil || box.stereoSampleRate != sampleRate {
+                box.stereo = SoundLabStereoProbe(sampleRate: sampleRate)
+                box.stereoSampleRate = sampleRate
+            }
+            guard let stereo = box.stereo?.measure(
+                bass: soundLab.bassHarmonics, exciter: soundLab.trebleExciter
+            ) else { return eq }
+            return AutoPreampSpec.combined([eq, stereo])
         }
     }
 
-    func refresh(enabled: Bool, curve: [Double], targetDb: Double, sampleRate: Double, currentPreampDb: Double) {
+    func refresh(
+        enabled: Bool, curve: [Double], targetDb: Double, sampleRate: Double,
+        soundLab: SoundLabSettings, currentPreampDb: Double
+    ) {
         guard enabled else {
             current = nil
             pendingDerivation = nil
             pendingPreview = nil
             return
         }
-        let input = Input(curve: curve, sampleRate: sampleRate, targetDb: targetDb)
+        // 勘定に入れる機能だけを入口で取り出す。以降のキーも保留もこの形で持つ。
+        let soundLab = MeasuredSoundLab(soundLab)
+        let input = Input(curve: curve, sampleRate: sampleRate, targetDb: targetDb, soundLab: soundLab)
         current = input
         // 保留は 1 つ前の入力に対するもので、入力が動いた時点で用済みになる。
         pendingDerivation = nil
         guard memo != Memo(input: input, appliedPreampDb: currentPreampDb) else { return }
 
-        if let response = responses.value(for: ResponseKey(curve: curve, sampleRate: sampleRate)) {
+        if let response = responses.value(for: ResponseKey(curve: curve, sampleRate: sampleRate, soundLab: soundLab)) {
             apply(AutoPreampSpec.derivedPreampDb(response: response, targetDb: targetDb), for: input)
             return
         }
-        pendingDerivation = PendingRequest(curve: curve, sampleRate: sampleRate)
+        pendingDerivation = PendingRequest(curve: curve, sampleRate: sampleRate, soundLab: soundLab)
         startMeasurementIfIdle()
     }
 
     /// 適用を伴わない問い合わせ。
     func previewPreampDb(
-        curve: [Double], targetDb: Double, sampleRate: Double, measureIfMissing: Bool
+        curve: [Double], targetDb: Double, sampleRate: Double,
+        soundLab: SoundLabSettings, measureIfMissing: Bool
     ) -> Double? {
-        let key = ResponseKey(curve: curve, sampleRate: sampleRate)
+        let soundLab = MeasuredSoundLab(soundLab)
+        let key = ResponseKey(curve: curve, sampleRate: sampleRate, soundLab: soundLab)
         if let response = responses.value(for: key) {
             return AutoPreampSpec.derivedPreampDb(response: response, targetDb: targetDb)
         }
         guard measureIfMissing else { return nil }
-        pendingPreview = PendingRequest(curve: curve, sampleRate: sampleRate)
+        pendingPreview = PendingRequest(curve: curve, sampleRate: sampleRate, soundLab: soundLab)
         startMeasurementIfIdle()
         return nil
     }
@@ -116,7 +138,8 @@ final class AutoPreampCoordinator {
 
     private func resolveCurrentInputIfCached() {
         guard let input = current,
-              let response = responses.value(for: ResponseKey(curve: input.curve, sampleRate: input.sampleRate))
+              let response = responses.value(for: ResponseKey(
+                  curve: input.curve, sampleRate: input.sampleRate, soundLab: input.soundLab))
         else { return }
         let preampDb = AutoPreampSpec.derivedPreampDb(response: response, targetDb: input.targetDb)
         guard memo != Memo(input: input, appliedPreampDb: preampDb) else { return }
@@ -129,7 +152,7 @@ final class AutoPreampCoordinator {
         guard let request = pendingDerivation ?? pendingPreview else { return }
         if pendingDerivation != nil { pendingDerivation = nil } else { pendingPreview = nil }
 
-        let key = ResponseKey(curve: request.curve, sampleRate: request.sampleRate)
+        let key = ResponseKey(curve: request.curve, sampleRate: request.sampleRate, soundLab: request.soundLab)
         if responses.value(for: key) != nil {
             // 保留に積まれてから実行されるまでの間に、別の測定の完了で同じキーが埋まっていることがある。
             resolveCurrentInputIfCached()
@@ -140,21 +163,26 @@ final class AutoPreampCoordinator {
         measuring = true
         let curve = request.curve
         let sampleRate = request.sampleRate
+        let soundLab = request.soundLab
         let measure = self.measure
         let deliver = self.deliver
         runMeasurement { [weak self] in
-            let result = measure(curve, sampleRate)
+            let result = measure(curve, sampleRate, soundLab)
             deliver {
-                self?.completeMeasurement(curve: curve, sampleRate: sampleRate, result: result)
+                self?.completeMeasurement(
+                    curve: curve, sampleRate: sampleRate, soundLab: soundLab, result: result
+                )
             }
         }
     }
 
-    private func completeMeasurement(curve: [Double], sampleRate: Double, result: EQMagnitudeResponse?) {
+    private func completeMeasurement(
+        curve: [Double], sampleRate: Double, soundLab: MeasuredSoundLab, result: EQMagnitudeResponse?
+    ) {
         measuring = false
         // 測定失敗時は値を据え置き、再試行しない (次の入力変化で自然に再挑戦する)。
         if let result {
-            responses.insert(result, for: ResponseKey(curve: curve, sampleRate: sampleRate))
+            responses.insert(result, for: ResponseKey(curve: curve, sampleRate: sampleRate, soundLab: soundLab))
         }
         resolveCurrentInputIfCached()
         startMeasurementIfIdle()

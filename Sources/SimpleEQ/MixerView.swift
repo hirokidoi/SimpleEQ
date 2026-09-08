@@ -7,7 +7,7 @@ final class MixerReorderAnchor {
     var key: String?
 }
 
-/// アプリ別ミキサー。ビジュアライザ領域を覆う面として出る。
+/// アプリ別ミキサー。面のタブの 1 つとして出る。
 struct MixerView: View {
     @ObservedObject var model: MixerModel
     @ObservedObject var viewModel: EQViewModel
@@ -30,14 +30,8 @@ struct MixerView: View {
             column
                 .padding(.horizontal, EQLayout.Mixer.columnHorizontalInset)
         }
-        .padding(.vertical, EQLayout.Mixer.columnVerticalInset)
+        .padding(.bottom, EQLayout.Mixer.columnBottomInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            UnevenRoundedRectangle(bottomLeadingRadius: EQLayout.windowCornerRadius)
-                .fill(EQLayout.textPanelBackground)
-        )
-        .foregroundColor(EQLayout.Palette.text)
-        .colorScheme(.dark)
     }
 
     @ViewBuilder

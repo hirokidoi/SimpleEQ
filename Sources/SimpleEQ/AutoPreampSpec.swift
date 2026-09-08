@@ -1,5 +1,23 @@
 import Foundation
 
+/// 導出が勘定に入れる機能。
+///
+/// ライブシミュレーターは押し上げが丸めの刻みに届かない。
+/// ステレオエクスパンダーは非相関のノイズでしか測れず、それは Side 成分が最大の最悪ケースであり、
+/// 実音源の Side 量ではやはり刻みに届かない。どちらも測っても下げ幅を動かさない。
+struct MeasuredSoundLab: Hashable, Sendable {
+    var bassHarmonics: BassHarmonicsSettings
+    var trebleExciter: TrebleExciterSettings
+
+    init(_ settings: SoundLabSettings) {
+        bassHarmonics = settings.bassHarmonics
+        trebleExciter = settings.trebleExciter
+    }
+
+    /// どちらも切れていれば段は素通しであり、測っても 0dB にしかならない。
+    var raisesLevel: Bool { bassHarmonics.enabled || trebleExciter.enabled }
+}
+
 /// EQ 合成応答の要約値。
 struct EQMagnitudeResponse: Equatable, Sendable {
     let energyWeightedGainDb: Double
@@ -27,11 +45,19 @@ enum AutoPreampSpec {
         max(response.energyWeightedGainDb, response.worstCaseGainDb - worstCaseHeadroomDb)
     }
 
+    /// 直列に並ぶ段の応答をひとつにまとめる。
+    static func combined(_ responses: [EQMagnitudeResponse]) -> EQMagnitudeResponse {
+        EQMagnitudeResponse(
+            energyWeightedGainDb: responses.reduce(0) { $0 + $1.energyWeightedGainDb },
+            worstCaseGainDb: responses.reduce(0) { $0 + $1.worstCaseGainDb }
+        )
+    }
+
     static func derivedPreampDb(response: EQMagnitudeResponse, targetDb: Double) -> Double {
         let raw = targetDb - compositeGainDb(response)
         let clamped = min(maxPreampDb, max(minPreampDb, raw))
-        // 浅い側へ丸めると目標を超えるため。
-        return clamped.rounded(.down)
+        // 目標は上限ではないため、深い側へは寄せない。半端は深い側へ倒す。
+        return clamped.rounded(.toNearestOrAwayFromZero)
     }
 
     /// 実数 FFT の片側パワースペクトル (長さ = FFT 長/2) からピンク加重の合成応答を求める。

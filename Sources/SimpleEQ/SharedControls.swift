@@ -168,6 +168,53 @@ struct AutoToggleButton: View {
     }
 }
 
+/// 候補から 1 つ選ぶボタン。横に並べて使う。
+/// 幅を渡さない場合は文字の幅に合わせる。
+struct ChoiceButton: View {
+    let title: String
+    var width: CGFloat?
+    let fontSize: CGFloat
+    let isActive: Bool
+    let action: () -> Void
+
+    init(
+        _ title: String, width: CGFloat? = nil, fontSize: CGFloat,
+        isActive: Bool, action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.width = width
+        self.fontSize = fontSize
+        self.isActive = isActive
+        self.action = action
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: EQLayout.choiceButtonCornerRadius)
+        return Button(action: action) {
+            Text(title)
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundColor(isActive ? EQLayout.Palette.cyanSoft : EQLayout.Palette.text)
+                .padding(.horizontal, width == nil ? EQLayout.choiceButtonHorizontalPadding : 0)
+                .frame(width: width, height: EQLayout.choiceButtonHeight)
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .background(
+            shape.fill(
+                isActive
+                    ? AnyShapeStyle(EQLayout.Palette.activeButtonGradient)
+                    : AnyShapeStyle(Color.white.opacity(0.05))
+            )
+        )
+        .overlay(
+            shape.stroke(
+                isActive ? EQLayout.Palette.cyan.opacity(0.6) : EQLayout.Palette.buttonLine,
+                lineWidth: 1
+            )
+        )
+    }
+}
+
 /// 円形の "↺" リセットボタン。
 struct ResetDotButton: View {
     let action: () -> Void
@@ -177,7 +224,7 @@ struct ResetDotButton: View {
             Text("↺")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(EQLayout.Palette.faint)
-                .frame(width: 24, height: 24)
+                .frame(width: EQLayout.resetDotDiameter, height: EQLayout.resetDotDiameter)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -214,17 +261,18 @@ struct PanelSection<Content: View>: View {
 struct PanelRow<Control: View>: View {
     let title: String
     let subtitle: String?
+    var labelWidth: CGFloat = EQLayout.panelLabelWidth
     @ViewBuilder let control: () -> Control
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: EQLayout.panelRowSpacing) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 13, weight: .semibold))
                 if let subtitle {
                     Text(subtitle).font(.system(size: 12.5)).foregroundColor(EQLayout.Palette.faint)
                 }
             }
-            .frame(width: 220, alignment: .leading)
+            .frame(width: labelWidth, alignment: .leading)
             Spacer(minLength: 0)
             control()
         }
@@ -232,6 +280,45 @@ struct PanelRow<Control: View>: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color.white.opacity(0.03)).frame(height: 1)
         }
+    }
+}
+
+/// スライダーと現在値を右に置く行。付随する操作をスライダーの内側と右端へ差し込める。
+@MainActor
+func panelSliderRow<Inline: View, Trailing: View>(
+    title: String, subtitle: String? = nil, labelWidth: CGFloat = EQLayout.panelLabelWidth,
+    value: Binding<Double>, range: ClosedRange<Double>,
+    format: @escaping (Double) -> String,
+    @ViewBuilder inline: @escaping () -> Inline,
+    @ViewBuilder trailing: @escaping () -> Trailing
+) -> some View {
+    PanelRow(title: title, subtitle: subtitle, labelWidth: labelWidth) {
+        HStack(spacing: 10) {
+            Slider(value: value, in: range).tint(EQLayout.Palette.cyan)
+            inline()
+            Text(format(value.wrappedValue))
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(EQLayout.Palette.cyanSoft)
+                .frame(width: EQLayout.panelValueColumnWidth, alignment: .trailing)
+            trailing()
+        }
+    }
+}
+
+/// 刻みと既定値を持つ行。右端に既定へ戻す点が付く。
+@MainActor
+func panelSliderRow(
+    title: String, subtitle: String? = nil, labelWidth: CGFloat = EQLayout.panelLabelWidth,
+    value: Binding<Double>, range: ClosedRange<Double>, step: Double, defaultValue: Double,
+    format: @escaping (Double) -> String
+) -> some View {
+    panelSliderRow(
+        title: title, subtitle: subtitle, labelWidth: labelWidth,
+        value: steppedBinding(value, range: range, step: step), range: range, format: format
+    ) {
+        EmptyView()
+    } trailing: {
+        ResetDotButton { value.wrappedValue = defaultValue }
     }
 }
 

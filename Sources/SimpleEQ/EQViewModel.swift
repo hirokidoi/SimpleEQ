@@ -184,6 +184,15 @@ final class EQViewModel: ObservableObject {
             settings.handlePreviewLevel = handlePreviewLevel
         }
     }
+    /// Sound Lab の操作値。
+    @Published var soundLab: SoundLabSettings {
+        didSet {
+            guard oldValue != soundLab else { return }
+            settings.soundLab = soundLab
+            applyProcessingSettingsToEngine()
+            refreshAutoPreamp()
+        }
+    }
     /// ピークホールド表示の有効/無効。
     @Published var peakHoldEnabled: Bool {
         didSet {
@@ -404,6 +413,7 @@ final class EQViewModel: ObservableObject {
         handleDisplayPreamp = settings.preampDb
         preampAutoEnabled = settings.preampAutoEnabled
         preampAutoTargetDb = settings.preampAutoTargetDb
+        soundLab = settings.soundLab
         visualizerFps = settings.visualizerFps
         floorDb = settings.floorDb
         attackLevel = settings.attackLevel
@@ -718,7 +728,7 @@ final class EQViewModel: ObservableObject {
     private func refreshAutoPreamp() {
         autoPreamp?.refresh(
             enabled: preampAutoEnabled, curve: gains, targetDb: preampAutoTargetDb,
-            sampleRate: appliedSampleRate, currentPreampDb: preampDb
+            sampleRate: appliedSampleRate, soundLab: soundLab, currentPreampDb: preampDb
         )
     }
 
@@ -726,10 +736,12 @@ final class EQViewModel: ObservableObject {
         let gains = self.gains
         let bypass = self.bypass
         let preampDb = self.preampDb
+        let soundLab = self.soundLab
         audioWorld.submit(coalescingKey: AudioRequestKey.processingSettings) { [engine] token in
             engine.setAllGains(gains, token)
             engine.setBypass(bypass, token)
             engine.setPreamp(db: preampDb, token)
+            engine.applySoundLab(soundLab, token)
         }
         engine.applyLevelMeterTuning(
             stereoCaptureEnabled: showLevelMeter, attackCoef: attackCoef, releaseCoef: releaseCoef,
@@ -832,7 +844,7 @@ final class EQViewModel: ObservableObject {
         requestedPreview = (curve, appliedSampleRate)
         return autoPreamp?.previewPreampDb(
             curve: curve, targetDb: preampAutoTargetDb, sampleRate: appliedSampleRate,
-            measureIfMissing: asksForMeasurement
+            soundLab: soundLab, measureIfMissing: asksForMeasurement
         ) ?? preampDb
     }
 

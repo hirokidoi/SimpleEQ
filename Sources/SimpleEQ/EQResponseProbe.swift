@@ -54,10 +54,12 @@ final class EQResponseProbe: @unchecked Sendable {
 
         guard let newChain = EQUnit() else { return nil }
         let format = EQStreamFormat(channels: 1, sampleRate: sampleRate)
+        // 測るのは EQ だけで、モノラルでは AU 段が組めない。
         guard newChain.setup(
             format: format, maxFrames: UInt32(AudioConfig.maxRenderFrames),
             renderCallback: EQResponseProbe.renderCallback,
-            refCon: Unmanaged.passUnretained(impulseSource).toOpaque()
+            refCon: Unmanaged.passUnretained(impulseSource).toOpaque(),
+            attachesSoundLab: false
         ) else {
             newChain.dispose()
             return nil

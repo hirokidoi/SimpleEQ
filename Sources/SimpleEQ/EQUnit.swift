@@ -10,8 +10,10 @@ struct EQStreamFormat {
 /// 1 ユニットのバンド数は kAUNBandEQProperty_MaxNumberOfBands が上限のため、超える構成はユニットを分割して直列につなぐ
 /// (パラメトリックピーキングは直列でも各帯域が独立に効くため、単一 EQ と等価な合成応答が得られる)。
 final class EQUnit {
-    /// units[0] が入力 (ring) 側から pull され、units[last] が render 対象。
+    /// units[0] が入力 (ring) 側から pull され、チェーン末尾が render 対象。
     private var units: [AudioUnit] = []
+    /// EQ の後ろに付く段。生成に失敗した場合は EQ のみで動く。
+    private var soundLab: SoundLabAUStage?
     let bandCount: Int
 
     /// 各ユニットが担当するバンド数 (チェーン順)。合計は bandCount。
@@ -29,9 +31,11 @@ final class EQUnit {
         bandOffsets = EQUnit.bandOffsets(forCounts: counts)
     }
 
+    /// AU 段はステレオでのみ組める。測定のようにモノラルで組む経路は付けずに呼ぶこと。
     func setup(
         format: EQStreamFormat, maxFrames: UInt32,
-        renderCallback: @escaping AURenderCallback, refCon: UnsafeMutableRawPointer
+        renderCallback: @escaping AURenderCallback, refCon: UnsafeMutableRawPointer,
+        attachesSoundLab: Bool = true
     ) -> Bool {
         for _ in unitBandCounts {
             guard let u = EQUnit.makeUnit() else { print("[ERROR] EQUnit create"); return false }
@@ -106,7 +110,28 @@ final class EQUnit {
             )
         }
 
+        if attachesSoundLab { attachSoundLabStage(format: format, maxFrames: maxFrames) }
         return true
+    }
+
+    private func attachSoundLabStage(format: EQStreamFormat, maxFrames: UInt32) {
+        guard let last = units.last, let candidate = SoundLabAUStage() else {
+            print("[WARN] sound lab stage unavailable")
+            return
+        }
+        guard candidate.setup(after: last, format: format, maxFrames: maxFrames) else {
+            candidate.dispose()
+            print("[WARN] sound lab stage setup failed")
+            return
+        }
+        soundLab = candidate
+    }
+
+    /// AU 段が組めたか。組めなければその機能は音に届かない。
+    var hasSoundLabStage: Bool { soundLab != nil }
+
+    func applyLiveSimulation(_ settings: LiveSimulationSettings) {
+        soundLab?.apply(settings)
     }
 
     /// 全ユニットの input/output scope へストリームフォーマットを設定する。1 つでも拒否されたら false。
@@ -139,6 +164,7 @@ final class EQUnit {
 
     func reset() {
         for u in units { AudioUnitReset(u, kAudioUnitScope_Global, 0) }
+        soundLab?.reset()
     }
 
     func setAllGains(_ dbs: [Double]) {
@@ -163,11 +189,13 @@ final class EQUnit {
         frames: UInt32,
         ioData: UnsafeMutablePointer<AudioBufferList>
     ) -> OSStatus {
-        guard let last = units.last else { return kAudioUnitErr_Uninitialized }
+        guard let last = soundLab?.outputUnit ?? units.last else { return kAudioUnitErr_Uninitialized }
         return AudioUnitRender(last, flags, timestamp, 0, frames, ioData)
     }
 
     func dispose() {
+        soundLab?.dispose()
+        soundLab = nil
         for u in units {
             AudioUnitUninitialize(u)
             AudioComponentInstanceDispose(u)

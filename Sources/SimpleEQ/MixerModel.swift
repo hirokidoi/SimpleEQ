@@ -24,6 +24,22 @@ enum MixerAppDirectory {
     }
 }
 
+/// 面が出しているもの。タブを出すのはノーマルビューだけで、コンパクトビューは行だけを描く。
+enum MixerSurfaceTab: Hashable, Sendable {
+    case appMixer
+    case soundLab(SoundLabFeature)
+
+    static let allCases: [MixerSurfaceTab] =
+        [.appMixer] + SoundLabFeature.allCases.map(MixerSurfaceTab.soundLab)
+
+    var title: String {
+        switch self {
+        case .appMixer: return "App Mixer"
+        case .soundLab(let feature): return feature.tabTitle
+        }
+    }
+}
+
 /// ミキサーの UI 世界の状態。チャンネル一覧・並び・編集モード・永続化を持つ。
 @MainActor
 final class MixerModel: ObservableObject {
@@ -59,6 +75,8 @@ final class MixerModel: ObservableObject {
     @Published private(set) var channels: [Channel] = []
     @Published private(set) var candidates: [Candidate] = []
     @Published private(set) var shown = false
+    /// 出すたびに App Mixer から始まるため保存しない。
+    @Published private(set) var tab = MixerSurfaceTab.appMixer
     @Published private(set) var editing = false
     /// 編集モードの間だけ持つ作業リスト。
     @Published private(set) var editRows: [EditRow] = []
@@ -109,16 +127,27 @@ final class MixerModel: ObservableObject {
         setShown(!shown)
     }
 
+    /// 面を出すときは必ず App Mixer から始める。どの口から出しても着く場所を同じにする。
+    /// タブより先に決めるのは、面が出た瞬間に前のタブが混じった状態を外へ出さないため。
     func setShown(_ on: Bool) {
         guard shown != on else { return }
         if !on { endEditing() }
+        if on { tab = .appMixer }
         shown = on
         // 周期と同じ 1 パスを呼ぶだけで、専用の経路を作らない。
         if on { coordinator?.runPass() }
     }
 
+    func select(tab: MixerSurfaceTab) {
+        guard self.tab != tab else { return }
+        endEditing()
+        self.tab = tab
+    }
+
+    /// 編集できるのは App Mixer の行だけなので、そちらへ寄せてから入る。
     func beginEditing() {
         guard shown, !editing else { return }
+        tab = .appMixer
         editRows = channels.map { EditRow(key: $0.key, checked: true, identity: $0.identity) }
             + candidates.map { EditRow(key: $0.key, checked: false, identity: $0.identity) }
         editing = true

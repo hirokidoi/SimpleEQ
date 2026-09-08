@@ -23,7 +23,7 @@ struct RootView: View {
                     }
                     VisualizerInteractionView(viewModel: viewModel)
                     if mixer.shown {
-                        MixerView(model: mixer, viewModel: viewModel, clock: mixerClock)
+                        MixerSurfaceView(model: mixer, viewModel: viewModel, clock: mixerClock)
                     }
                 }
                 PresetRailView(viewModel: viewModel, mixer: mixer, onOpenWindow: onOpenWindow)

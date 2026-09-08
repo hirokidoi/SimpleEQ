@@ -101,9 +101,12 @@ struct SettingsView: View {
                 SettingsToggle(isOn: $viewModel.showWindowOnLaunch)
             }
             settingsRow(title: "ビューモード") {
-                HStack(spacing: 5) {
+                HStack(spacing: EQLayout.settingsChoiceButtonSpacing) {
                     ForEach(ViewMode.allCases, id: \.self) { mode in
-                        choiceButton(mode.title, isActive: viewModel.viewMode == mode) {
+                        ChoiceButton(
+                            mode.title, fontSize: EQLayout.settingsChoiceButtonFontSize,
+                            isActive: viewModel.viewMode == mode
+                        ) {
                             viewModel.viewMode = mode
                         }
                     }
@@ -182,9 +185,12 @@ struct SettingsView: View {
                 title: "編集トリガー",
                 subtitle: "ビジュアライザ上にゲイン設定ハンドルを出すための操作"
             ) {
-                HStack(spacing: 5) {
+                HStack(spacing: EQLayout.settingsChoiceButtonSpacing) {
                     ForEach(HandleRevealGesture.allCases, id: \.self) { gesture in
-                        choiceButton(gesture.title, isActive: viewModel.handleRevealGesture == gesture) {
+                        ChoiceButton(
+                            gesture.title, fontSize: EQLayout.settingsChoiceButtonFontSize,
+                            isActive: viewModel.handleRevealGesture == gesture
+                        ) {
                             viewModel.handleRevealGesture = gesture
                         }
                     }
@@ -339,14 +345,10 @@ struct SettingsView: View {
         value: Binding<Double>, range: ClosedRange<Double>, step: Double, defaultValue: Double,
         format: @escaping (Double) -> String
     ) -> some View {
-        sliderRow(
-            title: title, subtitle: subtitle,
-            value: steppedBinding(value, range: range, step: step), range: range, format: format
-        ) {
-            EmptyView()
-        } trailing: {
-            ResetDotButton { value.wrappedValue = defaultValue }
-        }
+        panelSliderRow(
+            title: title, subtitle: subtitle, value: value, range: range, step: step,
+            defaultValue: defaultValue, format: format
+        )
     }
 
     private func preampSliderRow<Inline: View, Trailing: View>(
@@ -368,17 +370,10 @@ struct SettingsView: View {
         @ViewBuilder inline: @escaping () -> Inline,
         @ViewBuilder trailing: @escaping () -> Trailing
     ) -> some View {
-        settingsRow(title: title, subtitle: subtitle) {
-            HStack(spacing: 10) {
-                Slider(value: value, in: range).tint(EQLayout.Palette.cyan)
-                inline()
-                Text(format(value.wrappedValue))
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(EQLayout.Palette.cyanSoft)
-                    .frame(width: 72, alignment: .trailing)
-                trailing()
-            }
-        }
+        panelSliderRow(
+            title: title, subtitle: subtitle, value: value, range: range, format: format,
+            inline: inline, trailing: trailing
+        )
     }
 
     /// 既定へ戻す点は行ごとの既定を見る (項目によって既定の段が違うため、共通の段へ戻すと起動直後の状態と食い違う)。
@@ -386,7 +381,7 @@ struct SettingsView: View {
         title: String, subtitle: String? = nil, level: Binding<Int>, scale: EQLayout.Tuning.LevelScale
     ) -> some View {
         settingsRow(title: title, subtitle: subtitle) {
-            HStack(spacing: 5) {
+            HStack(spacing: EQLayout.settingsChoiceButtonSpacing) {
                 ForEach(1...scale.values.count, id: \.self) { lv in
                     levelButton(lv, isActive: level.wrappedValue == lv) { level.wrappedValue = lv }
                 }
@@ -396,30 +391,9 @@ struct SettingsView: View {
     }
 
     private func levelButton(_ lv: Int, isActive: Bool, action: @escaping () -> Void) -> some View {
-        choiceButton("\(lv)", width: 34, isActive: isActive, action: action)
-    }
-
-    /// 幅を渡さない場合は文字の幅に合わせる。
-    private func choiceButton(
-        _ title: String, width: CGFloat? = nil, isActive: Bool, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundColor(isActive ? EQLayout.Palette.cyanSoft : EQLayout.Palette.text)
-                .padding(.horizontal, width == nil ? 12 : 0)
-                .frame(width: width, height: 30)
-                .contentShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isActive ? AnyShapeStyle(EQLayout.Palette.activeButtonGradient) : AnyShapeStyle(Color.white.opacity(0.05)))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(isActive ? EQLayout.Palette.cyan.opacity(0.6) : EQLayout.Palette.buttonLine, lineWidth: 1)
+        ChoiceButton(
+            "\(lv)", width: EQLayout.levelButtonWidth,
+            fontSize: EQLayout.settingsChoiceButtonFontSize, isActive: isActive, action: action
         )
     }
-
 }

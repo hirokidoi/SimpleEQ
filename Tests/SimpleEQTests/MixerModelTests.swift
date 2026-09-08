@@ -92,6 +92,25 @@ final class MixerModelTests: XCTestCase {
         XCTAssertEqual(model.candidates.map(\.key).sorted(), [a, b].sorted(), "外した行は候補へ戻る")
     }
 
+    /// 面を出す口は複数あるが、どれも出す瞬間に App Mixer へ戻る。
+    func testShowingTheSurfaceAlwaysLandsOnTheAppMixerTab() {
+        let settings = SettingsStore(defaults: defaults)
+        settings.mixerChannels = []
+        let model = makeModel(settings)
+
+        model.setShown(true)
+        XCTAssertEqual(model.tab, .appMixer, "初回に出したときは App Mixer")
+
+        for feature in SoundLabFeature.allCases {
+            model.select(tab: .soundLab(feature))
+            XCTAssertEqual(model.tab, .soundLab(feature), "タブは選んだとおりに動く")
+
+            model.setShown(false)
+            model.setShown(true)
+            XCTAssertEqual(model.tab, .appMixer, "出し直せば App Mixer へ戻る \(feature)")
+        }
+    }
+
     /// 面を出していない間も辞書は貯まるため、出した直後から正しい候補が出る。
     func testCandidatesArriveWithoutTheMixerHavingBeenShown() {
         let settings = SettingsStore(defaults: defaults)

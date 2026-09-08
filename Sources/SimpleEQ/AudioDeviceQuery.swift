@@ -280,5 +280,5 @@ func setBufferFrameSize(_ device: AudioDeviceID, _ frames: UInt32, _ token: Audi
         mElement: kAudioObjectPropertyElementMain
     )
     let st = AudioObjectSetPropertyData(device, &addr, 0, nil, 4, &v)
-    if st != noErr { print("[warn] set buffer frame size (\(device)) failed: \(st)") }
+    if st != noErr { print("[warn] set buffer frame size \(frames) on device \(device) failed: \(st)") }
 }

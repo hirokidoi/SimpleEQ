@@ -116,7 +116,14 @@ final class AudioEngine: @unchecked Sendable {
     private static let initialOutputVolume: Float = 1
     private static let initialOutputMuted = false
 
-    private(set) var outputVolume: Float = AudioEngine.initialOutputVolume
+    /// ラウドネスの深さがこの値に反比例するため、値が決まる地点で段へ配り直す。
+    /// 書き手が複数あるので、各書き手ではなくここに置く。
+    private(set) var outputVolume: Float = AudioEngine.initialOutputVolume {
+        didSet {
+            guard oldValue != outputVolume else { return }
+            refreshSoundLabStages()
+        }
+    }
     private(set) var outputMuted: Bool = AudioEngine.initialOutputMuted
     private(set) var outputGain: Float = effectiveOutputGain(
         volume: AudioEngine.initialOutputVolume, muted: AudioEngine.initialOutputMuted
@@ -126,6 +133,14 @@ final class AudioEngine: @unchecked Sendable {
     private(set) var preampGain: Float = 1
     private var preampDb: Double = 0
     private var bypassed = false
+    private var soundLabStereo: SoundLabStereoStage?
+    /// レベル解析より後ろで効かせるため、ステレオ段とは別に持つ。
+    private var soundLabLoudness: SoundLabLoudnessStage?
+    private var soundLabSettings = SoundLabSettings()
+    /// 段へ実際に配っている操作値。バイパス中は素通しの値になる。
+    private(set) var soundLabSettingsInEffect = SoundLabSettings()
+    /// ラウドネス段へ実際に配っている音量。押し上げの深さがこれに反比例する。
+    private(set) var soundLabOutputVolumeInEffect = AudioEngine.initialOutputVolume
     private var driverDeviceListenerBlock: AudioObjectPropertyListenerBlock?
     /// リスナー群を実際に登録したデバイス ID。
     /// 解除は必ずこの ID に対して行う (driverDeviceID は再解決で変わりうるため)。
@@ -241,12 +256,18 @@ final class AudioEngine: @unchecked Sendable {
         }
         eqUnit = eq
         setupPlanarOutputBuffers(maxFrames: maxFrames)
+        // フィルタの係数が実レートから決まるため、組み立てのたびに作り直す。
+        soundLabStereo = SoundLabStereoStage(sampleRate: AudioConfig.appliedSampleRate)
+        soundLabLoudness = SoundLabLoudnessStage(sampleRate: AudioConfig.appliedSampleRate)
+        refreshSoundLabStages()
 
         // 出力 AUHAL は常に interleaved (EQ 側が非interleaved でも最終段で再interleave)。
         var st = AudioUnitSetProperty(outUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &asbd, asbdSize)
         guard st == noErr else {
             print("[ERROR] set output format: \(st)")
             eqUnit?.dispose(); eqUnit = nil
+            soundLabStereo = nil
+            soundLabLoudness = nil
             return false
         }
         AudioUnitSetProperty(outUnit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, 4)
@@ -259,18 +280,24 @@ final class AudioEngine: @unchecked Sendable {
         guard st == noErr else {
             print("[ERROR] set output callback: \(st)")
             eqUnit?.dispose(); eqUnit = nil
+            soundLabStereo = nil
+            soundLabLoudness = nil
             return false
         }
         st = AudioUnitInitialize(outUnit)
         guard st == noErr else {
             print("[ERROR] init output unit: \(st)")
             eqUnit?.dispose(); eqUnit = nil
+            soundLabStereo = nil
+            soundLabLoudness = nil
             return false
         }
         guard AudioOutputUnitStart(outUnit) == noErr else {
             print("[ERROR] start output unit")
             AudioUnitUninitialize(outUnit)
             eqUnit?.dispose(); eqUnit = nil
+            soundLabStereo = nil
+            soundLabLoudness = nil
             return false
         }
         return true
@@ -385,6 +412,8 @@ final class AudioEngine: @unchecked Sendable {
         intendedOutputDeviceUID = nil
         eqUnit?.dispose()
         eqUnit = nil
+        soundLabStereo = nil
+        soundLabLoudness = nil
         ringReader = nil
         runtimeMetrics.recordOutputDeviceSampleRate(0)
         for buf in eqPlanarOutputBufs { buf.deallocate() }
@@ -395,11 +424,30 @@ final class AudioEngine: @unchecked Sendable {
 
     // --- 制御 API (UI/ViewModel から呼ぶ公開面。いずれもオーディオ世界のキュー上でのみ呼べる) ----
 
+    func applySoundLab(_ settings: SoundLabSettings, _ token: AudioWorldToken) {
+        soundLabSettings = settings
+        refreshSoundLabStages()
+    }
+
+    /// バイパス中は素通しの操作値を配る。レンダ経路自体は分岐させない。
+    private func refreshSoundLabStages() {
+        let settings = bypassed ? SoundLabSettings() : soundLabSettings
+        soundLabSettingsInEffect = settings
+        soundLabOutputVolumeInEffect = outputVolume
+        soundLabStereo?.apply(
+            expander: settings.stereoExpander,
+            bass: settings.bassHarmonics,
+            exciter: settings.trebleExciter
+        )
+        soundLabLoudness?.apply(settings.loudness, outputVolume: outputVolume)
+        eqUnit?.applyLiveSimulation(settings.liveSimulation)
+    }
     func setGain(band: Int, db: Double, _ token: AudioWorldToken) { eqUnit?.setGain(band: band, db: db) }
     func setAllGains(_ dbs: [Double], _ token: AudioWorldToken) { eqUnit?.setAllGains(dbs) }
     func setBypass(_ bypass: Bool, _ token: AudioWorldToken) {
         bypassed = bypass
         eqUnit?.setBypass(bypass)
+        refreshSoundLabStages()
         recomputePreampGain()
     }
     func setPreamp(db: Double, _ token: AudioWorldToken) {
@@ -579,6 +627,8 @@ final class AudioEngine: @unchecked Sendable {
         outputFadeFramesRemaining.store(0)
         eqUnit?.dispose()
         eqUnit = nil
+        soundLabStereo = nil
+        soundLabLoudness = nil
         for buf in eqPlanarOutputBufs { buf.deallocate() }
         eqPlanarOutputBufs.removeAll()
         if let abl = eqPlanarOutputABL { free(UnsafeMutableRawPointer(abl)) }
@@ -638,9 +688,11 @@ final class AudioEngine: @unchecked Sendable {
             let dst = mData.assumingMemoryBound(to: Float.self)
             got = ringReader.read(into: dst, frames: Int(frames))
             applyPreampGain(dst, count: sampleCount)
+            soundLabStereo?.process(dst, frames: Int(frames))
         } else {
             got = ringReader.read(into: eqInputScratch, frames: Int(frames))
             applyPreampGain(eqInputScratch, count: sampleCount)
+            soundLabStereo?.process(eqInputScratch, frames: Int(frames))
             let channels = abl.count
             for c in 0..<channels {
                 guard let mData = abl[c].mData else { continue }
@@ -665,9 +717,15 @@ final class AudioEngine: @unchecked Sendable {
 
         let count = frameCount * channels
         var peak: Float = 0
-        for i in 0..<count { peak = max(peak, abs(buf[i])) }
-        guard gain != 1 else { return peak }
-        for i in 0..<count { buf[i] *= gain }
+        guard gain != 1 else {
+            for i in 0..<count { peak = max(peak, abs(buf[i])) }
+            return peak
+        }
+        for i in 0..<count {
+            let value = buf[i]
+            peak = max(peak, abs(value))
+            buf[i] = value * gain
+        }
         return peak
     }
 
@@ -697,6 +755,13 @@ final class AudioEngine: @unchecked Sendable {
         let gain = outputGain
         let peakBeforeVolume = captureLevelsAndApplyOutputGain(
             dst, frameCount: Int(frames), channels: Int(AudioConfig.channels), gain: gain
+        )
+
+        // 解析より後ろに置くことで、クリップ判定が音量最大での振幅を表す。
+        // 押し上げ前のピークを渡すため、空きの判断が自分の出力を入力にしない。
+        soundLabLoudness?.process(
+            dst, frames: Int(frames),
+            outputPeak: loudnessHeadroomReference(peakBeforeVolume: peakBeforeVolume, outputGain: gain)
         )
 
         applyOutputFade(dst, frameCount: Int(frames), channels: Int(AudioConfig.channels))

@@ -93,8 +93,8 @@ final class SettingsStoreTests: XCTestCase {
     func testLoadingSchemaFromBeforeAlwaysOnTopResetsAllSettingsToDefaults() {
         let gains = (0..<EQSpec.bandCount).map { Double($0) }
         let oldSchema: [String: Any] = [
-            "gains": gains,
-            "preset": EQPreset.slot3.rawValue,
+            "eq.gains": gains,
+            "eq.preset": EQPreset.slot3.rawValue,
             "bypass": true,
             "savedDefaultOutputUID": "old-uid",
             "switchPending": true
@@ -118,8 +118,8 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLoadingSchemaFromBeforeShowWindowOnLaunchResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -151,7 +151,7 @@ final class SettingsStoreTests: XCTestCase {
 
         let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
-        XCTAssertNotNil(json.removeValue(forKey: "viewMode"), "前提: 保存データにこの項目が載っていること")
+        XCTAssertTrue(Self.removing("window.viewMode", from: &json), "前提: 保存データにこの項目が載っていること")
         defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
 
         assertResetToDefaults(SettingsStore(defaults: defaults))
@@ -177,7 +177,7 @@ final class SettingsStoreTests: XCTestCase {
 
         let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
-        XCTAssertNotNil(json.removeValue(forKey: "handleRevealGesture"), "前提: 保存データにこの項目が載っていること")
+        XCTAssertTrue(Self.removing("handles.revealGesture", from: &json), "前提: 保存データにこの項目が載っていること")
         defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
 
         assertResetToDefaults(SettingsStore(defaults: defaults))
@@ -198,8 +198,8 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLoadingSchemaWithOutputDeviceNameKeyResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -245,54 +245,60 @@ final class SettingsStoreTests: XCTestCase {
 
     // MARK: - 外から読んだ値の健全化
 
-    /// 全キーが揃った保存データを書き、指定したキーだけを差し替える。
+    /// 全キーが揃った保存データを書き、指定した項目だけを差し替える。
+    /// 写しを手で並べず既定値から起こすため、保存の構成が変わっても追随が要らない。
+    /// キーは "visualizer.floorDb" のように入れ子の道で指す。
     private func writeStoredPayload(overriding overrides: [String: Any]) {
-        var payload: [String: Any] = [
-            "gains": Array(repeating: 0.0, count: EQSpec.bandCount),
-            "preset": EQPreset.slot1.rawValue,
-            "bypass": false,
-            "switchPending": false,
-            "alwaysOnTop": false,
-            "showWindowOnLaunch": false,
-            "showLevelMeter": true,
-            "adoptsSystemOutputSelection": true,
-            "visualizerFps": EQLayout.Tuning.visualizerFpsDefault,
-            "floorDb": EQLayout.Tuning.floorDbDefault,
-            "attackLevel": EQLayout.Tuning.attack.defaultLevel,
-            "releaseLevel": EQLayout.Tuning.release.defaultLevel,
-            "handleFadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
-            "handlePreviewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
-            "peakHoldEnabled": true,
-            "peakHoldSeconds": EQLayout.Tuning.peakHoldSecondsDefault,
-            "peakDecayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecDefault,
-            "peakCapBrightenAmount": EQLayout.Tuning.peakCapBrightenAmountDefault,
-            "presetOverrides": [String: Any](),
-            "preampDb": 0.0,
-            "viewMode": ViewMode.normal.rawValue,
-            "preampAutoEnabled": true,
-            "preampAutoTargetDb": AutoPreampSpec.targetDbDefault,
-            "handleRevealGesture": HandleRevealGesture.default.rawValue
-        ]
-        overrides.forEach { payload[$0.key] = $0.value }
-        let data = try! JSONSerialization.data(withJSONObject: payload)
-        defaults.set(data, forKey: SettingsStore.defaultsKey)
+        let seeder = SettingsStore(defaults: defaults)
+        seeder.bypass = false
+        var json = try! JSONSerialization.jsonObject(
+            with: defaults.data(forKey: SettingsStore.defaultsKey)!
+        ) as! [String: Any]
+        overrides.forEach { json = Self.setting($0.key, to: $0.value, in: json) }
+        defaults.set(try! JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
+    }
+
+    private static func setting(_ path: String, to value: Any, in object: [String: Any]) -> [String: Any] {
+        var object = object
+        let head = path.prefix { $0 != "." }
+        let rest = path.dropFirst(head.count + 1)
+        if rest.isEmpty {
+            object[String(head)] = value
+        } else {
+            let child = object[String(head)] as? [String: Any] ?? [:]
+            object[String(head)] = setting(String(rest), to: value, in: child)
+        }
+        return object
+    }
+
+    /// 入れ子の道で指した項目を落とす。落とせたかを返す。
+    private static func removing(_ path: String, from object: inout [String: Any]) -> Bool {
+        let head = path.prefix { $0 != "." }
+        let rest = path.dropFirst(head.count + 1)
+        if rest.isEmpty {
+            return object.removeValue(forKey: String(head)) != nil
+        }
+        guard var child = object[String(head)] as? [String: Any] else { return false }
+        let removed = removing(String(rest), from: &child)
+        object[String(head)] = child
+        return removed
     }
 
     // デコードに失敗すると、以降の検証が既定値と一致しただけで通ってしまう。
     func testStoredPayloadFixtureDecodes() {
         let probe = EQLayout.Tuning.floorDbDefault - EQLayout.Tuning.floorDbStep
         XCTAssertTrue(EQLayout.Tuning.floorDbRange.contains(probe), "前提: 隣の段がレンジに収まること")
-        writeStoredPayload(overriding: ["floorDb": probe])
+        writeStoredPayload(overriding: ["visualizer.floorDb": probe])
         XCTAssertEqual(SettingsStore(defaults: defaults).floorDb, probe)
     }
 
     func testOutOfRangeDirectValuesAreSanitizedPerItemRule() {
         writeStoredPayload(overriding: [
-            "visualizerFps": EQLayout.Tuning.visualizerFpsDefault + 1,
-            "floorDb": EQLayout.Tuning.floorDbRange.lowerBound - 30,
-            "peakHoldSeconds": EQLayout.Tuning.peakHoldSecondsRange.upperBound + 10,
-            "peakDecayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecRange.lowerBound - 10,
-            "peakCapBrightenAmount": EQLayout.Tuning.peakCapBrightenAmountRange.upperBound + 1
+            "visualizer.fps": EQLayout.Tuning.visualizerFpsDefault + 1,
+            "visualizer.floorDb": EQLayout.Tuning.floorDbRange.lowerBound - 30,
+            "visualizer.peakHold.holdSeconds": EQLayout.Tuning.peakHoldSecondsRange.upperBound + 10,
+            "visualizer.peakHold.decayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecRange.lowerBound - 10,
+            "visualizer.peakHold.capBrightenAmount": EQLayout.Tuning.peakCapBrightenAmountRange.upperBound + 1
         ])
         let store = SettingsStore(defaults: defaults)
         XCTAssertEqual(store.visualizerFps, EQLayout.Tuning.visualizerFpsDefault)
@@ -305,10 +311,10 @@ final class SettingsStoreTests: XCTestCase {
     // 段は 1 始まりで、上端は並びの長さが決める。
     func testOutOfRangeLevelsClampToScaleEnds() {
         writeStoredPayload(overriding: [
-            "attackLevel": 0,
-            "releaseLevel": EQLayout.Tuning.release.values.count + 5,
-            "handleFadeLevel": -3,
-            "handlePreviewLevel": EQLayout.Tuning.handlePreview.values.count + 1
+            "visualizer.attackLevel": 0,
+            "visualizer.releaseLevel": EQLayout.Tuning.release.values.count + 5,
+            "handles.fadeLevel": -3,
+            "handles.previewLevel": EQLayout.Tuning.handlePreview.values.count + 1
         ])
         let store = SettingsStore(defaults: defaults)
         XCTAssertEqual(store.attackLevel, 1)
@@ -319,17 +325,17 @@ final class SettingsStoreTests: XCTestCase {
 
     func testOutOfRangeLedDimAmountClampsToRangeEnds() {
         let range = EQLayout.Tuning.ledDimAmountRange
-        writeStoredPayload(overriding: ["ledDimAmount": range.upperBound + 1])
+        writeStoredPayload(overriding: ["handles.ledDimAmount": range.upperBound + 1])
         XCTAssertEqual(SettingsStore(defaults: defaults).ledDimAmount, range.upperBound)
 
-        writeStoredPayload(overriding: ["ledDimAmount": range.lowerBound - 1])
+        writeStoredPayload(overriding: ["handles.ledDimAmount": range.lowerBound - 1])
         XCTAssertEqual(SettingsStore(defaults: defaults).ledDimAmount, range.lowerBound)
     }
 
     // 表示側はバンド数ぶんの添字アクセスを行うため、要素数の不足は読み込みの時点で埋める。
     func testShortGainsArrayIsPaddedToBandCount() {
         let head = [1.0, 2.0, 3.0]
-        writeStoredPayload(overriding: ["gains": head])
+        writeStoredPayload(overriding: ["eq.gains": head])
         let gains = SettingsStore(defaults: defaults).gains
         XCTAssertEqual(gains.count, EQSpec.bandCount)
         XCTAssertEqual(Array(gains.prefix(head.count)), head)
@@ -341,15 +347,15 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLongGainsArrayIsTruncatedToBandCount() {
         writeStoredPayload(overriding: [
-            "gains": Array(repeating: 1.0, count: EQSpec.bandCount + 7)
+            "eq.gains": Array(repeating: 1.0, count: EQSpec.bandCount + 7)
         ])
         XCTAssertEqual(SettingsStore(defaults: defaults).gains.count, EQSpec.bandCount)
     }
 
     func testGainsAndPreampOutsideDbRangeAreClamped() {
         writeStoredPayload(overriding: [
-            "gains": Array(repeating: EQSpec.DB_MAX + 50, count: EQSpec.bandCount),
-            "preampDb": EQSpec.DB_MIN - 50
+            "eq.gains": Array(repeating: EQSpec.DB_MAX + 50, count: EQSpec.bandCount),
+            "preamp.db": EQSpec.DB_MIN - 50
         ])
         let store = SettingsStore(defaults: defaults)
         XCTAssertEqual(store.gains, Array(repeating: EQSpec.DB_MAX, count: EQSpec.bandCount))
@@ -358,7 +364,7 @@ final class SettingsStoreTests: XCTestCase {
 
     func testPresetOverrideCurveIsNormalized() {
         writeStoredPayload(overriding: [
-            "presetOverrides": [
+            "eq.overrides": [
                 EQPreset.slot4.rawValue: ["title": "Short", "curve": [EQSpec.DB_MAX + 50]]
             ]
         ])
@@ -374,7 +380,7 @@ final class SettingsStoreTests: XCTestCase {
         // 全角は幅 2 として数えるため、上限と同じ文字数でも幅は上限を超える。
         let long = String(repeating: "あ", count: EQLayout.presetTitleMaxWidth)
         writeStoredPayload(overriding: [
-            "presetOverrides": [
+            "eq.overrides": [
                 EQPreset.slot4.rawValue: [
                     "title": long,
                     "curve": Array(repeating: 0.0, count: EQSpec.bandCount)
@@ -421,8 +427,8 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLoadingSchemaFromBeforeSettingsScreenKeysResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -445,8 +451,8 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLoadingSchemaFromBeforeLevelMeterToggleResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -454,19 +460,19 @@ final class SettingsStoreTests: XCTestCase {
             "showWindowOnLaunch": false,
             "outputDeviceUID": NSNull(),
             "autoRestoreOnExit": true,
-            "visualizerFps": EQLayout.Tuning.visualizerFpsDefault,
-            "floorDb": EQLayout.Tuning.floorDbDefault,
-            "attackLevel": EQLayout.Tuning.attack.defaultLevel,
-            "releaseLevel": EQLayout.Tuning.release.defaultLevel,
-            "handleFadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
-            "handlePreviewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
-            "presetOverrides": [String: Any](),
+            "visualizer.fps": EQLayout.Tuning.visualizerFpsDefault,
+            "visualizer.floorDb": EQLayout.Tuning.floorDbDefault,
+            "visualizer.attackLevel": EQLayout.Tuning.attack.defaultLevel,
+            "visualizer.releaseLevel": EQLayout.Tuning.release.defaultLevel,
+            "handles.fadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
+            "handles.previewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
+            "eq.overrides": [String: Any](),
             "windowOrigin": NSNull(),
-            "preampDb": 0,
+            "preamp.db": 0,
             "peakHoldEnabled": true,
-            "peakHoldSeconds": EQLayout.Tuning.peakHoldSecondsDefault,
-            "peakDecayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecDefault,
-            "peakCapBrightenAmount": EQLayout.Tuning.peakCapBrightenAmountDefault
+            "visualizer.peakHold.holdSeconds": EQLayout.Tuning.peakHoldSecondsDefault,
+            "visualizer.peakHold.decayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecDefault,
+            "visualizer.peakHold.capBrightenAmount": EQLayout.Tuning.peakCapBrightenAmountDefault
             // showLevelMeter は意図的に含めない
         ]
         let data = try! JSONSerialization.data(withJSONObject: oldSchema)
@@ -485,8 +491,8 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLoadingSchemaFromBeforeOutputAdoptionToggleResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -494,20 +500,20 @@ final class SettingsStoreTests: XCTestCase {
             "showWindowOnLaunch": false,
             "showLevelMeter": true,
             "outputDeviceUID": NSNull(),
-            "visualizerFps": EQLayout.Tuning.visualizerFpsDefault,
-            "floorDb": EQLayout.Tuning.floorDbDefault,
-            "attackLevel": EQLayout.Tuning.attack.defaultLevel,
-            "releaseLevel": EQLayout.Tuning.release.defaultLevel,
-            "handleFadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
-            "handlePreviewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
-            "presetOverrides": [String: Any](),
+            "visualizer.fps": EQLayout.Tuning.visualizerFpsDefault,
+            "visualizer.floorDb": EQLayout.Tuning.floorDbDefault,
+            "visualizer.attackLevel": EQLayout.Tuning.attack.defaultLevel,
+            "visualizer.releaseLevel": EQLayout.Tuning.release.defaultLevel,
+            "handles.fadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
+            "handles.previewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
+            "eq.overrides": [String: Any](),
             "windowOrigin": NSNull(),
-            "viewMode": ViewMode.normal.rawValue,
-            "preampDb": 0,
+            "window.viewMode": ViewMode.normal.rawValue,
+            "preamp.db": 0,
             "peakHoldEnabled": true,
-            "peakHoldSeconds": EQLayout.Tuning.peakHoldSecondsDefault,
-            "peakDecayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecDefault,
-            "peakCapBrightenAmount": EQLayout.Tuning.peakCapBrightenAmountDefault
+            "visualizer.peakHold.holdSeconds": EQLayout.Tuning.peakHoldSecondsDefault,
+            "visualizer.peakHold.decayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecDefault,
+            "visualizer.peakHold.capBrightenAmount": EQLayout.Tuning.peakCapBrightenAmountDefault
             // adoptsSystemOutputSelection は意図的に含めない
         ]
         let data = try! JSONSerialization.data(withJSONObject: oldSchema)
@@ -633,7 +639,7 @@ final class SettingsStoreTests: XCTestCase {
         writeStoredPayload(overriding: [:])
         let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
-        XCTAssertNotNil(json.removeValue(forKey: "preampAutoEnabled"), "前提: 保存データにこの項目が載っていること")
+        XCTAssertTrue(Self.removing("preamp.autoEnabled", from: &json), "前提: 保存データにこの項目が載っていること")
         defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
 
         assertResetToDefaults(SettingsStore(defaults: defaults))
@@ -644,7 +650,7 @@ final class SettingsStoreTests: XCTestCase {
         writeStoredPayload(overriding: [:])
         let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
-        XCTAssertNotNil(json.removeValue(forKey: "preampAutoTargetDb"), "前提: 保存データにこの項目が載っていること")
+        XCTAssertTrue(Self.removing("preamp.autoTargetDb", from: &json), "前提: 保存データにこの項目が載っていること")
         defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
 
         assertResetToDefaults(SettingsStore(defaults: defaults))
@@ -652,24 +658,24 @@ final class SettingsStoreTests: XCTestCase {
     }
 
     func testPreampAutoTargetDbOutOfRangeIsClampedOnLoad() {
-        writeStoredPayload(overriding: ["preampAutoTargetDb": AutoPreampSpec.targetDbRange.upperBound + 50])
+        writeStoredPayload(overriding: ["preamp.autoTargetDb": AutoPreampSpec.targetDbRange.upperBound + 50])
         XCTAssertEqual(SettingsStore(defaults: defaults).preampAutoTargetDb, AutoPreampSpec.targetDbRange.upperBound)
 
-        writeStoredPayload(overriding: ["preampAutoTargetDb": AutoPreampSpec.targetDbRange.lowerBound - 50])
+        writeStoredPayload(overriding: ["preamp.autoTargetDb": AutoPreampSpec.targetDbRange.lowerBound - 50])
         XCTAssertEqual(SettingsStore(defaults: defaults).preampAutoTargetDb, AutoPreampSpec.targetDbRange.lowerBound)
     }
 
     func testPreampAutoTargetDbOffStepValueSnapsToNearestStep() {
         let step = AutoPreampSpec.targetDbStep
         let base = AutoPreampSpec.targetDbRange.lowerBound + step
-        writeStoredPayload(overriding: ["preampAutoTargetDb": base + step * 0.3])
+        writeStoredPayload(overriding: ["preamp.autoTargetDb": base + step * 0.3])
         XCTAssertEqual(SettingsStore(defaults: defaults).preampAutoTargetDb, base)
     }
 
     func testLoadingSchemaFromBeforePreampDbResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -677,13 +683,13 @@ final class SettingsStoreTests: XCTestCase {
             "showWindowOnLaunch": false,
             "outputDeviceUID": NSNull(),
             "autoRestoreOnExit": true,
-            "visualizerFps": EQLayout.Tuning.visualizerFpsDefault,
-            "floorDb": EQLayout.Tuning.floorDbDefault,
-            "attackLevel": EQLayout.Tuning.attack.defaultLevel,
-            "releaseLevel": EQLayout.Tuning.release.defaultLevel,
-            "handleFadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
-            "handlePreviewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
-            "presetOverrides": [String: Any](),
+            "visualizer.fps": EQLayout.Tuning.visualizerFpsDefault,
+            "visualizer.floorDb": EQLayout.Tuning.floorDbDefault,
+            "visualizer.attackLevel": EQLayout.Tuning.attack.defaultLevel,
+            "visualizer.releaseLevel": EQLayout.Tuning.release.defaultLevel,
+            "handles.fadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
+            "handles.previewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
+            "eq.overrides": [String: Any](),
             "windowOrigin": NSNull()
             // preampDb は意図的に含めない
         ]
@@ -696,8 +702,8 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLoadingSchemaFromBeforePeakHoldResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -705,15 +711,15 @@ final class SettingsStoreTests: XCTestCase {
             "showWindowOnLaunch": false,
             "outputDeviceUID": NSNull(),
             "autoRestoreOnExit": true,
-            "visualizerFps": EQLayout.Tuning.visualizerFpsDefault,
-            "floorDb": EQLayout.Tuning.floorDbDefault,
-            "attackLevel": EQLayout.Tuning.attack.defaultLevel,
-            "releaseLevel": EQLayout.Tuning.release.defaultLevel,
-            "handleFadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
-            "handlePreviewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
-            "presetOverrides": [String: Any](),
+            "visualizer.fps": EQLayout.Tuning.visualizerFpsDefault,
+            "visualizer.floorDb": EQLayout.Tuning.floorDbDefault,
+            "visualizer.attackLevel": EQLayout.Tuning.attack.defaultLevel,
+            "visualizer.releaseLevel": EQLayout.Tuning.release.defaultLevel,
+            "handles.fadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
+            "handles.previewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
+            "eq.overrides": [String: Any](),
             "windowOrigin": NSNull(),
-            "preampDb": 0
+            "preamp.db": 0
             // peakHoldEnabled/peakHoldSeconds/peakDecayDbPerSec は意図的に含めない
         ]
         let data = try! JSONSerialization.data(withJSONObject: oldSchema)
@@ -727,8 +733,8 @@ final class SettingsStoreTests: XCTestCase {
 
     func testLoadingSchemaFromBeforePeakCapBrightenResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
-            "gains": EQSpec.builtInSeeds[.slot1]!.curve,
-            "preset": EQPreset.slot1.rawValue,
+            "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,
+            "eq.preset": EQPreset.slot1.rawValue,
             "bypass": false,
             "savedDefaultOutputUID": NSNull(),
             "switchPending": false,
@@ -736,18 +742,18 @@ final class SettingsStoreTests: XCTestCase {
             "showWindowOnLaunch": false,
             "outputDeviceUID": NSNull(),
             "autoRestoreOnExit": true,
-            "visualizerFps": EQLayout.Tuning.visualizerFpsDefault,
-            "floorDb": EQLayout.Tuning.floorDbDefault,
-            "attackLevel": EQLayout.Tuning.attack.defaultLevel,
-            "releaseLevel": EQLayout.Tuning.release.defaultLevel,
-            "handleFadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
-            "handlePreviewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
-            "presetOverrides": [String: Any](),
+            "visualizer.fps": EQLayout.Tuning.visualizerFpsDefault,
+            "visualizer.floorDb": EQLayout.Tuning.floorDbDefault,
+            "visualizer.attackLevel": EQLayout.Tuning.attack.defaultLevel,
+            "visualizer.releaseLevel": EQLayout.Tuning.release.defaultLevel,
+            "handles.fadeLevel": EQLayout.Tuning.handleFade.defaultLevel,
+            "handles.previewLevel": EQLayout.Tuning.handlePreview.defaultLevel,
+            "eq.overrides": [String: Any](),
             "windowOrigin": NSNull(),
-            "preampDb": 0,
+            "preamp.db": 0,
             "peakHoldEnabled": true,
-            "peakHoldSeconds": EQLayout.Tuning.peakHoldSecondsDefault,
-            "peakDecayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecDefault
+            "visualizer.peakHold.holdSeconds": EQLayout.Tuning.peakHoldSecondsDefault,
+            "visualizer.peakHold.decayDbPerSec": EQLayout.Tuning.peakDecayDbPerSecDefault
             // peakCapBrightenAmount は意図的に含めない
         ]
         let data = try! JSONSerialization.data(withJSONObject: oldSchema)
@@ -762,10 +768,10 @@ final class SettingsStoreTests: XCTestCase {
     /// 足したのが Optional 1 件だけであることの検証。ここが崩れると旧データが全項目既定へ戻る。
     func testLoadingDataWithoutMixerChannelsKeepsEveryOtherSetting() throws {
         let gains = (0..<EQSpec.bandCount).map { Double($0 % 7) - 3 }
-        writeStoredPayload(overriding: ["gains": gains, "preset": EQPreset.slot3.rawValue, "bypass": true])
+        writeStoredPayload(overriding: ["eq.gains": gains, "eq.preset": EQPreset.slot3.rawValue, "bypass": true])
         let saved = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
-        XCTAssertNil(json["mixerChannels"], "前提: この項目を持たない保存データであること")
+        XCTAssertNil(json["mixer.channels"], "前提: この項目を持たない保存データであること")
 
         let store = SettingsStore(defaults: defaults)
         XCTAssertNil(store.mixerChannels, "不在は「まだ一度も設定していない」")
