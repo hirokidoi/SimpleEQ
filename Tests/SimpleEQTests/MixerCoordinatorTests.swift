@@ -74,7 +74,8 @@ final class MixerCoordinatorTests: XCTestCase {
             levelStore: levelStore,
             resolver: resolver,
             queue: DispatchQueue(label: "MixerCoordinatorTests.coordinator"),
-            now: { [clock = clock!] in clock.now }
+            now: { [clock = clock!] in clock.now },
+            lastKnownOwnsAudioPath: { true }
         )
         coordinator.didUpdate = { [sink = sink!] update in sink.receive(update) }
     }
@@ -147,7 +148,8 @@ final class MixerCoordinatorTests: XCTestCase {
             )),
             selfChannelKey: Self.playerKey,
             queue: DispatchQueue(label: "MixerCoordinatorTests.selfCoordinator"),
-            now: { [clock = clock!] in clock.now }
+            now: { [clock = clock!] in clock.now },
+            lastKnownOwnsAudioPath: { true }
         )
         coordinator.didUpdate = { [sink = sink!] update in sink.receive(update) }
 
@@ -173,6 +175,46 @@ final class MixerCoordinatorTests: XCTestCase {
             coordinator.updateChannels([MixerChannelSnapshot(key: Self.playerKey, gain: MixerGainScale.unityGain)])
         }
         XCTAssertTrue(bridge.pushedTables.isEmpty, "中立の間は書き込みが 1 件も増えない")
+    }
+
+    // 所有していない間は 1 件も書かない。空表を送る形にすると、新しい所有者が敷いた表をこちらが消す。
+    // 取り戻した回に押し直さないと、保存済みのゲインが次の周までドライバへ届かない。
+    func testGainsAreWithheldWhileAnotherSessionOwnsThePathAndPushedAgainOnRegaining() {
+        let owns = Recorded<Bool>(false)
+        let coordinator = MixerCoordinator(
+            audioWorld: AudioWorld(queue: DispatchQueue(label: "MixerCoordinatorTests.ownedAudioWorld")),
+            bridge: bridge,
+            levelStore: levelStore,
+            resolver: MixerAppResolver(environment: MixerAppResolver.Environment(
+                responsibleForPID: { $0 },
+                parentPID: { _ in nil },
+                executablePath: { $0 == 501 ? Self.playerPath : nil },
+                bundleInfo: { _ in MixerAppResolver.BundleInfo(bundleID: "com.example.player", displayName: "Player") }
+            )),
+            queue: DispatchQueue(label: "MixerCoordinatorTests.ownedCoordinator"),
+            now: { [clock = clock!] in clock.now },
+            lastKnownOwnsAudioPath: { owns.value }
+        )
+        let sink = UpdateSink()
+        coordinator.didUpdate = { update in sink.receive(update) }
+        func waitForOwnedUpdate(_ body: () -> Void) {
+            let armed = expectation(description: "coordinator update")
+            sink.arm(armed)
+            body()
+            wait(for: [armed], timeout: 2)
+        }
+
+        bridge.roster = [entry(clientID: 1, pid: 501, bundleID: "com.example.player", active: true)]
+        waitForOwnedUpdate { bumpRosterRevision(generation: 1); coordinator.runPass() }
+        waitForOwnedUpdate { coordinator.updateChannels([MixerChannelSnapshot(key: Self.playerKey, gain: 0.5)]) }
+        XCTAssertTrue(bridge.pushedTables.isEmpty, "所有していない間は書き込みが 1 件も増えない")
+
+        owns.update { $0 = true }
+        waitForOwnedUpdate { coordinator.runPass() }
+        XCTAssertEqual(
+            bridge.pushedTables.last, [MixerSpec.matchKey(bundleID: "com.example.player", processID: 501)!: 0.5],
+            "取り戻した回に押し直す"
+        )
     }
 
     func testNonNeutralChannelIsPushedAndRenewedOnceTheDeadlinePasses() {

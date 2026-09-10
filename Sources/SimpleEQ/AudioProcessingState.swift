@@ -12,6 +12,8 @@ enum SuspensionCause: Equatable, CaseIterable {
     case driverOperation
     /// アプリ終了に伴う停止。
     case applicationTermination
+    /// セッション横断の所有権を持たない。
+    case ownershipUnavailable
 }
 
 /// 停止種別ごとの扱いの対応表。識別子と意味的データを分離するための集約先。
@@ -19,7 +21,7 @@ enum SuspensionPolicy {
     static func allowsSelectionResume(_ cause: SuspensionCause) -> Bool {
         switch cause {
         case .routeUnavailable: return true
-        case .driverOperation, .applicationTermination: return false
+        case .driverOperation, .applicationTermination, .ownershipUnavailable: return false
         }
     }
 
@@ -27,7 +29,15 @@ enum SuspensionPolicy {
     static func allowsAutomaticResume(_ cause: SuspensionCause) -> Bool {
         switch cause {
         case .routeUnavailable: return true
-        case .driverOperation, .applicationTermination: return false
+        case .driverOperation, .applicationTermination, .ownershipUnavailable: return false
+        }
+    }
+
+    /// 所有権の取得を契機とする再開を許す種別。選び直し・自動再開とは再開の契機自体が異なるため独立の問いにする。
+    static func allowsResumeOnOwnershipAcquired(_ cause: SuspensionCause) -> Bool {
+        switch cause {
+        case .ownershipUnavailable: return true
+        case .routeUnavailable, .driverOperation, .applicationTermination: return false
         }
     }
 
@@ -40,10 +50,23 @@ enum SuspensionPolicy {
         }
     }
 
+    /// 所有していない側が書くと、所有者の名前を消したうえで、
+    /// 名前の再発行が既定出力をドライバへ握り直してしまう。
+    static func writesDriverDeviceName(_ state: ProcessingState) -> Bool {
+        switch state {
+        case .active: return true
+        case .suspended(let cause):
+            switch cause {
+            case .routeUnavailable, .driverOperation, .applicationTermination: return true
+            case .ownershipUnavailable: return false
+            }
+        }
+    }
+
     private static func maintainsDriverVisibility(_ cause: SuspensionCause) -> Bool {
         switch cause {
         case .routeUnavailable: return true
-        case .driverOperation, .applicationTermination: return false
+        case .driverOperation, .applicationTermination, .ownershipUnavailable: return false
         }
     }
 }

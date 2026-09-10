@@ -103,4 +103,6 @@ enum AudioRequestKey: Hashable {
     case mixerRoster
     /// ドラッグ中のゲイン変更が溜まらないよう 1 本にする。
     case mixerGainTable
+    /// 意味があるのは最新の 1 件だけ。届かないことはリース満了として正しく扱われる。
+    case ownershipRenew
 }

@@ -1,5 +1,6 @@
 import Foundation
 import SimpleEQAtomicC
+import Synchronization
 
 /// realtime 書き込み側 (release store) / 非 realtime 読み取り側 (acquire load) 間で単一の UInt64 を受け渡す最小のアトミックカウンタ。
 final class AtomicUInt64 {
@@ -435,6 +436,22 @@ final class AudioRuntimeMetrics {
         mixerCoordinationObservation = observation
     }
 
+    // MARK: - 所有権 (現在の状態。所有権調停役の専用キューが書き込む)
+
+    /// realtime 経路は触れないため、ロック越しに 1 つの値として持つ。
+    private let ownershipStorage = Mutex<(observed: Bool, observation: OwnershipObservationSnapshot)>(
+        (false, OwnershipObservationSnapshot())
+    )
+
+    /// 所有権を今の状態として読めているか (共有ヘッダを開けなかった間は false)。
+    var ownershipObserved: Bool { ownershipStorage.withLock { $0.observed } }
+
+    var ownershipObservation: OwnershipObservationSnapshot { ownershipStorage.withLock { $0.observation } }
+
+    func recordOwnershipObservation(_ observation: OwnershipObservationSnapshot, observed: Bool) {
+        ownershipStorage.withLock { $0 = (observed, observation) }
+    }
+
     // MARK: - 出力デバイスの実レート (現在の状態)
 
     private let outputDeviceSampleRateStorage = AtomicUInt64(0)
@@ -600,6 +617,8 @@ final class AudioRuntimeMetrics {
         let peakBeforeVolume: Float
         let mixerDriver: MixerDriverObservation
         let mixerCoordination: MixerCoordinationObservation
+        let ownershipObserved: Bool
+        let ownership: OwnershipObservationSnapshot
         let lastResetAt: Date?
     }
 
@@ -651,6 +670,8 @@ final class AudioRuntimeMetrics {
             peakBeforeVolume: peakBeforeVolume,
             mixerDriver: mixerDriverObservation,
             mixerCoordination: mixerCoordinationObservation,
+            ownershipObserved: ownershipObserved,
+            ownership: ownershipObservation,
             lastResetAt: lastResetAt
         )
     }

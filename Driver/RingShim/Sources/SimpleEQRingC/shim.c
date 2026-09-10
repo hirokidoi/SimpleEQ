@@ -344,3 +344,162 @@ uint32_t simpleeq_driver_name_override_max_length(void)
 {
     return kSimpleEQNameOverrideMaxLength;
 }
+
+// --- 所有権 (セッション横断の調停) ------------------------------------------
+
+uint32_t simpleeq_ownership_selector(void)
+{
+    return kSimpleEQOwnershipSelector;
+}
+
+double simpleeq_ownership_lease_seconds(void)
+{
+    return kSimpleEQOwnershipLeaseSeconds;
+}
+
+double simpleeq_ownership_request_lease_seconds(void)
+{
+    return kSimpleEQOwnershipRequestLeaseSeconds;
+}
+
+const char *simpleeq_ownership_operation_key(void)
+{
+    return kSimpleEQOwnershipOperationKey;
+}
+
+const char *simpleeq_ownership_uid_key(void)
+{
+    return kSimpleEQOwnershipUIDKey;
+}
+
+const char *simpleeq_ownership_operation_claim(void)
+{
+    return kSimpleEQOwnershipOperationClaim;
+}
+
+const char *simpleeq_ownership_operation_request(void)
+{
+    return kSimpleEQOwnershipOperationRequest;
+}
+
+const char *simpleeq_ownership_operation_cancel(void)
+{
+    return kSimpleEQOwnershipOperationCancel;
+}
+
+const char *simpleeq_ownership_operation_release(void)
+{
+    return kSimpleEQOwnershipOperationRelease;
+}
+
+const char *simpleeq_ownership_operation_renew(void)
+{
+    return kSimpleEQOwnershipOperationRenew;
+}
+
+uint32_t simpleeq_ownership_load_generation_acquire(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->ownershipGeneration, memory_order_acquire);
+}
+
+uint32_t simpleeq_ownership_owner_process_id_relaxed(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->ownerProcessID, memory_order_relaxed);
+}
+
+uint32_t simpleeq_ownership_owner_uid_relaxed(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->ownerUID, memory_order_relaxed);
+}
+
+uint64_t simpleeq_ownership_lease_deadline_host_time_relaxed(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->ownershipLeaseDeadlineHostTime, memory_order_relaxed);
+}
+
+size_t simpleeq_ownership_owner_process_id_offset(void)
+{
+    return offsetof(SimpleEQRingHeader, ownerProcessID);
+}
+
+size_t simpleeq_ownership_lease_deadline_host_time_offset(void)
+{
+    return offsetof(SimpleEQRingHeader, ownershipLeaseDeadlineHostTime);
+}
+
+size_t simpleeq_ownership_request_process_id_offset(void)
+{
+    return offsetof(SimpleEQRingHeader, requestProcessID);
+}
+
+size_t simpleeq_ownership_request_lease_deadline_host_time_offset(void)
+{
+    return offsetof(SimpleEQRingHeader, ownershipRequestLeaseDeadlineHostTime);
+}
+
+uint32_t simpleeq_ownership_op_unknown(void) { return (uint32_t)kSimpleEQOwnershipOp_Unknown; }
+uint32_t simpleeq_ownership_op_claim(void)   { return (uint32_t)kSimpleEQOwnershipOp_Claim; }
+uint32_t simpleeq_ownership_op_request(void) { return (uint32_t)kSimpleEQOwnershipOp_Request; }
+uint32_t simpleeq_ownership_op_cancel(void)  { return (uint32_t)kSimpleEQOwnershipOp_Cancel; }
+uint32_t simpleeq_ownership_op_release(void) { return (uint32_t)kSimpleEQOwnershipOp_Release; }
+uint32_t simpleeq_ownership_op_renew(void)   { return (uint32_t)kSimpleEQOwnershipOp_Renew; }
+
+uint32_t simpleeq_ownership_outcome_denied(void)    { return (uint32_t)kSimpleEQOwnershipOutcome_Denied; }
+uint32_t simpleeq_ownership_outcome_no_change(void) { return (uint32_t)kSimpleEQOwnershipOutcome_NoChange; }
+uint32_t simpleeq_ownership_outcome_applied(void)   { return (uint32_t)kSimpleEQOwnershipOutcome_Applied; }
+
+bool simpleeq_ownership_seat_is_held(
+    uint32_t inProcessID, uint64_t inDeadlineHostTime, uint64_t inNowHostTime)
+{
+    return SimpleEQOwnershipSeatIsHeld(inProcessID, inDeadlineHostTime, inNowHostTime);
+}
+
+SimpleEQOwnershipPlanResult simpleeq_ownership_compute_plan(
+    uint32_t inOperation, uint32_t inCallerProcessID, uint32_t inDeclaredUID,
+    uint32_t inOwnerProcessID, bool inOwnerHoldsSeat,
+    uint32_t inRequestProcessID, uint32_t inRequestUID, bool inRequestStands)
+{
+    SimpleEQOwnershipPlan plan = SimpleEQOwnershipComputePlan(
+        (SimpleEQOwnershipOp)inOperation, inCallerProcessID, inDeclaredUID,
+        inOwnerProcessID, inOwnerHoldsSeat, inRequestProcessID, inRequestUID, inRequestStands
+    );
+    SimpleEQOwnershipPlanResult result;
+    result.outcome = (uint32_t)plan.outcome;
+    result.writesOwnerSeat = plan.writesOwnerSeat;
+    result.ownerProcessID = plan.ownerProcessID;
+    result.ownerUID = plan.ownerUID;
+    result.writesRequestSeat = plan.writesRequestSeat;
+    result.requestProcessID = plan.requestProcessID;
+    result.requestUID = plan.requestUID;
+    result.renewsOwnerLease = plan.renewsOwnerLease;
+    result.renewsRequestLease = plan.renewsRequestLease;
+    return result;
+}
+
+uint32_t simpleeq_ownership_load_request_generation_acquire(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->ownershipRequestGeneration, memory_order_acquire);
+}
+
+uint32_t simpleeq_ownership_request_process_id_relaxed(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->requestProcessID, memory_order_relaxed);
+}
+
+uint32_t simpleeq_ownership_request_uid_relaxed(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->requestUID, memory_order_relaxed);
+}
+
+uint64_t simpleeq_ownership_request_lease_deadline_host_time_relaxed(const void *inHeader)
+{
+    const SimpleEQRingHeader *header = (const SimpleEQRingHeader *)inHeader;
+    return atomic_load_explicit(&header->ownershipRequestLeaseDeadlineHostTime, memory_order_relaxed);
+}

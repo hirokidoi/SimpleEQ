@@ -7,8 +7,7 @@ enum PresetHoverPreview {
     }
 }
 
-/// プリセットレール: プリセットボタンと Settings ボタン。
-/// EQ が音に効いていない間はプリセットボタン群を減光して操作不能にする (Settings ボタンは減光も無効化もしない)。
+/// プリセットレール: プリセットボタン・Mixer ボタン・Settings ボタン。
 /// プリセットボタンは長押しで保存ダイアログを開く。
 struct PresetRailView: View {
     @ObservedObject var viewModel: EQViewModel
@@ -29,8 +28,7 @@ struct PresetRailView: View {
                 }
             }
             .allowsHitTesting(viewModel.processingInEffect)
-            // 減光はプリセット群だけにかける。
-            // レール全体へかけると、EQ に依存しない Settings ボタンまで効かないように見える。
+            // レール全体へ寄せない。Settings ボタンまで沈む。
             .opacity(viewModel.processingInEffect ? 1 : EQLayout.disabledOpacity)
             // ボタン群 (ボタン間の隙間含む) の hover でハンドル表示を継続し、ボタン間移動での点滅を防ぐ。
             // 群から完全に離れたらプレビューを解除して現在値へ戻す。
@@ -206,6 +204,9 @@ struct PresetRailView: View {
             // 押下が届かないまま離れた回に印が残ると、次の押下を食う。
             if !hovering { swallowMixerClick = false }
         }
+        // 長押しより外側に置く。内側だと無効化がジェスチャへ及ばず、押せない見た目のまま面が開く。
+        .opacity(viewModel.settingsReachAudio ? 1 : EQLayout.disabledOpacity)
+        .disabled(!viewModel.settingsReachAudio)
     }
 
     /// 記号だけで幅を詰めるため、行き先はツールチップで補う。

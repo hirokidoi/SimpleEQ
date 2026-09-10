@@ -14,13 +14,12 @@ enum MixerAppDirectory {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
                 return nil
             }
-            let name = (Bundle(url: url)?.localizedInfoDictionary?["CFBundleDisplayName"] as? String)
-                ?? (Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String)
+            let name = MixerAppResolver.BundleInfo.read(from: url)?.displayName
                 ?? url.deletingPathExtension().lastPathComponent
             return MixerAppIdentity(displayName: name, iconFilePath: url.path)
         }
         guard let name = MixerSpec.processName(inKey: key) else { return nil }
-        return MixerAppIdentity(displayName: name, subtitle: "No bundle")
+        return MixerAppIdentity(displayName: name, subtitle: MixerAppIdentity.noBundleSubtitle)
     }
 }
 

@@ -89,6 +89,7 @@ final class MixerCoordinator: @unchecked Sendable {
 
     private let queue: DispatchQueue
     private let audioWorld: AudioWorld
+    private let lastKnownOwnsAudioPath: @Sendable () -> Bool
     private let bridge: MixerAudioBridge
     private let levelStore: MixerLevelStore
     private let resolver: MixerAppResolver
@@ -114,9 +115,11 @@ final class MixerCoordinator: @unchecked Sendable {
         resolver: MixerAppResolver = MixerAppResolver(environment: .live()),
         selfChannelKey: String? = Bundle.main.bundleIdentifier.map(MixerSpec.bundleKey),
         queue: DispatchQueue = DispatchQueue(label: "com.simpleeq.mixer", qos: .utility),
-        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }
+        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSinceReferenceDate },
+        lastKnownOwnsAudioPath: @escaping @Sendable () -> Bool
     ) {
         self.audioWorld = audioWorld
+        self.lastKnownOwnsAudioPath = lastKnownOwnsAudioPath
         self.bridge = bridge
         self.levelStore = levelStore
         self.resolver = resolver
@@ -190,7 +193,9 @@ final class MixerCoordinator: @unchecked Sendable {
             gainByChannelKey: gainByChannelKey
         )
         let currentTime = now()
-        let pushes = MixerPushPolicy.shouldPush(
+        // 所有していない間は書かない。空表を送る形にすると、新しい所有者が敷いた表をこちらが消す。
+        let owns = lastKnownOwnsAudioPath()
+        let pushes = owns && MixerPushPolicy.shouldPush(
             table: table, lastPushed: lastPushedTable, lastPushAt: lastPushAt,
             now: currentTime, renewInterval: Self.passInterval
         )
@@ -207,6 +212,10 @@ final class MixerCoordinator: @unchecked Sendable {
         if pushes {
             lastPushedTable = table
             lastPushAt = currentTime
+        } else if !owns {
+            // 押し込みの記憶も捨てる。残すと、所有権を取り戻した回に「同じ表を既に押した」と読んで押し直さない。
+            lastPushedTable = nil
+            lastPushAt = nil
         }
 
         publish()

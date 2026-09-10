@@ -60,8 +60,10 @@ final class EQViewModel: ObservableObject {
         didSet {
             guard oldValue != persistedDefaultOutputDeviceUID else { return }
             settings.outputDeviceUID = persistedDefaultOutputDeviceUID
+            persistedDefaultOutputDeviceUIDDidChange?(persistedDefaultOutputDeviceUID)
         }
     }
+    var persistedDefaultOutputDeviceUIDDidChange: ((String?) -> Void)?
     @Published var adoptsSystemOutputSelection: Bool {
         didSet {
             guard oldValue != adoptsSystemOutputSelection else { return }
@@ -78,6 +80,7 @@ final class EQViewModel: ObservableObject {
     }
     /// 出力先を選び直せるか。
     var canSelectOutputDevice: Bool {
+        guard isOwner else { return false }
         guard !audioWorldUnresponsive else { return false }
         guard driverAvailability == .ok else { return false }
         switch processingState {
@@ -85,9 +88,47 @@ final class EQViewModel: ObservableObject {
         case .suspended(let cause): return SuspensionPolicy.allowsSelectionResume(cause)
         }
     }
+    /// セッション横断の所有権を持つか。持たない間は他セッションが音声経路を使っている。
+    @Published private(set) var isOwner: Bool
+    /// 所有者の pid (不在は 0。自分が所有者のときは自分の値)。
+    @Published private(set) var ownershipOwnerProcessID: UInt32 = 0
+    @Published private(set) var ownershipOwnerUID: UInt32 = 0
+    /// 自分が要求中か (要求リースを更新しながら所有者の解放を待っている間)。
+    @Published private(set) var isRequestingOwnership: Bool = false
+    /// 所有権の状態を実際に読めたか。
+    @Published private(set) var ownershipObserved: Bool = false
+    /// 調停役がこの周で空席を掴みに行っているか。
+    @Published private(set) var isClaimingOwnershipSeat: Bool = false
+    @Published private(set) var isOnConsole: Bool = true
+    func updateOnConsole(_ value: Bool) { if isOnConsole != value { isOnConsole = value } }
+    /// 所有権の状態を知らせられるか。読めていない状態と、ドライバが使えない状態は知らせる相手が居ない。
+    /// 起動時の取得が決着するまでも知らせない。周期パスが先に観測を届けるため、決着前の一瞬を掴んでしまう。
+    /// 掴みに行っている周も同じ理由で知らせない。
+    var offersOwnershipHandover: Bool {
+        startupActivationSettled && ownershipObserved && !isOwner && !isClaimingOwnershipSeat
+            && driverAvailability == .ok
+    }
+    /// 他のセッションが実際に音声経路を握っているか。
+    /// 読めなかった回の「自分は所有していない」は安全側へ倒した値なので、握られている根拠にしない。
+    var anotherSessionHoldsAudioPath: Bool {
+        ownershipObserved && !isOwner && ownershipOwnerProcessID != 0
+    }
+    /// 「こちらで使う」を差し出せるか。
+    var canTakeOwnershipHere: Bool {
+        offersOwnershipHandover && OwnershipPolicy.allowsHandoverAction(
+            ownerPresent: ownershipOwnerProcessID != 0, isOnConsole: isOnConsole
+        )
+    }
+    /// ドライバの導入・更新・アンインストールを行えるか。dim の見た目は他の門と揃うが、判定は共有しない。
+    var canOperateDriver: Bool {
+        OwnershipPolicy.allowsDriverOperation(ownerPresent: ownershipOwnerProcessID != 0, isSelfOwner: isOwner)
+    }
+    /// 「こちらで使う」。所有権調停役が無い構成 (テスト等) では何もしない。
+    func useOwnershipHere() { ownershipCoordinator?.requestOwnership() }
+    func cancelOwnershipRequest() { ownershipCoordinator?.cancelRequest() }
     /// 設定が音へ届く経路があるか。バイパスの状態には依存しない。
     var settingsReachAudio: Bool {
-        topBarWarning == nil && driverAvailability != .checking
+        isOwner && topBarWarning == nil && driverAvailability != .checking
     }
     /// EQ の ON/OFF を切り替えられるか。
     var canToggleBypass: Bool { settingsReachAudio }
@@ -367,6 +408,8 @@ final class EQViewModel: ObservableObject {
     private let activationCoordinator: AudioActivationCoordinator?
     /// プリアンプ自動導出の調停役。テストからの構築では未注入 (nil) で、その場合は導出が一切起きない。
     private let autoPreamp: AutoPreampCoordinator?
+    /// セッション横断の所有権調停役。テストからの構築では未注入 (nil) で、その場合「こちらで使う」は何もしない。
+    private let ownershipCoordinator: OwnershipCoordinator?
     private var appliedSampleRate: Double = AudioConfig.baseSampleRate
     /// 出力候補一覧の再列挙をトリガーする通知を登録済みか (二重登録防止)。
     nonisolated private let deviceListListenerRegistered = Mutex<Bool>(false)
@@ -389,9 +432,11 @@ final class EQViewModel: ObservableObject {
         driverAvailability: DriverAvailability = .notFound,
         processingState: ProcessingState = .active, resolvedOutputDeviceName: String? = nil,
         resolvedOutputDeviceUID: String? = nil,
+        isOwner: Bool = true,
         deviceRoutingReconciler: DeviceRoutingReconciler? = nil,
         activationCoordinator: AudioActivationCoordinator? = nil,
         autoPreamp: AutoPreampCoordinator? = nil,
+        ownershipCoordinator: OwnershipCoordinator? = nil,
         renderMetrics: RenderMetrics = RenderMetrics()
     ) {
         self.renderMetrics = renderMetrics
@@ -399,6 +444,7 @@ final class EQViewModel: ObservableObject {
         self.settings = settings
         self.audioWorld = audioWorld
         self.driverInstallCoordinator = DriverInstallCoordinator(outputController: outputController, audioWorld: audioWorld)
+        self.ownershipCoordinator = ownershipCoordinator
         self.deviceRoutingReconciler = deviceRoutingReconciler
         self.activationCoordinator = activationCoordinator
         self.autoPreamp = autoPreamp
@@ -417,6 +463,7 @@ final class EQViewModel: ObservableObject {
         showLevelMeter = settings.showLevelMeter
         self.driverProbe = .versionsUnreadable(driverAvailability)
         self.processingState = processingState
+        self.isOwner = isOwner
         self.resolvedOutputDeviceName = resolvedOutputDeviceName ?? Self.unresolvedOutputDeviceName
 
         persistedDefaultOutputDeviceUID = settings.outputDeviceUID
@@ -750,6 +797,9 @@ final class EQViewModel: ObservableObject {
         processingState = state
         switch state {
         case .active:
+            // 観測が止まっていた間に抱えた判定は捨てる (実観測は同じパスで届く)。
+            updateRingStalled(false)
+            updateDefaultOutputReachesDriver(true)
             applyProcessingSettingsToEngine()
             if let activeDevice {
                 adoptOutputDevice(activeDevice.device, name: activeDevice.name ?? Self.unresolvedOutputDeviceName)
@@ -836,6 +886,15 @@ final class EQViewModel: ObservableObject {
     func updateAudioWorldUnresponsive(_ unresponsive: Bool) {
         guard audioWorldUnresponsive != unresponsive else { return }
         audioWorldUnresponsive = unresponsive
+    }
+
+    func updateOwnership(_ update: OwnershipCoordinatorUpdate) {
+        if isOwner != update.isSelfOwner { isOwner = update.isSelfOwner }
+        if ownershipOwnerProcessID != update.ownerProcessID { ownershipOwnerProcessID = update.ownerProcessID }
+        if ownershipOwnerUID != update.ownerUID { ownershipOwnerUID = update.ownerUID }
+        if isRequestingOwnership != update.isRequestingOwnership { isRequestingOwnership = update.isRequestingOwnership }
+        if ownershipObserved != update.isObserved { ownershipObserved = update.isObserved }
+        if isClaimingOwnershipSeat != update.isClaimingSeat { isClaimingOwnershipSeat = update.isClaimingSeat }
     }
 
     /// ハンドル線の表示値 (ゲイン・プリアンプ) を目標へ指数イージングで寄せる。

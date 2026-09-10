@@ -269,22 +269,43 @@ final class EQWindowControllerTests: XCTestCase {
         }
     }
 
-    // MARK: - ScreenVisibility.isVisible(locked:mainDisplayAsleep:onConsole:)
+    // MARK: - ScreenVisibility.isVisible(locked:mainDisplayAsleep:onConsole:ownsAudioPath:)
 
-    // 3 つの入力の全組み合わせを網羅する。OS の実状態の読み取り自体は対象外。
-    func testScreenIsVisibleOnlyWhenUnlockedAwakeAndOnConsole() {
+    // 4 つの入力の全組み合わせを網羅する。OS の実状態の読み取り自体は対象外。
+    func testScreenIsVisibleWhileUnlockedAndTheSideItIsWatchedFromSaysSo() {
         for locked in [true, false] {
             for asleep in [true, false] {
                 for onConsole in [true, false] {
-                    XCTAssertEqual(
-                        ScreenVisibility.isVisible(
-                            locked: locked, mainDisplayAsleep: asleep, onConsole: onConsole
-                        ),
-                        !locked && !asleep && onConsole,
-                        "locked=\(locked) asleep=\(asleep) onConsole=\(onConsole)"
-                    )
+                    for owns in [true, false] {
+                        XCTAssertEqual(
+                            ScreenVisibility.isVisible(
+                                locked: locked, mainDisplayAsleep: asleep, onConsole: onConsole, ownsAudioPath: owns
+                            ),
+                            !locked && (onConsole ? !asleep : owns),
+                            "locked=\(locked) asleep=\(asleep) onConsole=\(onConsole) owns=\(owns)"
+                        )
+                    }
                 }
             }
         }
+    }
+
+    // console を持つ側は物理ディスプレイに従う。所有していても消灯中は描かない
+    // (描画はアプリ内費用のおよそ 1/3 を占める)。
+    func testTheConsoleSessionFollowsThePhysicalDisplayEvenWhileOwningTheAudioPath() {
+        XCTAssertTrue(ScreenVisibility.isVisible(locked: false, mainDisplayAsleep: false, onConsole: true, ownsAudioPath: true))
+        XCTAssertFalse(ScreenVisibility.isVisible(locked: false, mainDisplayAsleep: true, onConsole: true, ownsAudioPath: true))
+    }
+
+    // console を持たない側は遠隔から見られている。物理ディスプレイは何も表さないので所有権で決める。
+    func testAnOffConsoleSessionDrawsOnlyWhileItOwnsTheAudioPath() {
+        XCTAssertTrue(ScreenVisibility.isVisible(locked: false, mainDisplayAsleep: true, onConsole: false, ownsAudioPath: true))
+        XCTAssertFalse(ScreenVisibility.isVisible(locked: false, mainDisplayAsleep: true, onConsole: false, ownsAudioPath: false))
+        XCTAssertFalse(ScreenVisibility.isVisible(locked: false, mainDisplayAsleep: false, onConsole: false, ownsAudioPath: false))
+    }
+
+    // ロックは遠隔でも解除が要るため、所有していても止める。
+    func testLockingStopsDrawingEvenWhileOwningTheAudioPath() {
+        XCTAssertFalse(ScreenVisibility.isVisible(locked: true, mainDisplayAsleep: false, onConsole: true, ownsAudioPath: true))
     }
 }

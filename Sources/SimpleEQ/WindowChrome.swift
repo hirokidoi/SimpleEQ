@@ -36,6 +36,7 @@ enum WindowContextMenu {
         let title: String
         let kind: Kind
         var commandKey: Character?
+        var isEnabled = true
     }
 
     static func items(
@@ -53,9 +54,11 @@ enum WindowContextMenu {
             Item(id: 2, title: viewModel.viewMode.toggled.switchActionTitle, kind: .action {
                 viewModel.viewMode = viewModel.viewMode.toggled
             }),
-            Item(id: 3, title: MixerVisibilityMenu.toggle(isShown: mixer.shown), kind: .action {
-                mixer.toggleShown()
-            }),
+            Item(
+                id: 3, title: MixerVisibilityMenu.toggle(isShown: mixer.shown),
+                kind: .action { mixer.toggleShown() },
+                isEnabled: viewModel.settingsReachAudio
+            ),
         ]
     }
 
@@ -64,6 +67,8 @@ enum WindowContextMenu {
         viewModel: EQViewModel, mixer: MixerModel, hideWindow: @escaping () -> Void
     ) -> NSMenu {
         let menu = NSMenu()
+        // 自動有効化に任せると、表示のたびに項目が有効へ戻る (この項目の target は検証を持たない)。
+        menu.autoenablesItems = false
         for item in items(viewModel: viewModel, mixer: mixer, hideWindow: hideWindow) {
             let menuItem = NSMenuItem(
                 title: item.title, action: #selector(MenuAction.invoke(_:)), keyEquivalent: ""
@@ -79,6 +84,7 @@ enum WindowContextMenu {
             }
             menuItem.representedObject = action
             menuItem.target = action
+            menuItem.isEnabled = item.isEnabled
             menu.addItem(menuItem)
         }
         return menu
@@ -112,6 +118,7 @@ struct WindowContextMenuItems: View {
                 }
             }
             .modifier(CommandShortcut(key: item.commandKey))
+            .disabled(!item.isEnabled)
         }
     }
 }

@@ -32,6 +32,20 @@ protocol AudioDeviceDirectory: Sendable {
     func isAirPlayDevice(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool
 }
 
+extension AudioDeviceDirectory {
+    /// どの候補をどの順で置くかは呼び出し側が決める。
+    func firstSelectableOutputDevice(
+        preferring candidates: [String?], driverDeviceUID: String, _ token: AudioWorldToken
+    ) -> ResolvedOutputDevice? {
+        for uid in candidates.compactMap({ $0 }) {
+            if let target = selectableOutputDevice(forUID: uid, driverDeviceUID: driverDeviceUID, token) {
+                return target
+            }
+        }
+        return nil
+    }
+}
+
 final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
     func defaultOutputDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
         var id: AudioDeviceID = 0
@@ -147,8 +161,9 @@ final class DriverLifecycleController: @unchecked Sendable {
     }
 
     /// 切り戻せたかに関わらず戻す。鳴っていない出力先を名乗ったまま残すと、無音の原因を探す側を誤誘導する。
+    /// 可視性を所有していないセッションは何もしない (無条件に書き換えると他セッションが使用中のデバイスの名前を横から戻す)。
     func restoreDisplayNameForCleanExit(_ token: AudioWorldToken) {
-        guard let id = resolveDeviceID(token) else { return }
+        guard resolvedDeviceID != nil, let id = resolveDeviceID(token) else { return }
         directory.setName(DriverConfig.deviceName, forDeviceID: id, token)
     }
 
@@ -160,6 +175,11 @@ final class DriverLifecycleController: @unchecked Sendable {
     }
 
     var isVisibilityOwnedBySession: Bool { resolvedDeviceID != nil }
+
+    /// 所有権を明け渡すセッションが可視性の責務だけを降ろす。デバイスには一切触れない。
+    func abandonVisibilityOwnership(_ token: AudioWorldToken) {
+        resolvedDeviceID = nil
+    }
 
     private func resolveDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
         directory.deviceID(forUID: targetDeviceUID, token) ?? directory.resolveHiddenDeviceID(forUID: targetDeviceUID, token)
@@ -308,8 +328,27 @@ final class OutputDeviceController: @unchecked Sendable {
 
     /// 復帰の義務を畳む (切り戻しは行わない)。占有が既に解けている場合に使う。
     private func discardRestoreObligation() {
+        guard switchPending || resolvedRestoreTargetID != nil else { return }
         switchPending = false
         resolvedRestoreTargetID = nil
+        persistRestoreState(savedDefaultOutputUID, switchPending)
+    }
+
+    /// 復帰義務だけを降ろす。既定出力に触れると新しい所有者から奪い返すことになる。
+    /// 自分が切り替えたという記憶も一緒に手放す (残すと照合が義務を立て直す)。
+    func abandonRestoreObligation(_ token: AudioWorldToken) {
+        switchedDefaultOutputThisSession = false
+        discardRestoreObligation()
+    }
+
+    /// 稼働を引き受けたセッションが復帰義務を負う。既定出力には触れない。
+    /// 戻し先が無いまま義務だけ立てると終了時に戻せないため、その時点の出力先を暫定の戻し先に据える。
+    func assumeRestoreObligation(outputDeviceUID: String?, _ token: AudioWorldToken) {
+        guard defaultOutputConfirmedAsDriver(token) else { return }
+        if savedDefaultOutputUID == nil, let outputDeviceUID, outputDeviceUID != targetDeviceUID {
+            savedDefaultOutputUID = outputDeviceUID
+        }
+        switchPending = true
         persistRestoreState(savedDefaultOutputUID, switchPending)
     }
 

@@ -22,6 +22,8 @@ struct AudioActivationOutcome: Equatable {
 enum ResumeTrigger {
     case userSelection
     case automatic
+    /// セッション横断の所有権を取得したことによる再開。
+    case ownershipAcquired
 }
 
 enum ActivationAttempt: Equatable {
@@ -95,6 +97,9 @@ final class AudioActivationCoordinator: Sendable {
             if switchedOutput { outputController.restore(token) }
             return outcome(activeOutputDevice: nil, outputRouteNotEstablished: true)
         }
+        // 自分が切り替えたのでなくても、稼働を引き受ける以上は戻す責任も引き受ける。
+        // 引き受けないと、占有された状態がそのまま次の起動へ引き継がれて誰も戻さなくなる。
+        outputController.assumeRestoreObligation(outputDeviceUID: outputDevice.uid, token)
 
         return outcome(activeOutputDevice: outputDevice)
     }
@@ -123,6 +128,7 @@ final class AudioActivationCoordinator: Sendable {
         switch trigger {
         case .userSelection: allowed = SuspensionPolicy.allowsSelectionResume(cause)
         case .automatic: allowed = SuspensionPolicy.allowsAutomaticResume(cause)
+        case .ownershipAcquired: allowed = SuspensionPolicy.allowsResumeOnOwnershipAcquired(cause)
         }
         guard allowed else {
             return AudioActivationOutcome(

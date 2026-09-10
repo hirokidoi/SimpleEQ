@@ -26,7 +26,7 @@ struct EQMagnitudeResponse: Equatable, Sendable {
 
 /// プリアンプ自動導出の仕様。CoreAudio に触れない純粋関数のみを持つ。
 enum AutoPreampSpec {
-    static let targetDbRange: ClosedRange<Double> = 0...6
+    static let targetDbRange: ClosedRange<Double> = -6...6
     static let targetDbStep: Double = 1
     static let targetDbDefault: Double = 0
     /// 実測値。

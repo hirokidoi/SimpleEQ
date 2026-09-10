@@ -55,6 +55,21 @@ final class DriverPayloadLayoutTests: XCTestCase {
         XCTAssertTrue(uninstall.contains(headerReference))
     }
 
+    /// 配置先は 2 つのスクリプトが別々に持つ。片方だけ動かすと、置いた先と消す先が食い違う。
+    func testBothScriptsNameTheSameInstallLocation() throws {
+        let installed = try installedDriverPath(in: RepositoryFiles.driverInstallScript)
+        XCTAssertEqual(installed, try installedDriverPath(in: RepositoryFiles.driverUninstallScript))
+        XCTAssertEqual(URL(fileURLWithPath: installed).lastPathComponent, try driverBundleName())
+    }
+
+    private func installedDriverPath(in url: URL) throws -> String {
+        let assignments = RepositoryText.trailingValues(
+            after: "INSTALLED_DRIVER=", in: try String(contentsOf: url, encoding: .utf8)
+        )
+        XCTAssertEqual(assignments.count, 1, "\(url.lastPathComponent) の配置先の宣言が 1 つではない")
+        return try XCTUnwrap(assignments.first)
+    }
+
     /// 走査は当該ブロック内で閉じる。またぐと、指定が消えた回に隣のブロックの値を拾って通ってしまう。
     private func copyTarget(following anchor: String, in lines: [String]) throws -> (destination: String, subpath: String) {
         let start = try XCTUnwrap(

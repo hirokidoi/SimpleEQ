@@ -213,6 +213,212 @@ final class EQViewModelTests: XCTestCase {
         )
     }
 
+    // 他セッションが所有している間は、稼働中であっても選び直せない。
+    func testCanSelectOutputDeviceIsFalseWhenNotOwner() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        XCTAssertTrue(vm.canSelectOutputDevice, "前提: 所有している間は稼働中なら真")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false))
+        XCTAssertFalse(vm.canSelectOutputDevice)
+    }
+
+    // 他セッションが所有している間は、その音声経路の足元でドライバを差し替えさせない。
+    func testCanOperateDriverIsFalseWhileAnotherSessionOwnsThePath() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        XCTAssertTrue(vm.canOperateDriver, "前提: 所有している間は操作できる")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, ownerProcessID: 501, ownerUID: 20))
+        XCTAssertFalse(vm.canOperateDriver)
+    }
+
+    // ドライバ操作の門は「設定が音へ届くか」と判定を共有しない。共有すると、まさに導入が必要な状態で操作できなくなる。
+    func testCanOperateDriverSurvivesTheStateWhereSettingsCannotReachAudio() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .notFound, processingState: .active
+        )
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, isObserved: false))
+
+        XCTAssertFalse(vm.settingsReachAudio, "前提: この状態で設定は音へ届かない")
+        XCTAssertTrue(vm.canOperateDriver, "所有者が不在なので初回インストールは通る")
+    }
+
+    // 起動時にウィンドウを開かないのは他セッションが使用中のときだけ。読めない状態はドライバ未導入と
+    // 同じ見え方で、導入を促す導線はウィンドウの中にしかない。
+    func testAnotherSessionHoldsAudioPathOnlyWhenTheStateWasRead() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, ownerProcessID: 501, ownerUID: 20))
+        XCTAssertTrue(vm.anotherSessionHoldsAudioPath)
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, isObserved: false))
+        XCTAssertFalse(vm.anotherSessionHoldsAudioPath, "読めていないなら握られている根拠にならない")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false))
+        XCTAssertFalse(vm.anotherSessionHoldsAudioPath, "所有者が不在なら握られていない")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: true, ownerProcessID: 501))
+        XCTAssertFalse(vm.anotherSessionHoldsAudioPath, "自分が所有者なら他セッションではない")
+    }
+
+    // 起動時の取得が決着するまでは知らせない。周期パスが先に観測を届けるため、決着前の一瞬を掴んでしまう。
+    func testOwnershipHandoverIsNotOfferedBeforeStartupActivationSettles() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, ownerProcessID: 501, ownerUID: 20))
+        XCTAssertFalse(vm.offersOwnershipHandover, "決着前は知らせない")
+
+        vm.noteStartupActivationSettled()
+        XCTAssertTrue(vm.offersOwnershipHandover)
+    }
+
+    // 所有権調停役からの 1 回の観測が、所有者・要求中の全フィールドへ一括で反映される。
+    func testUpdateOwnershipReflectsAllFieldsFromOneObservation() {
+        let vm = makeVM(SettingsStore(defaults: defaults))
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(
+            isSelfOwner: false, ownerProcessID: 501, ownerUID: 20, isRequestingOwnership: true
+        ))
+
+        XCTAssertFalse(vm.isOwner)
+        XCTAssertEqual(vm.ownershipOwnerProcessID, 501)
+        XCTAssertEqual(vm.ownershipOwnerUID, 20)
+        XCTAssertTrue(vm.isRequestingOwnership)
+    }
+
+    // 非 console セッションは描画も Diagnostics も止まるため、そこから見えている側の音を奪わせない。
+    // 「こちらで使う」を出すか出さないかがその門の最終読み手で、console の状態がここまで届くことを見る。
+    func testTakingOwnershipHereIsNotOfferedToASessionThatDoesNotHoldTheConsole() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        vm.noteStartupActivationSettled()
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, ownerProcessID: 501, ownerUID: 20))
+        XCTAssertTrue(vm.offersOwnershipHandover, "前提: 他セッションが握っていることは知らせる")
+        XCTAssertTrue(vm.canTakeOwnershipHere, "前提: console を持つ間は差し出す")
+
+        vm.updateOnConsole(false)
+
+        XCTAssertFalse(vm.canTakeOwnershipHere, "console を持たない側へは差し出さない")
+        XCTAssertTrue(vm.offersOwnershipHandover, "使用中であることの表示自体は残す")
+    }
+
+    // 空席を掴むのは妨げない。console を条件にすると、console 側でアプリが起動していない構成が成り立たなくなる。
+    func testClaimingAnUnownedPathIsOfferedEvenWithoutTheConsole() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        vm.noteStartupActivationSettled()
+        vm.updateOnConsole(false)
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false))
+
+        XCTAssertTrue(vm.canTakeOwnershipHere, "空席なら console を持たなくても取れる")
+    }
+
+    // 掴みに行っている周は、空席であることを表に出さない。出すと、取り直しが着地するまでの
+    // 1 周 (最大でリース更新の間隔) だけチップが出て消える。
+    func testTheEmptySeatIsNotAnnouncedWhileThisInstanceIsClaimingIt() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        vm.noteStartupActivationSettled()
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, isClaimingSeat: true))
+        XCTAssertFalse(vm.offersOwnershipHandover, "掴みに行っている間は知らせない")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, isClaimingSeat: false))
+        XCTAssertTrue(vm.offersOwnershipHandover, "掴みに行かない周になれば知らせる")
+    }
+
+    // 他セッションが握っている間は掴みに行かないため、使用中の表示がこれで消えることはない。
+    func testAnotherSessionHoldingThePathIsStillAnnouncedWhileNotClaiming() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        vm.noteStartupActivationSettled()
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, ownerProcessID: 501, ownerUID: 20))
+
+        XCTAssertTrue(vm.offersOwnershipHandover)
+        XCTAssertTrue(vm.anotherSessionHoldsAudioPath)
+    }
+
+    // 読み手が居ない間は「書き手が停止」と報告され続ける。組み立てで .active へ入った周に
+    // それを残すと、実観測が届くまでの一瞬だけ赤い警告が出る。
+    func testGoingActiveDropsTheVerdictsHeldWhileNothingCouldBeObserved() {
+        let (vm, _) = makeVMWithEngine(SettingsStore(defaults: defaults))
+        vm.confirmDriverProbe(.versionsUnreadable(.ok))
+        vm.noteStartupActivationSettled()
+        vm.updateProcessingState(.suspended(.ownershipUnavailable), activeDevice: nil)
+        vm.updateRingStalled(true)
+        vm.updateDefaultOutputReachesDriver(false)
+        XCTAssertNil(vm.topBarWarning, "前提: 非所有の間は警告を出さない")
+
+        vm.updateProcessingState(.active, activeDevice: nil)
+
+        XCTAssertFalse(vm.ringStalled, "観測が止まっていた間の判定は捨てる")
+        XCTAssertTrue(vm.defaultOutputReachesDriver)
+        XCTAssertNil(vm.topBarWarning, "所有権を取得した瞬間に警告を出さない")
+    }
+
+    // 捨てるのは組み立ての回だけ。稼働中に届いた実観測はそのまま警告になる。
+    func testAnObservationThatArrivesWhileActiveStillRaisesTheWarning() {
+        let (vm, _) = makeVMWithEngine(SettingsStore(defaults: defaults))
+        vm.confirmDriverProbe(.versionsUnreadable(.ok))
+        vm.noteStartupActivationSettled()
+        vm.updateProcessingState(.active, activeDevice: nil)
+        XCTAssertNil(vm.topBarWarning, "前提: 警告なし")
+
+        vm.updateRingStalled(true)
+
+        XCTAssertEqual(vm.topBarWarning, TopBarWarningPolicy.content(for: .audioUnavailable))
+    }
+
+    // 既定は console を持つ側。読めない値を console 側へ倒す判定がここまで通ることを見る。
+    func testOnConsoleStartsOutTrueAndFollowsWhatIsPushedIn() {
+        let vm = makeVM(SettingsStore(defaults: defaults))
+        XCTAssertTrue(vm.isOnConsole, "既定は console を持つ側")
+
+        vm.updateOnConsole(false)
+        XCTAssertFalse(vm.isOnConsole)
+
+        vm.updateOnConsole(true)
+        XCTAssertTrue(vm.isOnConsole)
+    }
+
+    // 所有権調停役が未注入 (テストからの構築の既定) の間、「こちらで使う」・取り消しは何も起こさない。
+    func testOwnershipRequestEntryPointsAreNoOpsWithoutACoordinator() {
+        let vm = makeVM(SettingsStore(defaults: defaults))
+
+        vm.useOwnershipHere()
+        vm.cancelOwnershipRequest()
+
+        XCTAssertFalse(vm.isRequestingOwnership, "調停役が無いため要求中にはならない")
+    }
+
     // engine 側の値を事前に既定へ戻し、遷移で ViewModel 側の値へ戻ることを観測する。
     func testUpdateProcessingStateReflowsSettingsOnActiveTransition() {
         let store = SettingsStore(defaults: defaults)
@@ -893,7 +1099,7 @@ final class EQViewModelTests: XCTestCase {
 
         let target = vm.preampAutoTargetDb
         vm.setPreampAutoTargetDb(AutoPreampSpec.targetDbRange.upperBound)
-        XCTAssertEqual(vm.preampAutoTargetDb, target, "許容ピークの変更も無視すること")
+        XCTAssertEqual(vm.preampAutoTargetDb, target, "目標レベルの変更も無視すること")
     }
 
     // MARK: - プリアンプ自動導出
@@ -2042,6 +2248,46 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertFalse(vm.settingsReachAudio, "確認中も落ちる")
     }
 
+    // 他セッションが所有している間は、他の判定がすべて正常でも settingsReachAudio は偽になる。
+    func testSettingsReachAudioFallsWhenNotOwner() {
+        let (vm, _) = makeVMWithEngine(SettingsStore(defaults: defaults))
+        vm.confirmDriverProbe(.versionsUnreadable(.ok))
+        vm.noteStartupActivationSettled()
+        vm.updateProcessingState(.active, activeDevice: nil)
+        XCTAssertTrue(vm.settingsReachAudio, "前提: 所有している間は真")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false))
+        XCTAssertFalse(vm.settingsReachAudio, "所有していない間は偽")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: true))
+        XCTAssertTrue(vm.settingsReachAudio, "所有を取り戻せば真に戻る")
+    }
+
+    // 受け渡しの相手が居る状態でだけ差し出す。所有していないことは、それだけでは相手が居る根拠にならない。
+    func testOffersOwnershipHandoverOnlyWhileTheStateWasReadAndTheDriverIsUsable() {
+        let (vm, _) = makeVMWithEngine(SettingsStore(defaults: defaults))
+        vm.confirmDriverProbe(.versionsUnreadable(.ok))
+        vm.noteStartupActivationSettled()
+        vm.updateProcessingState(.active, activeDevice: nil)
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false))
+        XCTAssertTrue(vm.offersOwnershipHandover, "読めていて所有者が他に居るなら差し出す")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: true))
+        XCTAssertFalse(vm.offersOwnershipHandover, "自分が所有しているなら差し出さない")
+
+        // 読めないときの isSelfOwner: false は安全側へ倒した値であり、所有者の不在を意味しない。
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, isObserved: false))
+        XCTAssertFalse(vm.offersOwnershipHandover, "読めていないなら差し出さない")
+
+        vm.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false))
+        vm.confirmDriverProbe(.versionsUnreadable(.versionMismatch))
+        XCTAssertFalse(vm.offersOwnershipHandover, "ドライバが使えないなら差し出さない")
+
+        vm.confirmDriverProbe(.versionsUnreadable(.checking))
+        XCTAssertFalse(vm.offersOwnershipHandover, "確認中も差し出さない")
+    }
+
     // 音はアプリを通っており観測は本物であるため、灰色にするかどうかとは別の判定を使う。
     func testVisualizerShowsObservationWhileBypassed() {
         let store = SettingsStore(defaults: defaults)
@@ -2637,6 +2883,22 @@ final class EQViewModelTests: XCTestCase {
             audioWorldUnresponsive: false, startupActivationSettled: true
         )
         XCTAssertEqual(identifier, .outputRouteSelectionRequired)
+    }
+
+    // 他セッションが使用中であることは正常な状態であり、警告チップには一切出さない。
+    func testTopBarWarningIdentifierIsNilForOwnershipUnavailableRegardlessOfOtherInputs() {
+        for startupActivationSettled in [false, true] {
+            for ringStalled in [false, true] {
+                XCTAssertNil(
+                    topBarWarningIdentifier(
+                        driverAvailability: .ok, processingState: .suspended(.ownershipUnavailable),
+                        ringStalled: ringStalled, defaultOutputReachesDriver: !ringStalled,
+                        audioWorldUnresponsive: false, startupActivationSettled: startupActivationSettled
+                    ),
+                    "startupActivationSettled=\(startupActivationSettled) ringStalled=\(ringStalled)"
+                )
+            }
+        }
     }
 
     // MARK: - TopBarWarningPolicy.content (表示内容の対応表)

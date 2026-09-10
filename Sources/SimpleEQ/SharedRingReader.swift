@@ -29,6 +29,46 @@ enum DriverConfig {
     static var sharedMemoryPath: String {
         String(cString: simpleeq_ring_directory_path()) + "/" + String(cString: simpleeq_ring_file_name())
     }
+
+    static let ownershipSelector =
+        AudioObjectPropertySelector(simpleeq_ownership_selector())
+
+    /// 所有権リースの長さ (秒)。更新間隔はこの値から導く。
+    static let ownershipLeaseSeconds = simpleeq_ownership_lease_seconds()
+    /// 要求リースの長さ (秒)。更新間隔はこの値から導く。
+    static let ownershipRequestLeaseSeconds = simpleeq_ownership_request_lease_seconds()
+}
+
+/// 所有権プロパティの Set が受ける操作。
+enum OwnershipOperation {
+    case claim, request, cancel, release, renew
+
+    var rawValue: String {
+        switch self {
+        case .claim: return String(cString: simpleeq_ownership_operation_claim())
+        case .request: return String(cString: simpleeq_ownership_operation_request())
+        case .cancel: return String(cString: simpleeq_ownership_operation_cancel())
+        case .release: return String(cString: simpleeq_ownership_operation_release())
+        case .renew: return String(cString: simpleeq_ownership_operation_renew())
+        }
+    }
+}
+
+enum OwnershipPropertyKey {
+    static let operation = String(cString: simpleeq_ownership_operation_key())
+    static let uid = String(cString: simpleeq_ownership_uid_key())
+}
+
+/// ヘッダから読んだ所有権。所有者/要求者ともに不在は pid 0。リース残りは読み取り時点からの換算値。
+struct OwnershipSnapshot: Equatable {
+    var ownerProcessID: UInt32 = 0
+    var ownerUID: UInt32 = 0
+    /// nil はリースを持っていない状態 (所有者なし)。
+    var ownershipLeaseRemainingSeconds: Double?
+    var requestProcessID: UInt32 = 0
+    var requestUID: UInt32 = 0
+    /// nil はリースを持っていない状態 (要求なし)。
+    var requestLeaseRemainingSeconds: Double?
 }
 
 enum DriverAvailability: Equatable {
@@ -225,6 +265,48 @@ final class SharedRingReader {
     }
 
     var driverReportedLayoutVersion: UInt32 { simpleeq_ring_layout_version(mappedBase) }
+
+    /// このプロセス自身の識別値。所有権の同定はこの値との比較でのみ行う。
+    static let selfProcessID = UInt32(bitPattern: getpid())
+
+    /// realtime レンダー経路が読む。ロックも再試行も伴わない単発のアトミック読み出し。
+    var isSelfOwner: Bool {
+        simpleeq_ownership_owner_process_id_relaxed(mappedBase) == Self.selfProcessID
+    }
+
+    private static let ownershipReadMaxAttempts = 8
+
+    /// 制御経路が読む。世代の対で内容の整合を確かめ、崩れていれば再試行してよい値として扱う。
+    /// 整合が最後まで取れなければ nil (呼び出し側は「読めなかった」側へ倒すこと)。
+    func readOwnershipSnapshot() -> OwnershipSnapshot? {
+        let now = mach_absolute_time()
+        for _ in 0..<Self.ownershipReadMaxAttempts {
+            let generation1 = simpleeq_ownership_load_generation_acquire(mappedBase)
+            let requestGeneration1 = simpleeq_ownership_load_request_generation_acquire(mappedBase)
+            // 奇数は書き換え中。読んでも中身が揃っていないので、その回は捨てる。
+            if generation1 % 2 != 0 || requestGeneration1 % 2 != 0 { continue }
+            let ownerProcessID = simpleeq_ownership_owner_process_id_relaxed(mappedBase)
+            let ownerUID = simpleeq_ownership_owner_uid_relaxed(mappedBase)
+            let leaseDeadline = simpleeq_ownership_lease_deadline_host_time_relaxed(mappedBase)
+            let requestProcessID = simpleeq_ownership_request_process_id_relaxed(mappedBase)
+            let requestUID = simpleeq_ownership_request_uid_relaxed(mappedBase)
+            let requestLeaseDeadline = simpleeq_ownership_request_lease_deadline_host_time_relaxed(mappedBase)
+            simpleeq_ring_acquire_fence()
+            let generation2 = simpleeq_ownership_load_generation_acquire(mappedBase)
+            let requestGeneration2 = simpleeq_ownership_load_request_generation_acquire(mappedBase)
+            if generation1 == generation2, requestGeneration1 == requestGeneration2 {
+                return OwnershipSnapshot(
+                    ownerProcessID: ownerProcessID,
+                    ownerUID: ownerUID,
+                    ownershipLeaseRemainingSeconds: leaseDeadline == 0 ? nil : Self.seconds(from: now, to: leaseDeadline),
+                    requestProcessID: requestProcessID,
+                    requestUID: requestUID,
+                    requestLeaseRemainingSeconds: requestLeaseDeadline == 0 ? nil : Self.seconds(from: now, to: requestLeaseDeadline)
+                )
+            }
+        }
+        return nil
+    }
 
     deinit {
         munmap(UnsafeMutableRawPointer(mutating: mappedBase), mappedSize)

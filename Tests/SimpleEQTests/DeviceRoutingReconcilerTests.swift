@@ -382,6 +382,17 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
         )
     }
 
+    // 名前を書くと再発行が既定出力をドライバへ握り直すため、所有していない側は名前に触れない。
+    func testDriverDeviceNameIsLeftAloneWhileAnotherSessionOwnsTheAudioPath() {
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, processingState: .suspended(.ownershipUnavailable))
+        f.directory.namesByDeviceID[driverDeviceID] = "所有している側が付けた名前"
+
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertTrue(f.directory.setNameCalls.isEmpty, "所有していない側は表示名を書かない")
+        XCTAssertTrue(f.directory.setDefaultOutputCalls.isEmpty, "したがって既定出力も握り直さない")
+    }
+
     func testDriverDeviceNameIsNotRewrittenWhenItAlreadyMatches() {
         let f = makeFixture(initialDriverDeviceID: driverDeviceID)
         f.reconciler.reconcile(trigger: .configurationChange, testToken)

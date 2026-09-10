@@ -7,7 +7,8 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 BUNDLED_DRIVER="$SCRIPT_DIR/SimpleEQAudio.driver"
 BUILT_DRIVER="$SCRIPT_DIR/SimpleEQAudio/build/Build/Products/Release/SimpleEQAudio.driver"
-# 共有メモリの置き場所は Shared/SimpleEQRingLayout.h の kSimpleEQRingDirectoryPath を読み取って導出する (値をここへ複製しない)。
+INSTALLED_DRIVER="/Library/Audio/Plug-Ins/HAL/SimpleEQAudio.driver"
+# 共有メモリの置き場所は Shared/SimpleEQRingLayout.h を読み取って導出する (値をここへ複製しない)。
 LAYOUT_HEADER="$SCRIPT_DIR/Shared/SimpleEQRingLayout.h"
 SHM_DIR=$(sed -n 's/^#define[[:space:]]*kSimpleEQRingDirectoryPath[[:space:]]*"\(.*\)".*$/\1/p' "$LAYOUT_HEADER")
 
@@ -25,15 +26,61 @@ else
   exit 1
 fi
 
-# 共有メモリファイルの置き場所を事前作成する。
-# ドライバ (coreaudiod 配下、他ユーザ権限で動作しうる) とアプリ (ログインユーザ権限) の双方が同じファイルを開閉できる必要があり、
-# 個人ローカル利用の前提下ではパーミッション制御をシンプルにするため world-writable にする
-# (他ユーザ・他プロセスがリングへ任意の音声データを注入/読み取りできるリスクは許容する)。
-mkdir -p "$SHM_DIR"
-chmod 777 "$SHM_DIR"
+# 導入済みより古い版の配置を拒否する。降格を止めれば、旧ビルドのアプリが自分の同梱ドライバを再導入して version が往復する事故も止まる。
+if [ -d "$INSTALLED_DRIVER" ]; then
+  INSTALLED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INSTALLED_DRIVER/Contents/Info.plist" 2>/dev/null || true)
+  NEW_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$DRIVER_BUNDLE/Contents/Info.plist" 2>/dev/null || true)
+  if [ -n "$INSTALLED_VERSION" ] && [ -n "$NEW_VERSION" ]; then
+    IS_DOWNGRADE=$(awk -v a="$NEW_VERSION" -v b="$INSTALLED_VERSION" 'BEGIN {
+      na = split(a, A, "."); nb = split(b, B, ".");
+      n = (na > nb) ? na : nb;
+      for(i = 1; i <= n; i++) {
+        ai = (i <= na) ? A[i] + 0 : 0;
+        bi = (i <= nb) ? B[i] + 0 : 0;
+        if(ai < bi) { print "1"; exit }
+        if(ai > bi) { print "0"; exit }
+      }
+      print "0";
+    }')
+    if [ "$IS_DOWNGRADE" = "1" ]; then
+      echo "error: 導入済みのドライバ (バージョン $INSTALLED_VERSION) より古いバージョン ($NEW_VERSION) は配置できません。" >&2
+      exit 1
+    fi
+  fi
+fi
 
-rm -rf "/Library/Audio/Plug-Ins/HAL/SimpleEQAudio.driver"
-cp -R "$DRIVER_BUNDLE" "/Library/Audio/Plug-Ins/HAL/"
+# 共有メモリファイルの置き場所を事前作成する。
+# 書き込みが要るのは作成する coreaudiod だけで、アプリは読み取り専用でしか開かない。
+# ディレクトリの所有者を coreaudiod の account に揃えることで、他のローカルユーザによる削除・差し替えを防ぐ
+# (読み取りは誰でもできる。ローカルユーザ間の保護であり、悪意ある相手からの保護ではない)。
+mkdir -p "$SHM_DIR"
+
+SHM_OWNER="_coreaudiod"
+if ! id -u "$SHM_OWNER" >/dev/null 2>&1; then
+  echo "error: アカウント $SHM_OWNER が見つかりません。$SHM_DIR の所有者を設定できません。" >&2
+  exit 1
+fi
+
+if ! chown "$SHM_OWNER" "$SHM_DIR"; then
+  echo "error: $SHM_DIR の所有者を $SHM_OWNER に設定できませんでした。" >&2
+  exit 1
+fi
+
+if ! chmod 0755 "$SHM_DIR"; then
+  echo "error: $SHM_DIR のパーミッションを設定できませんでした。" >&2
+  exit 1
+fi
+
+# 残っているリングファイルは削除する。所有者が $SHM_OWNER と異なると、ドライバの再作成 (open(O_CREAT|O_RDWR)) が失敗し無音の原因になる。
+SHM_FILE_NAME=$(sed -n 's/^#define[[:space:]]*kSimpleEQRingFileName[[:space:]]*"\(.*\)".*$/\1/p' "$LAYOUT_HEADER")
+if [ -z "$SHM_FILE_NAME" ]; then
+  echo "error: $LAYOUT_HEADER から kSimpleEQRingFileName を読み取れませんでした。" >&2
+  exit 1
+fi
+rm -f "$SHM_DIR/$SHM_FILE_NAME"
+
+rm -rf "$INSTALLED_DRIVER"
+cp -R "$DRIVER_BUNDLE" "$(dirname "$INSTALLED_DRIVER")/"
 
 killall coreaudiod || true
 

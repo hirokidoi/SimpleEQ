@@ -113,6 +113,30 @@ final class MockAudioDeviceDirectory: AudioDeviceDirectory, @unchecked Sendable 
     }
 }
 
+/// 所有権調停役の押し出しは専用キューから届くため、記録を跨スレッドで安全にする。
+final class OwnershipUpdateRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var updates: [OwnershipCoordinatorUpdate] = []
+
+    func record(_ update: OwnershipCoordinatorUpdate) {
+        lock.lock()
+        updates.append(update)
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return updates.count
+    }
+
+    var last: OwnershipCoordinatorUpdate? {
+        lock.lock()
+        defer { lock.unlock() }
+        return updates.last
+    }
+}
+
 @MainActor
 final class OutputDeviceControllerTests: XCTestCase {
     private var suiteName: String!
@@ -423,6 +447,25 @@ final class OutputDeviceControllerTests: XCTestCase {
             controller.currentRestoreState(testToken).pending,
             "義務は消えている。残すと次回起動が過去の保存値を復帰対象として引き継ぐ"
         )
+    }
+
+    // 所有権を明け渡すセッションが復帰義務だけを降ろす。既定出力には一切触れない。
+    func testAbandonRestoreObligationDropsObligationWithoutTouchingDefaultOutput() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = loopbackDeviceID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.savedDefaultOutputUID = multiOutputUID
+        settings.switchPending = true
+
+        let controller = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        mock.resetCallRecords()
+
+        controller.abandonRestoreObligation(testToken)
+
+        XCTAssertFalse(controller.currentRestoreState(testToken).pending, "義務が畳まれる")
+        XCTAssertTrue(mock.setDefaultOutputCalls.isEmpty, "既定出力には一切触れない")
     }
 
     // 戻り値は「自ドライバのデバイスから離れているか」。デフォルト出力が自ドライバのままなら false を返す。
@@ -987,6 +1030,18 @@ final class OutputDeviceControllerTests: XCTestCase {
 
     // MARK: - 終了シーケンスの順序 (停止 → 復帰 → 復帰できたときだけ非表示化)
 
+    // 可視性を所有していない (すでに明け渡し済みの) セッションは、終了時に表示名を書き換えない。
+    // 無条件に書き換えると、他セッションが使用中のデバイスの名前を横から戻してしまう。
+    func testRestoreDisplayNameForCleanExitDoesNothingWhenNotVisibilityOwner() {
+        let mock = MockAudioDeviceDirectory()
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+
+        lifecycle.restoreDisplayNameForCleanExit(testToken)
+
+        XCTAssertTrue(mock.setNameCalls.isEmpty)
+    }
+
     // 復帰に失敗した場合、非表示化を行ってはならない。
     // 行うと、デフォルト出力が自ドライバのデバイスを指したまま一覧から消え、選び直す手段が無くなる。
     func testCleanExitDoesNotHideDriverWhenRestoreFails() {
@@ -1013,6 +1068,328 @@ final class OutputDeviceControllerTests: XCTestCase {
         XCTAssertTrue(outputController.currentRestoreState(testToken).pending, "復帰できていないため義務も残る")
     }
 
+    // 解放は変更通知を発行し、それが自分の購読を発火させる。その周から見た状態は取り直しの条件を満たすため、
+    // 塞がないと終了しようとしている側が所有権を掴み直し、死んだプロセスがリースを抱えたまま残る。
+    func testATerminatingCoordinatorStopsActingOnFurtherPasses() {
+        let mock = MockAudioDeviceDirectory()
+        mock.hiddenDeviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+        let coordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+            driverDeviceUID: testDriverDeviceUID,
+            // 実機の共有メモリを読ませない。読めない側へ倒れることで、パスが走ったかどうかだけを観測できる。
+            sharedMemoryPath: NSTemporaryDirectory() + "SimpleEQTests-absent-ring",
+            isOnConsole: { true }
+        )
+        let recorder = OwnershipUpdateRecorder()
+        coordinator.didUpdate = { recorder.record($0) }
+
+        coordinator.runPass()
+        coordinator.releaseForCleanExit(testToken) // 専用キューの待ち合わせを兼ねる。
+        XCTAssertEqual(recorder.count, 1, "前提: 通常のパスは観測結果を押し出す")
+
+        coordinator.prepareForTermination(testToken)
+        coordinator.runPass()
+        coordinator.releaseForCleanExit(testToken)
+        XCTAssertEqual(recorder.count, 1, "終了シーケンスに入った後のパスは何も押し出さない")
+    }
+
+    // 前回の異常終了で永続化された義務を抱えたまま、他セッションが所有している状態で起動しうる。
+    // 起動経路で降ろさないと、最初の周期パスより前に終了した回に現所有者から既定出力を奪う。
+    func testALaunchThatFindsAnotherOwnerDropsTheResponsibilitiesRightAway() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = loopbackDeviceID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+        mock.hiddenDeviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.savedDefaultOutputUID = multiOutputUID
+        settings.switchPending = true // 前回の終了が戻せなかった状態。
+
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+        let fixture = makeOwnershipHeaderFixture(ownerProcessID: foreignOwnerProcessID, leaseRemainingSeconds: 30)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let coordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+            driverDeviceUID: testDriverDeviceUID, sharedMemoryPath: fixture.path, isOnConsole: { true }
+        )
+        XCTAssertTrue(outputController.currentRestoreState(testToken).pending, "前提: 義務を抱えている")
+
+        let settled = XCTestExpectation(description: "起動時の所有権の決着")
+        coordinator.resolveAtLaunch { isSelfOwner in
+            XCTAssertFalse(isSelfOwner, "前提: 他セッションが所有している")
+            settled.fulfill()
+        }
+        wait(for: [settled], timeout: 2.0)
+        _ = audioWorld.submitUncoalescedAndWait(timeout: 2.0) { _ in true }
+
+        XCTAssertFalse(outputController.currentRestoreState(testToken).pending, "義務を降ろす")
+        XCTAssertFalse(lifecycle.isVisibilityOwnedBySession, "可視性も持たない")
+    }
+
+    // 書けなかった要求を立てたまま残すと、届かない要求を更新し続け、表示も「取得を要求中」のまま残る。
+    func testARequestThatCouldNotBeWrittenDoesNotStayStanding() {
+        let mock = MockAudioDeviceDirectory() // ドライバのデバイスを解決させない = 書き込みが不成立。
+        let settings = SettingsStore(defaults: defaults)
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+
+        // 他プロセスが生きたリースで座っている = 「こちらで使う」は request を打つ。
+        let fixture = makeOwnershipHeaderFixture(ownerProcessID: foreignOwnerProcessID, leaseRemainingSeconds: 30)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let coordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+            driverDeviceUID: testDriverDeviceUID, sharedMemoryPath: fixture.path, isOnConsole: { true }
+        )
+        let recorder = OwnershipUpdateRecorder()
+
+        coordinator.requestOwnership()
+        // 要求の投入 → 書き込みの試行 → 畳み の 3 段が済むまで待つ (段ごとにキューを渡り歩く)。
+        coordinator.releaseForCleanExit(testToken)
+        _ = audioWorld.submitUncoalescedAndWait(timeout: 2.0) { _ in true }
+
+        let pushed = XCTestExpectation(description: "要求後のパスの押し出し")
+        coordinator.didUpdate = { recorder.record($0); pushed.fulfill() }
+        coordinator.runPass()
+        wait(for: [pushed], timeout: 2.0)
+
+        XCTAssertEqual(recorder.last?.isRequestingOwnership, false, "書けていない要求は畳む")
+    }
+
+    // 読めない窓 (ドライバの再準備・coreaudiod 再起動) こそが取り直しの対象なので、そこで忘れると復帰できない。
+    // ミキサーへ配る所有権も同じ記憶を読むため、失った側へ倒すと音が鳴ったままゲイン表だけが空になる。
+    func testTheMemoryOfOwningSurvivesAPassThatCannotReadTheState() {
+        let mock = MockAudioDeviceDirectory()
+        mock.hiddenDeviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+
+        let fixture = makeOwnershipHeaderFixture(
+            ownerProcessID: SharedRingReader.selfProcessID, leaseRemainingSeconds: 30
+        )
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let coordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+            driverDeviceUID: testDriverDeviceUID, sharedMemoryPath: fixture.path, isOnConsole: { true }
+        )
+        let recorder = OwnershipUpdateRecorder()
+
+        let owned = XCTestExpectation(description: "所有している回の押し出し")
+        coordinator.didUpdate = { recorder.record($0); owned.fulfill() }
+        coordinator.runPass()
+        wait(for: [owned], timeout: 2.0)
+        XCTAssertEqual(recorder.last?.isSelfOwner, true, "前提: 自分が所有者として読めている")
+
+        try? FileManager.default.removeItem(at: fixture)
+        let unreadable = XCTestExpectation(description: "読めない回の押し出し")
+        coordinator.didUpdate = { recorder.record($0); unreadable.fulfill() }
+        coordinator.runPass()
+        wait(for: [unreadable], timeout: 2.0)
+
+        XCTAssertEqual(recorder.last?.isObserved, false, "前提: 読めていない")
+        XCTAssertEqual(recorder.last?.isSelfOwner, false, "読めないときは安全側へ倒す")
+        XCTAssertEqual(recorder.last?.lastKnownSelfOwner, true, "所有していた記憶は保つ")
+    }
+
+    // 他セッションが所有していると読んだ周で、調停役が実際に責務を降ろすところまで見る。
+    // 降ろす関数が正しく動くことと、調停役がそれを呼ぶことは別で、後者が抜けていると
+    // 前回の異常終了で残った義務を抱えたまま起動した非所有インスタンスが、終了時に現所有者から既定出力を奪う。
+    func testAPassThatFindsAnotherOwnerDropsTheResponsibilities() throws {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = multiOutputID
+        mock.uidsByDeviceID[multiOutputID] = multiOutputUID
+        mock.deviceIDsByUID[multiOutputUID] = multiOutputID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+        mock.hiddenDeviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+
+        // 自分が占有して義務と可視性を抱えた状態を作る。
+        XCTAssertTrue(outputController.occupyDefaultOutputForDriver(testToken))
+        mock.currentDefaultOutputID = loopbackDeviceID
+        lifecycle.reapplyVisibility(deviceID: loopbackDeviceID, testToken)
+        XCTAssertTrue(outputController.currentRestoreState(testToken).pending, "前提: 義務を抱えている")
+        XCTAssertTrue(lifecycle.isVisibilityOwnedBySession, "前提: 可視性も抱えている")
+
+        // ヘッダには別プロセスが生きたリースで座っている。
+        let fixture = makeOwnershipHeaderFixture(ownerProcessID: foreignOwnerProcessID, leaseRemainingSeconds: 30)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let coordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+            driverDeviceUID: testDriverDeviceUID, sharedMemoryPath: fixture.path, isOnConsole: { true }
+        )
+
+        coordinator.runPass()
+        coordinator.releaseForCleanExit(testToken) // 専用キューの待ち合わせ。
+        _ = audioWorld.submitUncoalescedAndWait(timeout: 2.0) { _ in true } // audio world 側の待ち合わせ。
+
+        XCTAssertFalse(outputController.currentRestoreState(testToken).pending, "義務を降ろす")
+        XCTAssertFalse(lifecycle.isVisibilityOwnedBySession, "可視性も降ろす")
+    }
+
+    /// このプロセスではありえない pid。所有者が他セッションであることだけを表す。
+    private var foreignOwnerProcessID: UInt32 { UInt32(bitPattern: getpid()) &+ 1 }
+
+    // 旗が常に立つと、空席を掴みに行かない周でもチップが出なくなる。掴む周と掴まない周を対で見る。
+    func testTheClaimingFlagRidesOnlyOnThePassThatGoesAfterTheSeat() {
+        // ドライバのデバイスを解決させない。旗は書き込みの前に決まるので、書き込みを走らせる必要が無い。
+        let mock = MockAudioDeviceDirectory()
+
+        let settings = SettingsStore(defaults: defaults)
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+
+        func recordPass(ownerProcessID: UInt32, leaseRemainingSeconds: Double, isOnConsole: Bool) -> OwnershipCoordinatorUpdate? {
+            let fixture = makeOwnershipHeaderFixture(
+                ownerProcessID: ownerProcessID, leaseRemainingSeconds: leaseRemainingSeconds
+            )
+            defer { try? FileManager.default.removeItem(at: fixture) }
+            let coordinator = OwnershipCoordinator(
+                audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+                driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+                driverDeviceUID: testDriverDeviceUID, sharedMemoryPath: fixture.path, isOnConsole: { isOnConsole }
+            )
+            let recorder = OwnershipUpdateRecorder()
+            let pushed = XCTestExpectation(description: "所有権の押し出し")
+            coordinator.didUpdate = { recorder.record($0); pushed.fulfill() }
+            coordinator.runPass()
+            wait(for: [pushed], timeout: 2.0)
+            _ = audioWorld.submitUncoalescedAndWait(timeout: 2.0) { _ in true }
+            return recorder.last
+        }
+
+        // 空席 + console = この周で掴みに行く。
+        XCTAssertEqual(
+            recordPass(ownerProcessID: 0, leaseRemainingSeconds: 0, isOnConsole: true)?.isClaimingSeat, true,
+            "掴みに行く周は旗が立つ"
+        )
+        // 他セッションが生きたリースで座っている = 掴みに行かない。
+        XCTAssertEqual(
+            recordPass(ownerProcessID: foreignOwnerProcessID, leaseRemainingSeconds: 30, isOnConsole: true)?.isClaimingSeat,
+            false, "所有者が居る周は旗を立てない"
+        )
+        // 空席だが console を持たず直前の所有者でもない = 掴みに行かない。
+        XCTAssertEqual(
+            recordPass(ownerProcessID: 0, leaseRemainingSeconds: 0, isOnConsole: false)?.isClaimingSeat,
+            false, "取りに行く権利が無い周は旗を立てない"
+        )
+    }
+
+    // 握手で席を明け渡す回も、経路が作れず停止していた種別を所有権喪失へ移し替える。
+    // 残すと表示名の門 (writesDriverDeviceName) と自動再開 (allowsAutomaticResume) が
+    // どちらも開いたままになり、席を渡した側が新しい所有者から既定出力を奪い返す。
+    func testHandingTheSeatOverMovesTheSuspensionCauseEvenWhenTheRouteWasAlreadyUnavailable() {
+        let mock = MockAudioDeviceDirectory()
+        mock.hiddenDeviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+
+        // 自分が所有者で、他セッションが受け渡しを待っている。
+        let fixture = makeOwnershipHeaderFixture(
+            ownerProcessID: SharedRingReader.selfProcessID, leaseRemainingSeconds: 30,
+            requestProcessID: foreignOwnerProcessID, requestLeaseRemainingSeconds: 30
+        )
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let coordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+            driverDeviceUID: testDriverDeviceUID, sharedMemoryPath: fixture.path, isOnConsole: { true }
+        )
+
+        engine.suspend(cause: .routeUnavailable, testToken)
+        XCTAssertEqual(engine.processingState, .suspended(.routeUnavailable), "前提: 経路が作れず停止している")
+
+        coordinator.runPass()
+        coordinator.releaseForCleanExit(testToken) // 専用キューの待ち合わせ。
+        _ = audioWorld.submitUncoalescedAndWait(timeout: 2.0) { _ in true }
+
+        XCTAssertEqual(
+            engine.processingState, .suspended(.ownershipUnavailable),
+            "席を渡した以上、停止種別も所有権喪失へ移す"
+        )
+        XCTAssertFalse(
+            SuspensionPolicy.writesDriverDeviceName(engine.processingState),
+            "移し替えの結果として表示名の門が閉じる"
+        )
+        XCTAssertFalse(
+            SuspensionPolicy.allowsAutomaticResume(.ownershipUnavailable),
+            "自動再開の対象からも外れる"
+        )
+    }
+
+    // 責務は握手で降りる経路だけでなく、リースを失う経路でも降りる。降りないと、
+    // 前回の異常終了で永続化された義務を抱えたまま起動した非所有インスタンスが、
+    // 照合で義務を立て直したうえで終了時に現所有者から既定出力を奪う。
+    func testLosingOwnershipDropsTheObligationEvenWithoutAHandshake() {
+        let mock = MockAudioDeviceDirectory()
+        // 切り替え前は別デバイスが既定出力。占有を経て義務が立つ状態を作る。
+        mock.currentDefaultOutputID = multiOutputID
+        mock.uidsByDeviceID[multiOutputID] = multiOutputUID
+        mock.deviceIDsByUID[multiOutputUID] = multiOutputID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+        mock.hiddenDeviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        XCTAssertTrue(outputController.occupyDefaultOutputForDriver(testToken))
+        mock.currentDefaultOutputID = loopbackDeviceID
+        lifecycle.reapplyVisibility(deviceID: loopbackDeviceID, testToken)
+        XCTAssertTrue(outputController.currentRestoreState(testToken).pending, "前提: 義務を抱えている")
+        XCTAssertTrue(lifecycle.isVisibilityOwnedBySession, "前提: 可視性も抱えている")
+
+        outputController.abandonRestoreObligation(testToken)
+        lifecycle.abandonVisibilityOwnership(testToken)
+
+        XCTAssertFalse(outputController.currentRestoreState(testToken).pending)
+        XCTAssertFalse(lifecycle.isVisibilityOwnedBySession)
+        // 降りたので、終了時の復帰も表示名の書き戻しも起きない。
+        mock.resetCallRecords()
+        XCTAssertFalse(outputController.restore(testToken), "既定出力はドライバのまま残す")
+        lifecycle.restoreDisplayNameForCleanExit(testToken)
+        XCTAssertTrue(mock.setDefaultOutputCalls.isEmpty, "既定出力に触れない")
+        XCTAssertTrue(mock.setNameCalls.isEmpty, "表示名にも触れない")
+    }
+
     // 終了シーケンス本体は static 関数として切り出されており、
     // 実クラスの組み合わせと実際のキュー経由の待ち合わせを通して、順序 (停止 → 復帰 → 非表示化) と完了待ちを固定できる。
     func testPerformCleanExitSequenceRestoresAndHidesInOrderThroughRealAudioWorld() {
@@ -1032,12 +1409,17 @@ final class OutputDeviceControllerTests: XCTestCase {
         let engine = AudioEngine(audioWorld: audioWorld)
         let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
         let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+        let ownershipCoordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, isOnConsole: { true }
+        )
         lifecycle.reapplyVisibility(deviceID: loopbackDeviceID, testToken) // 可視化済みの状態を作る。
         mock.resetCallRecords()
 
         let completed = AppDelegate.performCleanExitSequence(
             audioWorld: audioWorld, engine: engine, outputController: outputController,
-            driverLifecycle: lifecycle, settings: settings, timeout: 1.0
+            driverLifecycle: lifecycle, ownershipCoordinator: ownershipCoordinator, settings: settings, timeout: 1.0
         )
 
         XCTAssertTrue(completed, "上限内に完了する")
@@ -1046,6 +1428,138 @@ final class OutputDeviceControllerTests: XCTestCase {
         XCTAssertEqual(mock.setHiddenCalls.last?.hidden, true, "復帰できたので専用ドライバのデバイスを非表示化する")
         XCTAssertEqual(mock.setHiddenCalls.last?.id, loopbackDeviceID)
         XCTAssertFalse(settings.switchPending, "復帰できたので義務が畳まれる")
+    }
+
+    // 席を空けるのが後始末より先だと、待っている要求者へその場で移り、表示名の戻し・既定出力の切り戻し・
+    // 非表示化が新しい所有者が使っているデバイスへ及ぶ。
+    // 所有権の書き込みだけが hiddenDeviceIDsByUID を通るよう仕込み、その解決を席を空けた印として読む。
+    func testCleanExitReleasesOwnershipOnlyAfterPuttingTheDeviceBack() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = loopbackDeviceID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+        mock.hiddenDeviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+        mock.deviceIDsByUID[multiOutputUID] = multiOutputID
+        mock.uidsByDeviceID[multiOutputID] = multiOutputUID
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.savedDefaultOutputUID = multiOutputUID
+        settings.switchPending = true
+
+        let audioWorld = AudioWorld()
+        let engine = AudioEngine(audioWorld: audioWorld)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+        let fixture = makeOwnershipHeaderFixture(
+            ownerProcessID: SharedRingReader.selfProcessID, leaseRemainingSeconds: 30
+        )
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let ownershipCoordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, directory: mock,
+            driverDeviceUID: testDriverDeviceUID, sharedMemoryPath: fixture.path, isOnConsole: { true }
+        )
+        lifecycle.reapplyVisibility(deviceID: loopbackDeviceID, testToken)
+        mock.resetCallRecords()
+
+        let seatWasAlreadyFreed = Recorded<Bool>(false)
+        mock.willSetDefaultOutput = { [mock] _ in
+            let freed = !mock.resolveHiddenDeviceIDCalls.isEmpty
+            seatWasAlreadyFreed.update { $0 = freed }
+        }
+
+        XCTAssertTrue(
+            AppDelegate.performCleanExitSequence(
+                audioWorld: audioWorld, engine: engine, outputController: outputController,
+                driverLifecycle: lifecycle, ownershipCoordinator: ownershipCoordinator,
+                settings: settings, timeout: 1.0
+            ),
+            "上限内に完了する"
+        )
+
+        XCTAssertFalse(mock.resolveHiddenDeviceIDCalls.isEmpty, "前提: 席を空ける書き込みが走っている")
+        XCTAssertFalse(seatWasAlreadyFreed.value, "既定出力を切り戻す時点では、席はまだ自分のもの")
+    }
+
+    // 降ろしたのに照合が義務を立て直すと、明け渡した側が終了時に新しい所有者から既定出力を奪い返す。
+    func testTheAbandonedRestoreObligationIsNotReestablishedByReconciliation() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = multiOutputID
+        mock.uidsByDeviceID[multiOutputID] = multiOutputUID
+        mock.deviceIDsByUID[multiOutputUID] = multiOutputID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+
+        let settings = SettingsStore(defaults: defaults)
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+        // 自分が切り替えて占有した状態を作る。
+        XCTAssertTrue(outputController.occupyDefaultOutputForDriver(testToken))
+        mock.currentDefaultOutputID = loopbackDeviceID
+        XCTAssertTrue(outputController.currentRestoreState(testToken).pending, "前提: 占有した側は義務を負う")
+
+        outputController.abandonRestoreObligation(testToken)
+        outputController.reconcileRestoreObligation(testToken)
+
+        XCTAssertFalse(
+            outputController.currentRestoreState(testToken).pending,
+            "降ろした義務は照合でも戻らない"
+        )
+    }
+
+    // 明け渡す側が義務を降ろすだけだと、誰も既定出力を戻さないままドライバが握って終わる。
+    // 戻し先を持たない義務は実行できないので、負うと同時にその時点の出力先を据える。
+    func testAssumingTheRestoreObligationWhileTheDriverHoldsTheDefaultOutput() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = loopbackDeviceID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+        mock.deviceIDsByUID[multiOutputUID] = multiOutputID
+        mock.uidsByDeviceID[multiOutputID] = multiOutputUID
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.switchPending = false
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+
+        outputController.assumeRestoreObligation(outputDeviceUID: multiOutputUID, testToken)
+
+        XCTAssertTrue(outputController.currentRestoreState(testToken).pending, "受け取った側が義務を負う")
+        XCTAssertEqual(outputController.currentRestoreState(testToken).uid, multiOutputUID, "戻し先が入る")
+        XCTAssertTrue(mock.setDefaultOutputCalls.isEmpty, "義務を負うだけで既定出力には触れない")
+
+        // 戻し先が入っているので、終了時の復帰が実際に走る。
+        XCTAssertTrue(outputController.restore(testToken))
+        XCTAssertEqual(mock.setDefaultOutputCalls, [multiOutputID])
+    }
+
+    // 既に戻し先を持っているなら、引き受けで上書きしない。
+    func testAssumingTheRestoreObligationKeepsAnExistingTarget() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = loopbackDeviceID
+        mock.uidsByDeviceID[loopbackDeviceID] = testDriverDeviceUID
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.savedDefaultOutputUID = multiOutputUID
+        settings.switchPending = false
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+
+        outputController.assumeRestoreObligation(outputDeviceUID: "some.other.device", testToken)
+
+        XCTAssertEqual(outputController.currentRestoreState(testToken).uid, multiOutputUID)
+    }
+
+    // 占有していないのに義務を負うと、自分が切り替えていない出力先を終了時に書き換える。
+    func testTheRestoreObligationIsNotAssumedWhileTheDriverDoesNotHoldTheDefaultOutput() {
+        let mock = MockAudioDeviceDirectory()
+        mock.currentDefaultOutputID = multiOutputID
+        mock.uidsByDeviceID[multiOutputID] = multiOutputUID
+
+        let settings = SettingsStore(defaults: defaults)
+        settings.switchPending = false
+        let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
+
+        outputController.assumeRestoreObligation(outputDeviceUID: multiOutputUID, testToken)
+
+        XCTAssertFalse(outputController.currentRestoreState(testToken).pending, "ドライバが既定出力を握っていないなら負わない")
     }
 
     /// 切り戻せない状況で動的な名前が残ると、無音の原因を探す側が存在しない経路を指す名前を見る。
@@ -1065,12 +1579,17 @@ final class OutputDeviceControllerTests: XCTestCase {
         let engine = AudioEngine(audioWorld: audioWorld)
         let outputController = OutputDeviceController(directory: mock, settings: settings, targetDeviceUID: testDriverDeviceUID)
         let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+        let ownershipCoordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, isOnConsole: { true }
+        )
         lifecycle.reapplyVisibility(deviceID: loopbackDeviceID, testToken)
         mock.resetCallRecords()
 
         let completed = AppDelegate.performCleanExitSequence(
             audioWorld: audioWorld, engine: engine, outputController: outputController,
-            driverLifecycle: lifecycle, settings: settings, timeout: 1.0
+            driverLifecycle: lifecycle, ownershipCoordinator: ownershipCoordinator, settings: settings, timeout: 1.0
         )
 
         XCTAssertTrue(completed, "上限内に完了する")
@@ -1103,12 +1622,17 @@ final class OutputDeviceControllerTests: XCTestCase {
             }
         )
         let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        let activationCoordinator = AudioActivationCoordinator(engine: engine, driverLifecycle: lifecycle, outputController: outputController)
+        let ownershipCoordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine, activationCoordinator: activationCoordinator,
+            driverLifecycle: lifecycle, outputController: outputController, isOnConsole: { true }
+        )
         lifecycle.reapplyVisibility(deviceID: loopbackDeviceID, testToken)
         mock.resetCallRecords()
 
         let completed = AppDelegate.performCleanExitSequence(
             audioWorld: audioWorld, engine: engine, outputController: outputController,
-            driverLifecycle: lifecycle, settings: settings, timeout: 1.0
+            driverLifecycle: lifecycle, ownershipCoordinator: ownershipCoordinator, settings: settings, timeout: 1.0
         )
 
         XCTAssertTrue(completed, "上限内に完了する")
@@ -1237,5 +1761,19 @@ final class DriverLifecycleControllerTests: XCTestCase {
 
         controller.hideForCleanExit(testToken)
         XCTAssertFalse(controller.isVisibilityOwnedBySession)
+    }
+
+    // 所有権を明け渡すセッションが可視性の責務だけを降ろす。デバイスには一切触れない。
+    func testAbandonVisibilityOwnershipDropsResolvedDeviceIDWithoutTouchingDevice() {
+        let mock = MockAudioDeviceDirectory()
+        mock.deviceIDsByUID[targetUID] = visibleDeviceID
+        let controller = DriverLifecycleController(directory: mock, targetDeviceUID: targetUID)
+        controller.resolveAndMakeVisible(testToken)
+        mock.resetCallRecords()
+
+        controller.abandonVisibilityOwnership(testToken)
+
+        XCTAssertFalse(controller.isVisibilityOwnedBySession)
+        XCTAssertTrue(mock.setHiddenCalls.isEmpty, "デバイスには一切触れない")
     }
 }

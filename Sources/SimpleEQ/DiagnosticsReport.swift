@@ -37,7 +37,31 @@ enum DiagnosticsReport {
     // MARK: - 面と行
 
     static func sections(_ s: AudioRuntimeMetrics.Snapshot, render: RenderMetrics.Snapshot) -> [DiagnosticsSection] {
-        [identity(s), drawing(render), flow(s), traces(s)]
+        [identity(s), ownership(s), drawing(render), flow(s), traces(s)]
+    }
+
+    /// セッション横断の所有権が今どうなっているか。
+    private static func ownership(_ s: AudioRuntimeMetrics.Snapshot) -> DiagnosticsSection {
+        let o = s.ownership
+        return DiagnosticsSection(title: "所有権", rows: [
+            DiagnosticsRow(title: "自分が所有者か", values: [ownershipValue(s, o.isSelfOwner ? "はい" : "いいえ")]),
+            DiagnosticsRow(
+                title: "所有者", subtitle: "pid / uid",
+                values: [ownershipValue(s, OwnershipPolicy.ownerDisplayText(processID: o.ownerProcessID, uid: o.ownerUID))]
+            ),
+            DiagnosticsRow(
+                title: "所有権リース", subtitle: "残り時間",
+                values: [ownershipValue(s, leaseText(o.leaseRemainingSeconds, absent: "所有者なし"))]
+            ),
+            DiagnosticsRow(
+                title: "要求", subtitle: "pid / uid",
+                values: [ownershipValue(s, OwnershipPolicy.ownerDisplayText(processID: o.requestProcessID, uid: o.requestUID))]
+            ),
+            DiagnosticsRow(
+                title: "要求リース", subtitle: "残り時間",
+                values: [ownershipValue(s, leaseText(o.requestLeaseRemainingSeconds, absent: "要求なし"))]
+            ),
+        ])
     }
 
     /// 今どれだけ描き直していて、そのうちどれだけが絵を変えているか。
@@ -344,6 +368,11 @@ enum DiagnosticsReport {
         s.readerObserved ? text() : unobserved
     }
 
+    /// 所有権を読めている間だけ値を出す。読めない間は読めなかったこと自体を示す。
+    private static func ownershipValue(_ s: AudioRuntimeMetrics.Snapshot, _ text: @autoclosure () -> String) -> String {
+        s.ownershipObserved ? text() : unobserved
+    }
+
     /// 回数。数字だけを並べると、隣に置いたフレーム数との区別が付かない。
     private static func countText(_ count: UInt64) -> String {
         "\(count) 回"
@@ -361,8 +390,8 @@ enum DiagnosticsReport {
     }
 
     /// リースの残り時間。丸めが秒未満まで要るため、経過時間の書式とは別に持つ。
-    private static func leaseText(_ seconds: Double?) -> String {
-        guard let seconds else { return "制御なし" }
+    private static func leaseText(_ seconds: Double?, absent: String = "制御なし") -> String {
+        guard let seconds else { return absent }
         return String(format: "%.1f s", max(0, seconds))
     }
 

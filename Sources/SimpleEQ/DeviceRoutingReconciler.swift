@@ -300,6 +300,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         driverDeviceID: AudioDeviceID?, outputDeviceID: AudioDeviceID?, _ token: AudioWorldToken
     ) {
         guard let driverDeviceID else { return }
+        guard SuspensionPolicy.writesDriverDeviceName(engine.processingState) else { return }
         guard applyDriverDeviceName(driverDeviceID: driverDeviceID, outputDeviceID: outputDeviceID, token) else { return }
         guard let handoffDeviceID = driverDeviceNameHandoffTarget(
             outputDeviceID: outputDeviceID,
@@ -457,13 +458,10 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
 
     /// 停止直前のあるべき出力先 → 復帰対象の順に、厳密解決のみを試みる。
     private func resolveAutomaticResumeTarget(_ token: AudioWorldToken) -> ResolvedOutputDevice? {
-        let candidates = [engine.intendedOutputDeviceUIDAtSuspension, outputController.restoreTargetUID].compactMap { $0 }
-        for uid in candidates {
-            if let target = directory.selectableOutputDevice(forUID: uid, driverDeviceUID: driverDeviceUID, token) {
-                return target
-            }
-        }
-        return nil
+        directory.firstSelectableOutputDevice(
+            preferring: [engine.intendedOutputDeviceUIDAtSuspension, outputController.restoreTargetUID],
+            driverDeviceUID: driverDeviceUID, token
+        )
     }
 
     private func rebindAliveListeners(driverDeviceID: AudioDeviceID?, outputDeviceID: AudioDeviceID?) {

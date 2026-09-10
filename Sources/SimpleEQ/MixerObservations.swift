@@ -20,6 +20,19 @@ struct MixerDriverObservation: Equatable, Sendable {
     var gainEntryDroppedCount: UInt64 = 0
 }
 
+/// 共有ヘッダから読む、所有権の事実。診断が表示する形へ整えたもので、不在は 0 のままヘッダの生値を映す。
+struct OwnershipObservationSnapshot: Equatable, Sendable {
+    var ownerProcessID: UInt32 = 0
+    var ownerUID: UInt32 = 0
+    /// nil はリースを持っていない状態 (所有者なし)。
+    var leaseRemainingSeconds: Double?
+    var requestProcessID: UInt32 = 0
+    var requestUID: UInt32 = 0
+    /// nil はリースを持っていない状態 (要求なし)。
+    var requestLeaseRemainingSeconds: Double?
+    var isSelfOwner = false
+}
+
 /// 調停役が 1 パスごとに記録する、アプリ側の事実。
 struct MixerCoordinationObservation: Equatable, Sendable {
     var channelCount = 0

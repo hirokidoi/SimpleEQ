@@ -4,12 +4,21 @@ import Foundation
 import SimpleEQRingC
 @testable import SimpleEQ
 
+private func setWriteCounter(_ url: URL, _ value: UInt64) {
+    let handle = try! FileHandle(forWritingTo: url)
+    defer { try? handle.close() }
+    handle.seek(toFileOffset: 40)
+    handle.write(withUnsafeBytes(of: value) { Data($0) })
+}
+
 /// 有効な共有メモリヘッダのみを持つ最小のフィクスチャファイルを作る。呼び出し元がテスト終了時に削除すること。
 private func makeMinimalSharedRingReaderFixture(
     ringFrames: UInt32 = 64, channels: UInt32 = 1, writeCounter: UInt64 = 0,
     sampleRate: Double = AudioConfig.baseSampleRate, ringValues: [Float] = [],
     // 既定 0 (非稼働) は経過時間に関わらず停止と判定されない。稼働 (1) にすると停止判定を発火させられる。
-    writerIOIsRunning: UInt32 = 0
+    writerIOIsRunning: UInt32 = 0,
+    // 既定 0 は所有者不在。自分の pid を入れると自分が所有者になる。
+    ownerProcessID: UInt32 = 0
 ) -> URL {
     let headerBytes = UInt32(simpleeq_ring_header_size())
     let ringDataOffset = Int(headerBytes)
@@ -25,6 +34,7 @@ private func makeMinimalSharedRingReaderFixture(
         raw.storeBytes(of: sampleRate, toByteOffset: 24, as: Double.self)
         raw.storeBytes(of: writeCounter, toByteOffset: 40, as: UInt64.self)
         raw.storeBytes(of: writerIOIsRunning, toByteOffset: 52, as: UInt32.self)
+        raw.storeBytes(of: ownerProcessID, toByteOffset: ownershipOwnerProcessIDOffset, as: UInt32.self)
         for (i, v) in ringValues.enumerated() {
             raw.storeBytes(of: v, toByteOffset: ringDataOffset + i * MemoryLayout<Float>.size, as: Float.self)
         }
@@ -345,12 +355,31 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertTrue(SuspensionPolicy.allowsSelectionResume(.routeUnavailable))
         XCTAssertFalse(SuspensionPolicy.allowsSelectionResume(.driverOperation))
         XCTAssertFalse(SuspensionPolicy.allowsSelectionResume(.applicationTermination))
+        XCTAssertFalse(SuspensionPolicy.allowsSelectionResume(.ownershipUnavailable))
     }
 
     func testAllowsAutomaticResumeOnlyForRouteUnavailable() {
         XCTAssertTrue(SuspensionPolicy.allowsAutomaticResume(.routeUnavailable))
         XCTAssertFalse(SuspensionPolicy.allowsAutomaticResume(.driverOperation))
         XCTAssertFalse(SuspensionPolicy.allowsAutomaticResume(.applicationTermination))
+        XCTAssertFalse(SuspensionPolicy.allowsAutomaticResume(.ownershipUnavailable))
+    }
+
+    func testAllowsResumeOnOwnershipAcquiredOnlyForOwnershipUnavailable() {
+        XCTAssertTrue(SuspensionPolicy.allowsResumeOnOwnershipAcquired(.ownershipUnavailable))
+        XCTAssertFalse(SuspensionPolicy.allowsResumeOnOwnershipAcquired(.routeUnavailable))
+        XCTAssertFalse(SuspensionPolicy.allowsResumeOnOwnershipAcquired(.driverOperation))
+        XCTAssertFalse(SuspensionPolicy.allowsResumeOnOwnershipAcquired(.applicationTermination))
+    }
+
+    // 可視性の維持とは条件が違う。ドライバ操作中・終了中は自分が経路を担ったままなので固定名へ戻す。
+    // 同じ述語を流用すると、その 2 種別で名前が戻らなくなる。
+    func testWritesDriverDeviceNameClosesOnlyForLackOfOwnership() {
+        XCTAssertTrue(SuspensionPolicy.writesDriverDeviceName(.active))
+        XCTAssertTrue(SuspensionPolicy.writesDriverDeviceName(.suspended(.routeUnavailable)))
+        XCTAssertTrue(SuspensionPolicy.writesDriverDeviceName(.suspended(.driverOperation)))
+        XCTAssertTrue(SuspensionPolicy.writesDriverDeviceName(.suspended(.applicationTermination)))
+        XCTAssertFalse(SuspensionPolicy.writesDriverDeviceName(.suspended(.ownershipUnavailable)))
     }
 
     func testMaintainsDriverVisibilityForActiveAndRouteUnavailableSuspensionOnly() {
@@ -358,6 +387,7 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertTrue(SuspensionPolicy.maintainsDriverVisibility(.suspended(.routeUnavailable)))
         XCTAssertFalse(SuspensionPolicy.maintainsDriverVisibility(.suspended(.driverOperation)))
         XCTAssertFalse(SuspensionPolicy.maintainsDriverVisibility(.suspended(.applicationTermination)))
+        XCTAssertFalse(SuspensionPolicy.maintainsDriverVisibility(.suspended(.ownershipUnavailable)))
     }
 
     // 自動再開を許す種別は必ず選び直しでの再開を許す種別に含まれる (逆は成り立たなくてよい)。
@@ -458,6 +488,136 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertEqual(engine.outputGain, 0)
 
         engine.suspend(cause: .applicationTermination, testToken)
+    }
+
+    // MARK: - 所有権によるレンダー経路の無音化
+
+    /// リングに内容がある状態でレンダー経路を回し、非ゼロが一度でも出たかを返す。
+    /// 出力段が実際に回るため、書き手の位置を毎回進めて涸れないようにする。
+    private func renderProducesNonZero(ownerProcessID: UInt32) throws -> Bool {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let frames = 256
+        let sampleCount = frames * Int(AudioConfig.channels)
+        let ringFrames = UInt32(frames * 32)
+        let url = makeMinimalSharedRingReaderFixture(
+            ringFrames: ringFrames, channels: AudioConfig.channels, writeCounter: UInt64(frames),
+            ringValues: [Float](repeating: 0.5, count: Int(ringFrames) * Int(AudioConfig.channels)),
+            ownerProcessID: ownerProcessID
+        )
+        tempURLs.update { $0.append(url) }
+        let reader = try SharedRingReader.open(
+            path: url.path, primingEnabled: false, initialWriterBlockFrames: frames
+        ).get()
+        let engine = makeSilencedEngine()
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+
+        let buffer = UnsafeMutablePointer<Float>.allocate(capacity: sampleCount)
+        defer { buffer.deallocate() }
+        let byteSize = UInt32(sampleCount * MemoryLayout<Float>.size)
+
+        for step in 1...64 {
+            setWriteCounter(url, UInt64(frames * (step + 1) * 4))
+            buffer.update(repeating: 0, count: sampleCount)
+            var abl = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: AudioConfig.channels, mDataByteSize: byteSize,
+                    mData: UnsafeMutableRawPointer(buffer)
+                )
+            )
+            _ = engine.renderEQInput(&abl, UInt32(frames))
+            if (0..<sampleCount).contains(where: { buffer[$0] != 0 }) { return true }
+        }
+        return false
+    }
+
+    /// 所有していない間は、リングに内容があってもレンダー経路が無音を出すこと。
+    /// 制御経路が詰まってリースが落ちたときに二重再生を防ぐ唯一の安全弁にあたる。
+    /// 空席と他者の席を対で見る。空席だけでは「席が空でなければ流す」実装でも通り、二重再生を捕まえられない。
+    func testRenderOutputsSilenceWhileThisSessionDoesNotOwnTheAudioPath() throws {
+        for ownerProcessID: UInt32 in [0, SharedRingReader.selfProcessID &+ 1] {
+            let sawAudio = try renderProducesNonZero(ownerProcessID: ownerProcessID)
+            XCTAssertFalse(sawAudio, "所有していない間にリングの内容が出力へ出た (owner=\(ownerProcessID))")
+        }
+    }
+
+    /// 対で見ないと「常に無音」でも通ってしまう。
+    func testRenderPassesRingContentThroughWhileThisSessionOwnsTheAudioPath() throws {
+        let sawAudio = try renderProducesNonZero(ownerProcessID: UInt32(bitPattern: getpid()))
+        XCTAssertTrue(sawAudio, "所有している間にリングの内容が出力へ出なかった")
+    }
+
+    // MARK: - 実体の差し替え
+
+    // 差し替えを見た周で止めないと、レンダー経路は削除済みの実体を読み続ける。
+    // 旧実体の所有者は自分のままなので無音化の安全弁も働かず、復旧はアプリの再起動だけになる。
+    @MainActor
+    func testAPassThatFindsTheRingReplacedStopsTheOutputStage() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let ringURL = makeMinimalSharedRingReaderFixture(
+            channels: AudioConfig.channels, ownerProcessID: SharedRingReader.selfProcessID
+        )
+        tempURLs.update { $0.append(ringURL) }
+        let engine = makeSilencedEngine()
+        let reader = try SharedRingReader.open(path: ringURL.path).get()
+        XCTAssertTrue(
+            engine.assemble(
+                outputDevice: ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID),
+                ringReader: reader, testToken
+            ),
+            "前提: 実デバイスへの組み立てが成立すること"
+        )
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+        XCTAssertEqual(engine.processingState, .active, "前提: 稼働中")
+
+        let suiteName = TestDefaults.makeName("OwnershipRingReplacement")
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { TestDefaults.remove(name: suiteName, defaults: defaults) }
+        let directory = MockAudioDeviceDirectory()
+        let lifecycle = DriverLifecycleController(directory: directory, targetDeviceUID: DriverConfig.deviceUID)
+        let outputController = OutputDeviceController(
+            directory: directory, settings: SettingsStore(defaults: defaults), targetDeviceUID: DriverConfig.deviceUID
+        )
+        let audioWorld = AudioWorld()
+        let coordinator = OwnershipCoordinator(
+            audioWorld: audioWorld, engine: engine,
+            activationCoordinator: AudioActivationCoordinator(
+                engine: engine, driverLifecycle: lifecycle, outputController: outputController
+            ),
+            driverLifecycle: lifecycle, outputController: outputController, directory: directory,
+            sharedMemoryPath: ringURL.path, isOnConsole: { true }
+        )
+
+        runPassAndWait(coordinator, audioWorld) // inode の基準を作る周。
+        XCTAssertEqual(engine.processingState, .active, "前提: 差し替えの無い周では止めない")
+
+        let replacement = makeMinimalSharedRingReaderFixture(
+            channels: AudioConfig.channels, ownerProcessID: SharedRingReader.selfProcessID
+        )
+        tempURLs.update { $0.append(replacement) }
+        try FileManager.default.removeItem(at: ringURL)
+        try FileManager.default.copyItem(at: replacement, to: ringURL)
+
+        // 観測だけを取り出す入口が挟まっても、差し替えの立ち上がりは次の周まで残る。
+        coordinator.requestOwnership()
+
+        runPassAndWait(coordinator, audioWorld)
+        XCTAssertEqual(engine.processingState, .suspended(.ownershipUnavailable), "差し替えを見た周で出力段を止める")
+    }
+
+    @MainActor
+    private func runPassAndWait(_ coordinator: OwnershipCoordinator, _ audioWorld: AudioWorld) {
+        let pushed = XCTestExpectation(description: "所有権の押し出し")
+        coordinator.didUpdate = { _ in pushed.fulfill() }
+        coordinator.runPass()
+        wait(for: [pushed], timeout: 2.0)
+        _ = audioWorld.submitUncoalescedAndWait(timeout: 2.0) { _ in true }
     }
 
     func testAssembleAdvancesLevelMeterRestartGeneration() throws {
@@ -1278,6 +1438,30 @@ final class AudioActivationCoordinatorTests: XCTestCase {
         XCTAssertTrue(directory.setDefaultOutputCalls.isEmpty, "占有済みなら切替を打ち直さない")
     }
 
+    // 自分で切り替えたのでなくても、稼働を引き受けた側が復帰義務と戻し先を負う。
+    // 負わないと、占有された状態がそのまま次の起動へ引き継がれ、誰も既定出力を戻さなくなる。
+    func testActivateAssumesTheRestoreObligationWithoutHavingSwitchedItself() {
+        let directory = makeDirectory()
+        directory.currentDefaultOutputID = driverDeviceID // 既にドライバが既定出力を握っている。
+        let settings = SettingsStore(defaults: defaults)
+        let lifecycle = DriverLifecycleController(directory: directory, targetDeviceUID: driverUID)
+        let outputController = OutputDeviceController(directory: directory, settings: settings, targetDeviceUID: driverUID)
+        let engine = MockActivatableAudioEngine()
+        let coordinator = AudioActivationCoordinator(
+            engine: engine, driverLifecycle: lifecycle, outputController: outputController,
+            openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+        )
+        XCTAssertFalse(outputController.currentRestoreState(testToken).pending, "前提: 義務を持たない")
+
+        let target = ResolvedOutputDevice(uid: speakerUID, deviceID: speakerID)
+        coordinator.activate(resolveOutputDevice: { _ in target }, attempt: .resume, testToken)
+
+        XCTAssertTrue(directory.setDefaultOutputCalls.isEmpty, "前提: 自分では切り替えていない")
+        let state = outputController.currentRestoreState(testToken)
+        XCTAssertTrue(state.pending, "稼働を引き受けたので義務を負う")
+        XCTAssertEqual(state.uid, speakerUID, "戻し先は実際に鳴らしている出力先")
+    }
+
     // 掌握済みなら可視化を打ち直さない。
     func testActivateDoesNotReapplyVisibilityWhenAlreadyOwned() {
         let directory = makeDirectory()
@@ -1333,6 +1517,43 @@ final class AudioActivationCoordinatorTests: XCTestCase {
             XCTAssertEqual(engine.assembleCalls.count, 1, "\(trigger)")
             XCTAssertEqual(engine.assembleCalls.first?.outputDevice, target, "\(trigger)")
             XCTAssertEqual(result.processingState, .active, "\(trigger)")
+        }
+    }
+
+    // 所有権取得による再開は、所有権を持たないことによる停止でだけ許される。
+    func testOwnershipAcquiredResumesOnlyFromOwnershipUnavailable() {
+        let directory = makeDirectory()
+        directory.currentDefaultOutputID = speakerID
+        let engine = MockActivatableAudioEngine()
+        engine.processingState = .suspended(.ownershipUnavailable)
+        let (coordinator, _) = makeCoordinator(
+            directory: directory, engine: engine, openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+        )
+        let target = ResolvedOutputDevice(uid: speakerUID, deviceID: speakerID)
+
+        let result = coordinator.resume(outputDevice: target, trigger: .ownershipAcquired, testToken)
+
+        XCTAssertEqual(engine.assembleCalls.count, 1)
+        XCTAssertEqual(result.processingState, .active)
+    }
+
+    // 所有権取得以外の契機での停止では、所有権取得による再開は組み立てを一切試みない。
+    func testOwnershipAcquiredSkipsActivationForOtherCauses() {
+        for cause: SuspensionCause in [.routeUnavailable, .driverOperation, .applicationTermination] {
+            let directory = makeDirectory()
+            let engine = MockActivatableAudioEngine()
+            engine.processingState = .suspended(cause)
+            let openCallCount = Recorded<Int>(0)
+            let (coordinator, _) = makeCoordinator(
+                directory: directory, engine: engine,
+                openSharedMemory: { openCallCount.update { $0 += 1 }; return .failure(.fileNotFound) }
+            )
+            let target = ResolvedOutputDevice(uid: speakerUID, deviceID: speakerID)
+
+            let result = coordinator.resume(outputDevice: target, trigger: .ownershipAcquired, testToken)
+
+            XCTAssertEqual(result.processingState, .suspended(cause), "\(cause)")
+            XCTAssertEqual(openCallCount.value, 0, "\(cause)")
         }
     }
 

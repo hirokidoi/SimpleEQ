@@ -139,8 +139,8 @@ struct SettingsView: View {
             .opacity(viewModel.processingInEffect ? 1 : EQLayout.disabledOpacity)
 
             sliderRow(
-                title: "許容ピーク",
-                subtitle: "AUTO 時に許容するピークの大きさ",
+                title: "目標レベル",
+                subtitle: "AUTO 時に狙う EQ 適用後のレベル",
                 value: preampAutoTargetBinding(viewModel), range: AutoPreampSpec.targetDbRange, step: AutoPreampSpec.targetDbStep,
                 defaultValue: AutoPreampSpec.targetDbDefault
             ) { EQLayout.formatSignedDb($0) }

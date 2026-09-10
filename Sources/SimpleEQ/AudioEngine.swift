@@ -686,11 +686,11 @@ final class AudioEngine: @unchecked Sendable {
         if abl.count == 1 {
             guard let mData = abl[0].mData else { return noErr }
             let dst = mData.assumingMemoryBound(to: Float.self)
-            got = ringReader.read(into: dst, frames: Int(frames))
+            got = readRing(ringReader, into: dst, frames: Int(frames), sampleCount: sampleCount)
             applyPreampGain(dst, count: sampleCount)
             soundLabStereo?.process(dst, frames: Int(frames))
         } else {
-            got = ringReader.read(into: eqInputScratch, frames: Int(frames))
+            got = readRing(ringReader, into: eqInputScratch, frames: Int(frames), sampleCount: sampleCount)
             applyPreampGain(eqInputScratch, count: sampleCount)
             soundLabStereo?.process(eqInputScratch, frames: Int(frames))
             let channels = abl.count
@@ -702,6 +702,15 @@ final class AudioEngine: @unchecked Sendable {
         }
         runtimeMetrics.recordRead(requestedFrames: Int(frames), deliveredFrames: got)
         return noErr
+    }
+
+    /// セッション横断の所有権を持たない間は自分で無音化する (制御経路の停止・遅延に依存しない安全弁)。
+    private func readRing(
+        _ reader: SharedRingReader, into buf: UnsafeMutablePointer<Float>, frames: Int, sampleCount: Int
+    ) -> Int {
+        let got = reader.read(into: buf, frames: frames)
+        if !reader.isSelfOwner { for i in 0..<sampleCount { buf[i] = 0 } }
+        return got
     }
 
     private func applyPreampGain(_ buf: UnsafeMutablePointer<Float>, count: Int) {

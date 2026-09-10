@@ -51,6 +51,8 @@ func topBarWarningIdentifier(
             // 起動の最初の組み立てを終えるまでは、まだ何も試していない状態を異常として伝えない。
             return startupActivationSettled ? .outputRouteSelectionRequired : nil
         case .driverOperation, .applicationTermination: return .restartRequired
+        // 他セッションが使用中は正常な状態であり、警告チップには含めない (dim と拒否は別経路で効く)。
+        case .ownershipUnavailable: return nil
         }
     }
     return (ringStalled || !defaultOutputReachesDriver) ? .audioUnavailable : nil

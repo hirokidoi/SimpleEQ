@@ -33,7 +33,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     private var diagnosticsIsMiniaturized = false
 
     convenience init(
-        viewModel: EQViewModel, settings: SettingsStore, diagnostics: DiagnosticsModel, mixer: MixerModel
+        viewModel: EQViewModel, settings: SettingsStore, diagnostics: DiagnosticsModel, mixer: MixerModel,
+        screenVisibility: ScreenVisibility
     ) {
         let window = EQMainWindow(
             contentRect: NSRect(origin: .zero, size: EQLayout.windowDefaultSize),
@@ -53,7 +54,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         self.mixer = mixer
         self.mixerRenderClock = MixerRenderClock(levelStore: mixer.levelStore, viewModel: viewModel)
         // 駆動条件が起動直後の購読でこれを読むため、その前に用意する。
-        screenVisibility = ScreenVisibility { [weak self] in
+        self.screenVisibility = screenVisibility
+        screenVisibility.addObserver { [weak self] in
             MainActor.assumeIsolated { self?.updateGatesForScreenVisibility() }
         }
         window.delegate = self
@@ -73,6 +75,21 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         applyAlwaysOnTop(viewModel.alwaysOnTop)
         viewModel.$alwaysOnTop
             .sink { [weak self] on in self?.applyAlwaysOnTop(on) }
+            .store(in: &cancellables)
+
+        // 所有している側の絵は、物理画面の状態に関わらず動かす。
+        // 面はドライバのゲインテーブルを押す入口なので、所有権を失ったら畳む。
+        viewModel.$isOwner
+            .sink { [weak self] isOwner in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.screenVisibility.updateOwnsAudioPath(isOwner)
+                    if !isOwner {
+                        self.mixer.endEditing()
+                        self.mixer.setShown(false)
+                    }
+                }
+            }
             .store(in: &cancellables)
         // 配送中のビュー階層をその場で壊さないよう、次の実行機会へ回す。
         viewModel.$viewMode

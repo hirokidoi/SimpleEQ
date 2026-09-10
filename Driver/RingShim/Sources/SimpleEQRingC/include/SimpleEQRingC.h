@@ -102,4 +102,66 @@ uint32_t    simpleeq_driver_visibility_override_selector(void);
 uint32_t    simpleeq_driver_name_override_selector(void);
 uint32_t    simpleeq_driver_name_override_max_length(void);
 
+// --- 所有権 (セッション横断の調停) ------------------------------------------
+
+uint32_t simpleeq_ownership_selector(void);
+double   simpleeq_ownership_lease_seconds(void);
+double   simpleeq_ownership_request_lease_seconds(void);
+
+const char *simpleeq_ownership_operation_key(void);
+const char *simpleeq_ownership_uid_key(void);
+const char *simpleeq_ownership_operation_claim(void);
+const char *simpleeq_ownership_operation_request(void);
+const char *simpleeq_ownership_operation_cancel(void);
+const char *simpleeq_ownership_operation_release(void);
+const char *simpleeq_ownership_operation_renew(void);
+
+/// 世代が偶数であることを確かめ、内容 (relaxed) を読み、世代を再読して一致を見るのは呼び出し側の責務。
+uint32_t simpleeq_ownership_load_generation_acquire(const void *inHeader);
+uint32_t simpleeq_ownership_owner_process_id_relaxed(const void *inHeader);
+uint32_t simpleeq_ownership_owner_uid_relaxed(const void *inHeader);
+uint64_t simpleeq_ownership_lease_deadline_host_time_relaxed(const void *inHeader);
+
+size_t simpleeq_ownership_owner_process_id_offset(void);
+size_t simpleeq_ownership_lease_deadline_host_time_offset(void);
+size_t simpleeq_ownership_request_process_id_offset(void);
+size_t simpleeq_ownership_request_lease_deadline_host_time_offset(void);
+
+uint32_t simpleeq_ownership_op_unknown(void);
+uint32_t simpleeq_ownership_op_claim(void);
+uint32_t simpleeq_ownership_op_request(void);
+uint32_t simpleeq_ownership_op_cancel(void);
+uint32_t simpleeq_ownership_op_release(void);
+uint32_t simpleeq_ownership_op_renew(void);
+
+uint32_t simpleeq_ownership_outcome_denied(void);
+uint32_t simpleeq_ownership_outcome_no_change(void);
+uint32_t simpleeq_ownership_outcome_applied(void);
+
+bool simpleeq_ownership_seat_is_held(
+    uint32_t inProcessID, uint64_t inDeadlineHostTime, uint64_t inNowHostTime);
+
+typedef struct
+{
+    uint32_t outcome;
+    bool     writesOwnerSeat;
+    uint32_t ownerProcessID;
+    uint32_t ownerUID;
+    bool     writesRequestSeat;
+    uint32_t requestProcessID;
+    uint32_t requestUID;
+    bool     renewsOwnerLease;
+    bool     renewsRequestLease;
+} SimpleEQOwnershipPlanResult;
+
+SimpleEQOwnershipPlanResult simpleeq_ownership_compute_plan(
+    uint32_t inOperation, uint32_t inCallerProcessID, uint32_t inDeclaredUID,
+    uint32_t inOwnerProcessID, bool inOwnerHoldsSeat,
+    uint32_t inRequestProcessID, uint32_t inRequestUID, bool inRequestStands);
+
+uint32_t simpleeq_ownership_load_request_generation_acquire(const void *inHeader);
+uint32_t simpleeq_ownership_request_process_id_relaxed(const void *inHeader);
+uint32_t simpleeq_ownership_request_uid_relaxed(const void *inHeader);
+uint64_t simpleeq_ownership_request_lease_deadline_host_time_relaxed(const void *inHeader);
+
 #endif /* SimpleEQRingC_h */

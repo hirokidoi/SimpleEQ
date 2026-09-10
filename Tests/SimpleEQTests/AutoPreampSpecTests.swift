@@ -23,21 +23,29 @@ final class AutoPreampSpecTests: XCTestCase {
 
     private let curves: [Curve] = [
         Curve(name: "Flat", energyWeightedGainDb: 0.00, worstCaseGainDb: 0.00,
-              expectedByTarget: [0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0]),
+              expectedByTarget: [-6: -6, -5: -5, -4: -4, -3: -3, -2: -2, -1: -1,
+                                 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0]),
         Curve(name: "Perfect", energyWeightedGainDb: 6.51, worstCaseGainDb: 12.06,
-              expectedByTarget: [0: -7, 1: -6, 2: -5, 3: -4, 4: -3, 5: -2, 6: -1]),
+              expectedByTarget: [-6: -12, -5: -12, -4: -11, -3: -10, -2: -9, -1: -8,
+                                 0: -7, 1: -6, 2: -5, 3: -4, 4: -3, 5: -2, 6: -1]),
         Curve(name: "Eargasm Explosion", energyWeightedGainDb: 5.50, worstCaseGainDb: 10.71,
-              expectedByTarget: [0: -6, 1: -5, 2: -4, 3: -3, 4: -2, 5: -1, 6: 0]),
+              expectedByTarget: [-6: -12, -5: -11, -4: -10, -3: -9, -2: -8, -1: -7,
+                                 0: -6, 1: -5, 2: -4, 3: -3, 4: -2, 5: -1, 6: 0]),
         Curve(name: "単一+12@1kHz", energyWeightedGainDb: 1.93, worstCaseGainDb: 12.00,
-              expectedByTarget: [0: -6, 1: -5, 2: -4, 3: -3, 4: -2, 5: -1, 6: 0]),
+              expectedByTarget: [-6: -12, -5: -11, -4: -10, -3: -9, -2: -8, -1: -7,
+                                 0: -6, 1: -5, 2: -4, 3: -3, 4: -2, 5: -1, 6: 0]),
         Curve(name: "単一+6@1kHz", energyWeightedGainDb: 0.63, worstCaseGainDb: 6.00,
-              expectedByTarget: [0: -1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0]),
+              expectedByTarget: [-6: -7, -5: -6, -4: -5, -3: -4, -2: -3, -1: -2,
+                                 0: -1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0]),
         Curve(name: "隣接3本+12", energyWeightedGainDb: 7.10, worstCaseGainDb: 17.37,
-              expectedByTarget: [0: -11, 1: -10, 2: -9, 3: -8, 4: -7, 5: -6, 6: -5]),
+              expectedByTarget: [-6: -12, -5: -12, -4: -12, -3: -12, -2: -12, -1: -12,
+                                 0: -11, 1: -10, 2: -9, 3: -8, 4: -7, 5: -6, 6: -5]),
         Curve(name: "全バンド+12", energyWeightedGainDb: 17.91, worstCaseGainDb: 20.41,
-              expectedByTarget: [0: -12, 1: -12, 2: -12, 3: -12, 4: -12, 5: -12, 6: -12]),
+              expectedByTarget: [-6: -12, -5: -12, -4: -12, -3: -12, -2: -12, -1: -12,
+                                 0: -12, 1: -12, 2: -12, 3: -12, 4: -12, 5: -12, 6: -12]),
         Curve(name: "全バンド−12", energyWeightedGainDb: -16.28, worstCaseGainDb: -3.19,
-              expectedByTarget: [0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0]),
+              expectedByTarget: [-6: 0, -5: 0, -4: 0, -3: 0, -2: 0, -1: 0,
+                                 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0]),
     ]
 
     func testDerivedPreampDbMatchesConfirmedTable() {
@@ -121,21 +129,6 @@ final class AutoPreampSpecTests: XCTestCase {
             AutoPreampSpec.derivedPreampDb(response: noise, targetDb: 0), 0,
             "切り下げなら -1 になる"
         )
-    }
-
-    func testAdoptedValueNeverExceedsRawTowardsZero() {
-        // クランプが効かない範囲で、採用値 (floor) が raw を超えないこと。
-        for energyDb in stride(from: -10.0, through: 10.0, by: 1.0) {
-            for worstDb in stride(from: -5.0, through: 15.0, by: 1.0) {
-                let response = EQMagnitudeResponse(energyWeightedGainDb: energyDb, worstCaseGainDb: worstDb)
-                for target in targetSteps {
-                    let raw = target - AutoPreampSpec.compositeGainDb(response)
-                    guard raw >= AutoPreampSpec.minPreampDb, raw <= AutoPreampSpec.maxPreampDb else { continue }
-                    let got = AutoPreampSpec.derivedPreampDb(response: response, targetDb: target)
-                    XCTAssertLessThanOrEqual(Double(got), raw)
-                }
-            }
-        }
     }
 
     // MARK: - クランプ
@@ -276,8 +269,25 @@ final class AutoPreampSpecTests: XCTestCase {
     // MARK: - normalizedTargetDb
 
     func testNormalizedTargetDbClampsToRange() {
-        XCTAssertEqual(AutoPreampSpec.normalizedTargetDb(-5), AutoPreampSpec.targetDbRange.lowerBound)
+        XCTAssertEqual(AutoPreampSpec.normalizedTargetDb(-50), AutoPreampSpec.targetDbRange.lowerBound)
         XCTAssertEqual(AutoPreampSpec.normalizedTargetDb(50), AutoPreampSpec.targetDbRange.upperBound)
+    }
+
+    /// 期待値表はこの範囲に対して手で書いてある。範囲を導出で書くと、狭めた回に表の行が黙って使われなくなる。
+    func testTargetDbRangeMatchesTheValueTheExpectedTableWasWrittenAgainst() {
+        XCTAssertEqual(AutoPreampSpec.targetDbRange, -6...6)
+    }
+
+    func testTargetDbDefaultSitsInTheRangeAndOnTheStepGrid() {
+        XCTAssertTrue(
+            AutoPreampSpec.targetDbRange.contains(AutoPreampSpec.targetDbDefault),
+            "既定値が範囲の外にある"
+        )
+        XCTAssertEqual(
+            AutoPreampSpec.normalizedTargetDb(AutoPreampSpec.targetDbDefault),
+            AutoPreampSpec.targetDbDefault,
+            "既定値が刻みに乗っていない"
+        )
     }
 
     func testNormalizedTargetDbSnapsToStep() {

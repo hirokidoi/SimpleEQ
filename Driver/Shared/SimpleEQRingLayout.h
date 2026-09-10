@@ -9,10 +9,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define kSimpleEQRingLayoutVersion ((uint32_t)2)
+#define kSimpleEQRingLayoutVersion ((uint32_t)3)
 
 #define kSimpleEQDriverVersionMajor ((uint16_t)2)
-#define kSimpleEQDriverVersionMinor ((uint16_t)0)
+#define kSimpleEQDriverVersionMinor ((uint16_t)1)
 
 #define kSimpleEQRingMagic ((uint32_t)0x53455152u)
 
@@ -133,6 +133,153 @@ static inline bool SimpleEQMixerBuildMatchKey(
     return true;
 }
 
+//==================================================================================================
+#pragma mark Ownership (cross-session arbitration)
+//==================================================================================================
+
+#define kSimpleEQOwnershipSelector ((uint32_t)'seqO')
+
+#define kSimpleEQOwnershipLeaseSeconds        ((double)6.0)
+#define kSimpleEQOwnershipRequestLeaseSeconds ((double)6.0)
+
+/// Set の CFDictionaryRef のキー。"op" は操作名 (kSimpleEQOwnershipOperation* のいずれか)、"uid" は申告値 (表示専用)。
+#define kSimpleEQOwnershipOperationKey "op"
+#define kSimpleEQOwnershipUIDKey       "uid"
+
+#define kSimpleEQOwnershipOperationClaim   "claim"
+#define kSimpleEQOwnershipOperationRequest "request"
+#define kSimpleEQOwnershipOperationCancel  "cancel"
+#define kSimpleEQOwnershipOperationRelease "release"
+#define kSimpleEQOwnershipOperationRenew   "renew"
+
+/// Get が返す CFDictionaryRef のキー。値は共有ヘッダの内容をそのまま映す。
+#define kSimpleEQOwnershipOwnerProcessIDKey   "ownerProcessID"
+#define kSimpleEQOwnershipOwnerUIDKey         "ownerUID"
+#define kSimpleEQOwnershipRequestProcessIDKey "requestProcessID"
+#define kSimpleEQOwnershipRequestUIDKey       "requestUID"
+
+typedef enum
+{
+    kSimpleEQOwnershipOp_Unknown = 0,
+    kSimpleEQOwnershipOp_Claim,
+    kSimpleEQOwnershipOp_Request,
+    kSimpleEQOwnershipOp_Cancel,
+    kSimpleEQOwnershipOp_Release,
+    kSimpleEQOwnershipOp_Renew,
+} SimpleEQOwnershipOp;
+
+typedef enum
+{
+    kSimpleEQOwnershipOutcome_Denied = 0,
+    kSimpleEQOwnershipOutcome_NoChange,
+    kSimpleEQOwnershipOutcome_Applied,
+} SimpleEQOwnershipOutcome;
+
+/// 席を書き換えるかどうかと、書き換えるなら何にするか。pid 0 は空席 (期限も 0 にする)。
+/// renews* は席の中身を動かさず期限だけを延ばす。
+typedef struct
+{
+    SimpleEQOwnershipOutcome outcome;
+    bool     writesOwnerSeat;
+    uint32_t ownerProcessID;
+    uint32_t ownerUID;
+    bool     writesRequestSeat;
+    uint32_t requestProcessID;
+    uint32_t requestUID;
+    bool     renewsOwnerLease;
+    bool     renewsRequestLease;
+} SimpleEQOwnershipPlan;
+
+/// 席が埋まっているかは期限で決める。回収は期限しか落とさないため、pid だけを見ると
+/// 名乗ったまま時間の切れた席を埋まっていると読み、誰も掴めなくなる。
+static inline bool SimpleEQOwnershipSeatIsHeld(
+    uint32_t inProcessID, uint64_t inDeadlineHostTime, uint64_t inNowHostTime)
+{
+    if(inProcessID == 0) { return false; }
+    return inDeadlineHostTime != 0 && inNowHostTime < inDeadlineHostTime;
+}
+
+/// 操作の可否と、席をどう書き換えるか。呼び出し元の同定は inCallerProcessID のみで行い、
+/// inDeclaredUID は申告値であって権利の判定には使わない。
+static inline SimpleEQOwnershipPlan SimpleEQOwnershipComputePlan(
+    SimpleEQOwnershipOp inOperation, uint32_t inCallerProcessID, uint32_t inDeclaredUID,
+    uint32_t inOwnerProcessID, bool inOwnerHoldsSeat,
+    uint32_t inRequestProcessID, uint32_t inRequestUID, bool inRequestStands)
+{
+    SimpleEQOwnershipPlan plan;
+    plan.outcome = kSimpleEQOwnershipOutcome_Denied;
+    plan.writesOwnerSeat = false;
+    plan.ownerProcessID = 0;
+    plan.ownerUID = 0;
+    plan.writesRequestSeat = false;
+    plan.requestProcessID = 0;
+    plan.requestUID = 0;
+    plan.renewsOwnerLease = false;
+    plan.renewsRequestLease = false;
+
+    if(inCallerProcessID == 0) { return plan; }
+
+    switch(inOperation)
+    {
+        case kSimpleEQOwnershipOp_Claim:
+            if(inOwnerHoldsSeat) { return plan; }
+            plan.outcome = kSimpleEQOwnershipOutcome_Applied;
+            plan.writesOwnerSeat = true;
+            plan.ownerProcessID = inCallerProcessID;
+            plan.ownerUID = inDeclaredUID;
+            return plan;
+
+        case kSimpleEQOwnershipOp_Request:
+            // 待ち枠は 1 つしかない。上書きすると、消された側は renew も cancel も自分の要求に届かず待ち続ける。
+            if(inRequestStands && inRequestProcessID != inCallerProcessID) { return plan; }
+            plan.outcome = kSimpleEQOwnershipOutcome_Applied;
+            plan.writesRequestSeat = true;
+            plan.requestProcessID = inCallerProcessID;
+            plan.requestUID = inDeclaredUID;
+            return plan;
+
+        case kSimpleEQOwnershipOp_Cancel:
+            if(inRequestProcessID != inCallerProcessID)
+            {
+                plan.outcome = kSimpleEQOwnershipOutcome_NoChange;
+                return plan;
+            }
+            plan.outcome = kSimpleEQOwnershipOutcome_Applied;
+            plan.writesRequestSeat = true;
+            return plan;
+
+        case kSimpleEQOwnershipOp_Release:
+            if(inOwnerProcessID != inCallerProcessID)
+            {
+                plan.outcome = kSimpleEQOwnershipOutcome_NoChange;
+                return plan;
+            }
+            plan.outcome = kSimpleEQOwnershipOutcome_Applied;
+            plan.writesOwnerSeat = true;
+            // 自分が出した要求へは渡さない。渡すと、満了席を掴んだ直後に終わるインスタンスが
+            // 死んだ自分の pid へ所有権を戻し、次のインスタンスがリース満了まで待たされる。
+            if(inRequestStands && inRequestProcessID != inCallerProcessID)
+            {
+                plan.ownerProcessID = inRequestProcessID;
+                plan.ownerUID = inRequestUID;
+                plan.writesRequestSeat = true;
+            }
+            return plan;
+
+        case kSimpleEQOwnershipOp_Renew:
+            // 期限を延ばすだけで所有者も要求者も動かないため、変化として扱わない。
+            // 変化にすると、通知を受けた側が renew を打ち返し、往復の速さで回り続ける。
+            plan.outcome = kSimpleEQOwnershipOutcome_NoChange;
+            if(inOwnerProcessID == inCallerProcessID) { plan.renewsOwnerLease = true; }
+            else if(inRequestProcessID == inCallerProcessID) { plan.renewsRequestLease = true; }
+            return plan;
+
+        case kSimpleEQOwnershipOp_Unknown:
+        default:
+            return plan;
+    }
+}
+
 typedef struct
 {
     _Atomic uint32_t magic;
@@ -171,6 +318,18 @@ typedef struct
     _Atomic uint64_t mixerNeutralizedCount;
     _Atomic uint64_t mixerGainEntryDroppedCount;
     SimpleEQMixerClientSlot mixerClients[kSimpleEQMixerClientSlotCount];
+
+    _Atomic uint32_t ownerProcessID;
+    _Atomic uint32_t ownerUID;
+    /// mach_absolute_time の目盛り。0 = 所有者なし。
+    _Atomic uint64_t ownershipLeaseDeadlineHostTime;
+    _Atomic uint32_t ownershipGeneration;
+
+    _Atomic uint32_t requestProcessID;
+    _Atomic uint32_t requestUID;
+    /// mach_absolute_time の目盛り。0 = 要求なし。
+    _Atomic uint64_t ownershipRequestLeaseDeadlineHostTime;
+    _Atomic uint32_t ownershipRequestGeneration;
 } SimpleEQRingHeader;
 
 #define kSimpleEQRingPageBytes ((uint32_t)16384)

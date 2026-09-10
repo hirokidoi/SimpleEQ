@@ -96,6 +96,18 @@ final class WindowContextMenuTests: XCTestCase {
         XCTAssertFalse(models.mixer.shown, "もう一度押すと閉じること")
     }
 
+    func testMixerItemIsRefusedWhileSettingsCannotReachAudio() throws {
+        let models = makeModels()
+        models.viewModel.confirmDriverProbe(.versionsUnreadable(.ok))
+        models.viewModel.noteStartupActivationSettled()
+        models.viewModel.updateProcessingState(.active, activeDevice: nil)
+        XCTAssertTrue(try mixerItem(viewModel: models.viewModel, mixer: models.mixer).isEnabled, "前提: 届く間は開ける")
+
+        models.viewModel.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, ownerProcessID: 501))
+        XCTAssertFalse(models.viewModel.settingsReachAudio, "前提: 他セッションが所有している")
+        XCTAssertFalse(try mixerItem(viewModel: models.viewModel, mixer: models.mixer).isEnabled)
+    }
+
     // ビューモードを動かすのは切り替えの項目だけ。ミキサーの項目はどちらのビューでも面だけを動かす。
     func testMixerItemLeavesTheViewModeAlone() throws {
         for mode in ViewMode.allCases {
@@ -123,6 +135,18 @@ final class WindowContextMenuTests: XCTestCase {
             menu.items.map(\.keyEquivalent),
             items.map { $0.commandKey.map(String.init) ?? "" },
             "ショートカットが定義どおりであること"
+        )
+    }
+
+    // 自動有効化に任せると、無効化した項目が表示のたびに有効へ戻る。
+    func testTheMenuKeepsTheRefusalItSetsRatherThanEnablingOnDisplay() {
+        let models = makeModels()
+        models.viewModel.updateOwnership(OwnershipCoordinatorUpdate(isSelfOwner: false, ownerProcessID: 501))
+        let menu = WindowContextMenu.nsMenu(viewModel: models.viewModel, mixer: models.mixer, hideWindow: {})
+
+        XCTAssertFalse(menu.autoenablesItems, "有効・無効を自分で決めた項目を OS に上書きさせない")
+        XCTAssertEqual(
+            menu.item(withTitle: MixerVisibilityMenu.toggle(isShown: models.mixer.shown))?.isEnabled, false
         )
     }
 

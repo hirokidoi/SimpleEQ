@@ -22,9 +22,11 @@ struct TopBarView: View {
     var body: some View {
         HStack(spacing: 12) {
             brand
+            ownershipChip
             Spacer()
             warningChip
-            outputDevicePicker
+            // 出力先は所有している側のものなので、他セッションが使っている間は並べない。
+            if !viewModel.offersOwnershipHandover { outputDevicePicker }
             powerSwitch.modifier(BottomAlignedInBar())
         }
         .padding(.leading, Self.horizontalPadding - Self.brandMarkHitInset)
@@ -111,17 +113,47 @@ struct TopBarView: View {
         }
     }
 
+    /// 他セッションが所有中、または自分が要求中であることを知らせるチップ。
+    /// 警告チップとは別種 (他セッションの使用中は正常な状態であり、危険色は使わない)。
+    @ViewBuilder
+    private var ownershipChip: some View {
+        if viewModel.offersOwnershipHandover {
+            HStack(spacing: 8) {
+                Text(ownershipStatusText)
+                if viewModel.canTakeOwnershipHere {
+                    Button(viewModel.isRequestingOwnership ? "取り消す" : "こちらで使う") {
+                        if viewModel.isRequestingOwnership {
+                            viewModel.cancelOwnershipRequest()
+                        } else {
+                            viewModel.useOwnershipHere()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(EQLayout.Palette.cyan)
+                }
+            }
+            .modifier(BarCapsule(foreground: EQLayout.Palette.dim, stroke: EQLayout.Palette.line) {
+                Capsule().fill(Color.white.opacity(0.02))
+            })
+        }
+    }
+
+    private var ownershipStatusText: String {
+        if viewModel.isRequestingOwnership { return "取得を要求中…" }
+        return viewModel.ownershipOwnerProcessID == 0 ? "ドライバの所有権がありません" : "他のセッションが使用中です"
+    }
+
     private func chip(text: String) -> some View {
         HStack(spacing: 6) {
             Text("⚠").font(.system(size: 11))
             Text(text)
         }
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundColor(EQLayout.Palette.danger)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(Capsule().fill(EQLayout.Palette.danger.opacity(0.12)))
-        .overlay(Capsule().stroke(EQLayout.Palette.danger.opacity(0.5), lineWidth: 1))
+        .modifier(
+            BarCapsule(
+                foreground: EQLayout.Palette.danger,
+                stroke: EQLayout.Palette.danger.opacity(0.5), weight: .semibold
+            ) { Capsule().fill(EQLayout.Palette.danger.opacity(0.12)) }
+        )
     }
 
     /// 出力先チップ。実際に採用されている出力デバイス名を表示しつつ、その場から選び直せる。
@@ -137,16 +169,9 @@ struct TopBarView: View {
             )
             .disabled(!viewModel.canSelectOutputDevice)
         }
-        .font(.system(size: 12))
-        .foregroundColor(EQLayout.Palette.dim)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(
-            Capsule()
-                .fill(Color.white.opacity(0.02))
-                .modifier(chrome)
-        )
-        .overlay(Capsule().stroke(EQLayout.Palette.line, lineWidth: 1))
+        .modifier(BarCapsule(foreground: EQLayout.Palette.dim, stroke: EQLayout.Palette.line) {
+            Capsule().fill(Color.white.opacity(0.02)).modifier(chrome)
+        })
     }
 
     /// プリアンプ調整ポップオーバーを開くアイコン。
@@ -192,6 +217,24 @@ struct TopBarView: View {
         // 音に効きようが無い間は受け付けない。
         // ラベルとつまみは設定値のまま残し、灰色と減光だけで「今は効いていない」を表す。
         .unavailableAppearance(!viewModel.canToggleBypass)
+    }
+}
+
+/// 上部バーのカプセル。用途で変わるのは色と太字だけで、寸法は共通。
+private struct BarCapsule<Background: View>: ViewModifier {
+    var foreground: Color
+    var stroke: Color
+    var weight: Font.Weight = .regular
+    @ViewBuilder var background: () -> Background
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 12, weight: weight))
+            .foregroundColor(foreground)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(background())
+            .overlay(Capsule().stroke(stroke, lineWidth: 1))
     }
 }
 

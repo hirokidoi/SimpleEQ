@@ -270,6 +270,29 @@ final class SharedRingConnectionTests: XCTestCase {
         }
     }
 
+    // MARK: - 所有権 (フィクスチャは全ゼロ既定のため、共有ヘッダ末尾の追加フィールドも未設定 = 不在を表す)
+
+    func testOwnershipIsAbsentByDefault() {
+        let url = makeFixture()
+        guard let reader = try? SharedRingReader.open(path: url.path).get() else { return XCTFail("開けることを期待") }
+
+        XCTAssertFalse(reader.isSelfOwner, "所有者不在は自分の所有ではない")
+        XCTAssertEqual(reader.readOwnershipSnapshot(), OwnershipSnapshot())
+    }
+
+    // 名前が残ったまま期限が過去、という席を実バイト列から作って読む。
+    // ここが空席として読まれなければ、回収の契機が誰からも生まれない閉じた輪になる。
+    func testAnExpiredSeatReadsAsZeroRemainingAndCountsAsEmpty() throws {
+        let url = makeOwnershipHeaderFixture(ownerProcessID: 97009, leaseRemainingSeconds: -3)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let reader = try SharedRingReader.open(path: url.path).get()
+        let snapshot = try XCTUnwrap(reader.readOwnershipSnapshot())
+
+        XCTAssertEqual(snapshot.ownerProcessID, 97009, "名前は残っている")
+        XCTAssertEqual(snapshot.ownershipLeaseRemainingSeconds, 0, "過去の期限は残り 0 へ丸める")
+        XCTAssertFalse(OwnershipPolicy.isOwned(snapshot), "残り 0 の席は空いている")
+    }
+
     // MARK: - 2 段 mmap: 実ファイル長の検証
 
     // 申告長が実ファイル長を上回るフィクスチャは不正なヘッダとして拒否される。

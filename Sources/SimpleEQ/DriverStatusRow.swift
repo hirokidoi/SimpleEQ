@@ -35,14 +35,16 @@ struct DriverStatusRow: View {
             }
             HStack(spacing: 8) {
                 driverActionButton(
-                    title: driverPrimaryActionTitle, enabled: !isDriverActionBusy && !isDriverAvailabilityPending && !isAudioWorldUnresponsive,
+                    title: driverPrimaryActionTitle,
+                    enabled: viewModel.canOperateDriver && !isDriverActionBusy && !isDriverAvailabilityPending && !isAudioWorldUnresponsive,
                     action: { showingInstallOrUpdateConfirmation = true }
                 )
                 // 削除対象が存在しない状態でのアンインストール実行を防ぐため、
                 // 主操作ボタンと同じ可用性に活性状態を連動させる。
                 driverActionButton(
                     title: DriverOperationPrompt.uninstallTitle,
-                    enabled: !isDriverActionBusy && !isDriverAvailabilityPending && !isAudioWorldUnresponsive && viewModel.driverAvailability != .notFound,
+                    enabled: viewModel.canOperateDriver && !isDriverActionBusy && !isDriverAvailabilityPending && !isAudioWorldUnresponsive
+                        && viewModel.driverAvailability != .notFound,
                     action: { showingUninstallConfirmation = true }
                 )
                 if driverActionState == .running {

@@ -10,6 +10,8 @@ enum MixerResolutionKind: Equatable, Sendable {
 }
 
 struct MixerAppIdentity: Equatable, Sendable {
+    static let noBundleSubtitle = "バンドルがありません"
+
     let displayName: String
     let subtitle: String?
     /// アイコンを引く先。バンドルへ遡れなかったときは nil。
@@ -37,6 +39,16 @@ struct MixerAppResolver: Sendable {
     struct BundleInfo: Equatable, Sendable {
         let bundleID: String?
         let displayName: String?
+
+        /// 鳴っている行と鳴っていない行で名前が変わらないよう、バンドルから読む口はここだけにする。
+        /// DisplayName を先に見るのは、利用者が Finder で見ている名前と揃えるため。
+        static func read(from url: URL) -> Self? {
+            guard let bundle = Bundle(url: url) else { return nil }
+            let displayName = (bundle.localizedInfoDictionary?["CFBundleDisplayName"] as? String)
+                ?? (bundle.infoDictionary?["CFBundleDisplayName"] as? String)
+                ?? (bundle.infoDictionary?["CFBundleName"] as? String)
+            return Self(bundleID: bundle.bundleIdentifier, displayName: displayName)
+        }
     }
 
     struct Environment: Sendable {
@@ -71,7 +83,7 @@ struct MixerAppResolver: Sendable {
         guard !executableName.isEmpty else { return .unresolved }
         return MixerAppResolution(
             channelKey: MixerSpec.processKey(executableName),
-            identity: MixerAppIdentity(displayName: executableName, subtitle: "バンドルがありません"),
+            identity: MixerAppIdentity(displayName: executableName, subtitle: MixerAppIdentity.noBundleSubtitle),
             kind: owner.kind
         )
     }
@@ -88,11 +100,20 @@ struct MixerAppResolver: Sendable {
         return (pid, .processItself)
     }
 
+    private static let bundlePathExtensions = ["app", "appex", "xpc"]
+
+    /// 走行中コードの署名を安定させるために OS が作る複製は `<名前>.app.bundle` を名乗る。
+    /// 拡張子 bundle だけを受けると、アプリの内側のプラグインで止まって別のバンドル ID へ落ちる。
+    private static func isBundleDirectory(_ url: URL) -> Bool {
+        if bundlePathExtensions.contains(url.pathExtension) { return true }
+        return url.pathExtension == "bundle" && url.deletingPathExtension().pathExtension == "app"
+    }
+
     static func enclosingBundleURL(executablePath: String) -> URL? {
         var url = URL(fileURLWithPath: executablePath)
         while url.pathComponents.count > 1 {
             // 遡ると末尾に区切りが付くため、比較にも表示にも使える形へ揃え直す。
-            if ["app", "appex", "xpc"].contains(url.pathExtension) { return URL(fileURLWithPath: url.path) }
+            if isBundleDirectory(url) { return URL(fileURLWithPath: url.path) }
             url.deleteLastPathComponent()
         }
         return nil
@@ -116,13 +137,7 @@ extension MixerAppResolver.Environment {
                 guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
                 return buffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
             },
-            bundleInfo: { url in
-                guard let bundle = Bundle(url: url) else { return nil }
-                let displayName = (bundle.localizedInfoDictionary?["CFBundleDisplayName"] as? String)
-                    ?? (bundle.infoDictionary?["CFBundleDisplayName"] as? String)
-                    ?? (bundle.infoDictionary?["CFBundleName"] as? String)
-                return MixerAppResolver.BundleInfo(bundleID: bundle.bundleIdentifier, displayName: displayName)
-            }
+            bundleInfo: { url in MixerAppResolver.BundleInfo.read(from: url) }
         )
     }
 

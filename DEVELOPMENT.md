@@ -24,6 +24,7 @@ To make this path hold together, the app observes several rules.
 - The processing beyond the EQ is split across three stages that differ in how they are implemented and where they sit, and one of them deliberately sits outside what the level meter and the preamp can see (→ The Sound Lab)
 - Too much or too little audio accumulating in the ring is a problem either way, so it is controlled to stay within a fixed range at all times (→ Occupancy Control)
 - The output destination can move due to environmental changes (waking from sleep, another device being connected, and so on), so it is kept in sync by continually checking the actual state (→ Managing the Output Device Route, Restore Target and Restore Obligation)
+- More than one instance of the app can be running on the same host at once (fast user switching, a remote session logged in as another user), yet only one may actually be driving the output stage, so an ownership arbitration decides which one and hands off between them (→ Cross-Session Ownership)
 - Replacing or uninstalling the dedicated driver itself is dangerous while audio is playing, so it is done only after a safety check (→ The Safety Guard Before Driver Operations, Determining Driver Liveness and Automatic Restart)
 
 All of these states can be inspected as actual numbers from the Diagnostics screen.
@@ -42,13 +43,14 @@ All of these states can be inspected as actual numbers from the Diagnostics scre
 - **Occupancy / target occupancy / ceiling occupancy** — Occupancy is the amount of audio accumulated in the ring that has not yet been read; target occupancy is the level the reading side tries to hold it at; ceiling occupancy is the boundary past which correction becomes necessary. The mechanism that maintains the relationship among these three is the subject of → Occupancy Control.
 - **Priming** — Stopping consumption and waiting until occupancy reaches the target. Beginning consumption before it is reached breaks the instantaneous floor and cuts the audio off (→ Occupancy Control).
 - **Control lease** — The expiry the app attaches to the per-application gains it pushes to the dedicated driver, renewed for as long as the app is running, so that gains cannot outlive the app that set them (→ Operating Rules for the Dedicated Driver).
+- **Ownership / ownership lease** — Which single running instance of the app is allowed to drive the output stage and touch the machine-wide default output, arbitrated across every instance the host may be running at once. Held with its own expiry, renewed for as long as the holder runs, in the same shape as the control lease but tracked separately (→ Cross-Session Ownership).
 - **Heartbeat** — A unit of no-op work posted periodically to the audio world's queue. The fact that it runs and returns a timestamp is itself the evidence that the queue is not stuck.
 - **Presentation time** — The time the HAL hands to the dedicated driver on every IO cycle, representing when that audio will be played (→ Constraints on the Realtime Path).
 - **Bypass** — The state in which the EQ, the preamp and the Sound Lab processing are skipped and the input is passed straight to the output, without the audio path itself changing.
 - **Sound Lab** — The processing offered alongside the EQ, presented as one tab per feature on the surface that covers the visualizer. What each feature does is on the user's side (→ [README](README.md)); what matters here is that the features are carried by three stages that sit in different places.
 - **Stereo stage / AU stage / loudness stage** — The three stages the Sound Lab is carried by. The stereo stage and the loudness stage are the app's own processing running on the realtime path; the AU stage is an Apple audio unit connected onto the end of the EQ chain. Which stage carries which feature, and why each sits where it does, is the subject of → The Sound Lab.
 - **Normal view / compact view** — Two ways of presenting the contents of the EQ window. The frame stays as one and only the contents are swapped, so the two are not separate windows, and the window position is held separately per view. Which view is shown and whether the surface is shown are two states that do not constrain each other, so either view can be carrying it. What the surface can present differs, though: only the normal view carries the tabs, and the compact view shows the rows alone.
-- **Target** — How much of a rise the automatic preamp adjustment is willing to leave in place, measured against the level a typical signal is expected to gain. It is not a ceiling on the peak (→ Deriving the Preamp). Raising it leaves the preamp shallower, which buys level at the cost of the peak indicator lighting more often.
+- **Target** — A shift applied on top of cancelling what is added, in either direction. It is not a ceiling on the peak (→ Deriving the Preamp). Raising it leaves the preamp shallower, which buys level at the cost of the peak indicator lighting more often.
 - **Measurement chain** — An offline EQ chain built solely to measure the composite frequency response used to derive the preamp (→ Deriving the Preamp). It never sits on the audio path, and it is a separate chain from the one actually processing audio. It is one of two instruments the derivation uses; what the other one measures, and why it has to be a different tool, is in the same section.
 
 ---
@@ -62,6 +64,7 @@ Everything else (the skeleton of AudioServerPlugIn property dispatch, the basic 
 - Custom properties for the visibility override and the display-name override (showing/hiding the device from the general UI and switching the display name at runtime)
 - A custom property for synthesizing drift (kept hidden as a standalone device custom property; for accelerated testing)
 - A custom property carrying the per-application gains, and a table of the clients attached to the device, through which those gains are applied to each client's own output (→ The Per-Application Mixer)
+- A custom property through which the running instances arbitrate which one drives the output stage, and the expiries beside it that the IO cycle lets lapse (→ Cross-Session Ownership)
 - A setup in which the dB range of the Volume/Mute controls is obtained from the single source in the shared header. These controls themselves, however, do not act on the audio on the path (→ Operating Rules for the Dedicated Driver)
 - Following multiple sample rates and deriving the ring capacity
 - Declaring the device icon (pointing at an image bundled into the bundle)
@@ -108,8 +111,9 @@ There are three of them, each with a different role. They are not kept in lockst
 
 The app and the driver can be modified separately, so their versions are held separately as well. A change to the driver's format bumps both the driver version and the layout version.
 
-The driver version is carried in the shared header, and the app reads it from there. There is no path that reads information from the driver bundle.
+The driver version is carried in the shared header, and the app reads it from there. What that answers is the version the audio service currently has loaded.
 It is read only while the layout version matches, and not being able to read it is itself the cue that a driver reinstall is required.
+The version a driver bundle names is read in one place only, the install (→ Build and Tests).
 
 Where the same value is placed in more than one location — the driver version, the driver's bundle identifier, the device icon file name, the list of sample rates the driver declares, the relative placement of the bundled items — the match is not left to humans; the tests enforce it.
 Moving only one side makes the tests fail.
@@ -123,9 +127,9 @@ Version consistency only holds once the shared header — the foundation of the 
 
 ## The Shared Header Contract
 
-The shared header has two roles.
-One is the definition of the shared memory layout: the structure definitions exist only here, and no duplicates are placed on either the driver side or the app side.
-The other is to serve as the single home for the values that must agree between the driver and the app (the device identifier, the custom property selectors, the output volume dB range, the installation paths, and so on).
+One role of the shared header is the definition of the shared memory layout: the structure definitions exist only here, and no duplicates are placed on either the driver side or the app side.
+Another is to serve as the single home for the values that must agree between the driver and the app (the device identifier, the custom property selectors, the output volume dB range, the installation paths, and so on).
+It also holds the judgements that decide what the driver does, which is what lets the tests drive them.
 Both sides either reference this header directly or read it through dedicated accessors that do not redeclare the values, and neither side keeps a duplicate of a value.
 
 Of these, the device UID is the external interface that a user-assembled Aggregate device configuration points at. Changing it with the intent of tidying up its spelling silently breaks the user's own configuration.
@@ -145,6 +149,10 @@ Reads where it was odd, and reads where the two disagreed, discard that read's v
 
 Some fields have no ordering pair. The most recent IO cycle length, the group of metrics concerning the write position, and the per-client activity a seat in the client table carries (its cycle counter, its peak, its clip count, the gain being applied to it) are those fields; these only rule out races, and guarantee no ordering.
 They are values read as a rough indication, and their ordering relative to other values carries no meaning. When adding a field, decide first which of the two treatments it gets.
+
+The two groups naming who owns the audio path and who waits for it take that same odd-then-even treatment, each on a counter of its own, with one difference: this reading side does retry, since it reads on a low-frequency pass where reading twice costs nothing. The render path's own check reads a single field and takes no part in it.
+
+An odd-and-even window only holds while one writer is at work, so writing these fields is confined to the path that already serializes on a lock. The path that clears a hold whose time has run out runs where locking is forbidden, and does the least it can: it moves the expiry alone and leaves the names beside it as they stand. Nothing is lost, because a seat is judged free by its expiry rather than by the name still written there.
 
 The client table applies the pairing above one seat at a time: the process and bundle a seat describes are written first, and the seat's identifying value is published last, so a reading side that sees a non-zero identifying value can read the rest of that seat. Freeing a seat invalidates its identifying value before anything else is touched, for the same reason recreating the shared memory file does.
 Of the per-application gains, only the expiry that governs them lives here; the gains themselves are held in the driver's own memory (→ The Per-Application Mixer).
@@ -179,6 +187,8 @@ The per-application meter values are carved out for the same reason and in the s
 
 The analyzer's internals (the working buffers, the analysis window, the capture ring) are rebuilt whenever the sample rate changes. The rebuild is mutually exclusive with analysis by way of a lock, but capture is a realtime path and therefore takes no lock. That the two never overlap is guaranteed solely by the ordering that **the rebuild is only ever done while the output stage is stopped**. This order is detected neither by the compiler nor by the tests, so when adding places that call the rebuild, always confirm that the output stage is stopped at that point. The fact that the analyzer reference itself never moves is no substitute for this ordering.
 
+This same ordering — swap it in only while the output stage is stopped — governs every resource a realtime path reads, not the analyzer's internals alone. The shared-memory reader the render callback walks is one more instance of it: it is only ever handed a freshly reopened reader while assembly is rebuilding the output stage, never while that stage is running (→ Cross-Session Ownership).
+
 The measurement chain (→ Deriving the Preamp) is excluded from these resources in the same way, for two reasons: it never sits on the audio path, and a single queue of its own is the only place that creates and uses it; and placing it behind a queue where CoreAudio's synchronous calls can back up would drag the derivation down along with them, the same reasoning that keeps determining the dedicated driver's availability off that queue (→ Determining Driver Liveness and Automatic Restart). What it derives reaches the UI world through the same outbound path as everything else that crosses from the audio world.
 
 The way crossing works is defined asymmetrically by direction.
@@ -206,11 +216,11 @@ Even when a judgement is derived from multiple inputs, the result is not held as
 
 This "derive each time" shows up concretely in the warning indication in the top bar and in the dimming/disabling of each control. The single fact that "there is no way for it to affect the audio" appears split across these two different presentations.
 
-The conditions are not fully identical, however. The dimming/disabling side requires, in addition to no warning being shown, that the availability of the dedicated driver is not still being checked.
+The conditions are not fully identical, however. The dimming/disabling side asks for more than no warning being shown; one of the further terms is that the availability of the dedicated driver is not still being checked.
 No warning is shown while the check is in progress, so right after launch there is an interval where the controls alone are disabled with no warning present. This is intended behavior, meant to avoid looking operable while nothing has been determined yet.
 
 The divergence occurs in the other direction as well. In the interval where the driver has been found but the first assembly at launch has not finished and the output path cannot be established, no warning is shown and the controls remain enabled as well.
-This is meant to avoid reporting an absence at a stage where nothing has been tried yet as an anomaly, but this interval is the only one where the fact that "there is no way for it to affect the audio" surfaces in neither presentation.
+This is meant to avoid reporting an absence at a stage where nothing has been tried yet as an anomaly. In that interval the fact that "there is no way for it to affect the audio" surfaces in neither presentation.
 
 ---
 
@@ -344,9 +354,9 @@ Automatic mode blocks none of the preamp's controls: placing a value through any
 
 What a preview shows is only ever what applying it would produce. Since applying a preset moves the preamp as well, hovering one shows the value derived from that preset's curve, asked for without disturbing the value being held. Applying a preset moves only the curve, so the preview asks with the rest of the inputs left as they stand. Where the answer is not yet at hand, the value currently in effect is shown until it is.
 
-The point where it is applied to the audio sits ahead of everything it offsets, so what it takes away lands at the same place in the chain as what is added. How much it takes away is not the whole of that: the target leaves that much of the expected rise in place, and the result is bounded at both ends and rounded to the nearest step, with a tie going to the deeper side. The target is not a ceiling, so there is no reason to bias the whole result deep; rounding always down would drop a flat curve by a step on measurement noise alone.
+The point where it is applied to the audio sits ahead of everything it offsets, so what it takes away lands at the same place in the chain as what is added. How much it takes away is not the whole of that: the result is shifted by the target, and is bounded at both ends and rounded to the nearest step, with a tie going to the deeper side. The target is not a ceiling, so there is no reason to bias the whole result deep; rounding always down would drop a flat curve by a step on measurement noise alone.
 
-What is added is read two ways, and the deeper of the two decides. One is the rise a typical signal would see, which is what the target is measured against. The other is the steepest rise anywhere in the band, allowed to sit a fixed distance above the first; it is there so that lifting one narrow band steeply is not waved through by an average that barely moves. Where the second decides, the peak can still land above the target.
+What is added is read two ways, and the deeper of the two decides. One is the rise a typical signal would see. The other is the steepest rise anywhere in the band, allowed to sit a fixed distance above the first; it is there so that lifting one narrow band steeply is not waved through by an average that barely moves. Where the second decides, the peak can still land above the target.
 
 Running both counted-in features near their upper bounds can stack up enough that the depth needed exceeds the lower bound the preamp can reach. That bound is shared with the EQ and is not moved for the Sound Lab's sake. The settings that far up do not stand up to ordinary listening, so the shortfall is accepted.
 
@@ -447,14 +457,72 @@ The "restore" that is part of this route management has state of its own, distin
 ## Restore Target and Restore Obligation
 
 A session that has made the dedicated driver claim the default output holds two pieces of state separately: the "obligation" to put the original output destination back on exit, and the "restore target", which is where to put it back to.
-The obligation is set only when this app actually performed the switch in this session (or when the obligation from the previous launch has been carried over). The restore target keeps being updated to follow reality regardless of whether the obligation exists.
+What sets the obligation is carrying the audio, not having been the one who moved the default output. Deciding it the other way would let an instance that merely inherited the situation decline the obligation, restore nothing on exit, and hand the next launch the same inheritance, with nothing to break the loop (→ Cross-Session Ownership). The restore target keeps being updated to follow reality regardless of whether the obligation exists.
 
 If the user or another app moves the default output away from the dedicated driver during the session, the claim is considered released and the obligation is dropped.
-The default output at that moment, however, is recorded as the next restore target. If the claim returns to the dedicated driver, the obligation is set again as well, as long as it originates from this app's own switch.
+The default output at that moment, however, is recorded as the next restore target. The obligation returns when the claim does. What the reconciliation asks for before setting it again is that this session either still holds the obligation or moved the default output itself, so an instance that has handed the audio path over does not pick it up again from the reconciliation alone; taking the path up is what puts it back.
 
 The value representing whether the obligation exists is persisted. Because of that, an exit that could not restore properly — a force quit, for instance — can leave the obligation still set at the next launch.
 Restoring unconditionally on the basis of this value alone would overwrite the user's own choice with a past saved value in the case where the user reselected the output destination themselves after the exit.
 For that reason, both carrying out the restore and setting the obligation again are judged not by the persisted value alone but together with the reality of whether the dedicated driver's device is in fact still being claimed.
+
+---
+
+## Cross-Session Ownership
+
+Fast user switching, a remote session logged in as a different user, and each user's own login-time launch can all put more than one instance of the app on the same host at once. The dedicated driver mixes every client's audio into a single ring, and the default output is one machine-wide setting, so only one instance can be driving the output stage at a time. Ownership is the arbitration that decides which one; a single running instance never has to think about it.
+
+Ownership state lives in the shared header, on lease fields of its own rather than shared with the mixer's control lease, so that adjusting one does not pull on the other. It is read there rather than back through the driver for the same reason the driver's own availability is: what the screen must show correctly is exactly what is hardest to obtain while the audio service is backed up. Operations travel the other way, through a custom property, since the app cannot write into the ring. The driver places what it is told and lets an expiry lapse, the same division of labour it keeps with the per-application gains (→ The Per-Application Mixer). It never picks a holder of its own: where it moves the seat, it is applying a request already recorded beside it, and the rest of what it decides is refusal — it will not hand the seat to a request whose time has run out, nor to the caller's own request, nor record a request while someone else's still stands.
+
+The arbitration assumes every instance taking part in it is the app's own. The property carrying the operations is settable by anything that can reach the host's audio service, and the ring the state is read from is readable by every local account, so what is guarded against is two legitimate instances colliding rather than a process that sets out to hold the seat or to listen in. Identity is the process id the host hands the driver, which a caller cannot forge, and a process id that comes round again once its holder is gone is not told apart from that holder.
+
+While someone holds ownership, no instance takes it automatically. Only while no one holds it does an instance go after it, and only on one of two grounds: it is the session on the console, or it held ownership itself immediately before. Neither is a count — the judgement is made afresh every pass, never spent. Limiting it to a fixed number of attempts would leave an instance that failed to write once unable to try ever again, and nothing about a failed write should forfeit the entitlement.
+
+Console is the right condition for the first ground precisely because only one session holds it at a time: an entitlement decided by launch order or handed to every session at once would be arbitrary or a race, and console being unique makes it neither.
+
+Taking ownership away from a holder carries a further condition: the session asking must be on the console. A session that is not on the console cannot see what it would be taking — its drawing is stopped (→ Rules for UI Rendering) — and taking the audio out from under the session someone is looking at, from one they are not, is not something to offer. Claiming what nobody holds carries no such condition; requiring it there would make an arrangement where the console session is not running the app at all impossible to use.
+
+Ownership moves to a waiting requester only by handshake: the holder stops of its own accord and then releases. No path forces a takeover, because a takeover that does not wait for the holder to stop is the double playback the whole arrangement exists to prevent. A holder that never answers is covered instead by the two expiries running independently of it, so the requester waits at most that long rather than forever.
+
+Waiting that way ends in a claim rather than in a handshake, which leaves the requester holding the seat with its own request still standing beside it. A request an instance left standing is not someone waiting to be handed to; reading it as one makes that instance hand the seat to itself the moment it takes it, stepping down from the responsibilities it has just taken up. Only a request from elsewhere is a handover to answer, and the standing one needs nothing done to it — nobody renews a request they no longer wait on.
+
+An expiry is not a countdown anyone runs. A spent seat is cleared only where the driver is reached — on an ownership operation, or on an IO cycle while audio is flowing through it — and neither is something the waiting side can bring about. So a spent lease is read as an empty seat by whoever reads the header, rather than waited on, and the claim that follows is itself what clears it. Reading it as still held closes the loop instead: the reader declines to act because someone appears to hold the seat, and nothing then arrives to clear it. The same reading governs what the surfaces say, so a holder whose time is spent is not named to them — a seat reported as occupied is one nobody would offer to take.
+
+An expiry does not by itself silence whichever instance was still holding it. The render path reads who owns the seat with one more lock-free load and renders silence whenever that is not itself. This check never goes through the ownership property or the control path, so it stays correct through exactly the failure the lease exists to cover. It also means a transient stall costs nothing beyond the stall: once the rightful owner reclaims the lease the check clears on its own, with no need to tear the output stage down.
+
+Losing ownership one did not ask to lose is not itself a reason to give up. An instance that held ownership immediately before, and now finds no one holding it, reclaims it regardless of whether it is on the console. Without this, a single user running alone would lose sound for good the moment their own instance stalled even briefly, which the mechanism must never make worse than not having it at all.
+
+That reclaim rests on the memory of having held ownership a moment ago, and the memory has to survive exactly the window it is there to recover from. While the state cannot be read at all — which is what a driver reinitializing looks like from the outside — the memory keeps its previous value. Clearing it there would forget the fact in the one interval where it is needed.
+
+A reinstall replaces the file the shared region lives in, and the seat a render path finds in the old one still names this instance, so nothing stops it on its own. The periodic pass therefore stops the output stage when it sees the file underneath replaced, which is what gets the reader rebuilt (→ Crossing Rules Between the Audio World and the UI World). Only the pass that acts consumes that observation; an entry point that merely reads the state leaves it standing.
+
+Giving ownership up hands over three responsibilities together, because dropping one without the others corrupts what the next owner is doing: the visibility of the dedicated driver's device, its display name, and the obligation to restore the default output on exit (→ Restore Target and Restore Obligation). Giving them up means dropping the responsibility itself, never performing what it implies — an instance that keeps running must not touch the device the new owner is using, and one that exits without holding ownership carries out none of the clean-exit sequence. It also means forgetting that this instance was the one that moved the default output, or the ordinary reconciliation puts the obligation straight back and the exit takes the output away from the new owner.
+
+An instance on its way out stops taking any interest in ownership before it releases. A release is a change like any other and the releasing instance is subscribed to it; what comes back names an empty seat with this instance as its last holder, which is the entitlement to reclaim. So it takes the seat back on the way through the door and leaves a lease nobody will renew. Stopping the periodic pass is not enough, because the change arrives by its own path.
+
+It also puts the device back before it frees the seat, not after. Freeing it first hands ownership to a waiting requester on the spot, and everything the exit still has to do — returning the display name, putting the default output back, hiding the device — would then land on the device the new owner has just taken up.
+
+Responsibilities that only ever move one way pile up nowhere, so the instance that takes ownership up takes them on as well. What to put back is not guessed at — where nothing is saved yet, the destination in use at the moment the path is taken up stands in.
+
+Renewing a lease is not a change to ownership: the holder and the requester are the same before and after, and only an expiry moves. Announcing it closes a loop — the announcement wakes the very pass that renews, which announces again — that spins at the speed of a round trip and floods the host's audio service for as long as anyone holds ownership. Announcements are reserved for the holder or the requester actually being replaced.
+
+Which operation to send is the app's decision, not the driver's. A request only records who is waiting and never promotes anyone, so sent while nobody holds ownership it would wait on a release no one is going to perform; the app sends a claim in that case. There is one seat for waiting, so a request is refused while someone else's still stands rather than replacing it — the instance whose request was replaced would go on renewing something the driver no longer has under its name, and wait for a handover that can never reach it.
+
+Neither the handshake nor the lease reclaim touches the default output. Restoring it on handoff would only be reclaimed straight back by the new owner, producing an audible flicker for no benefit.
+
+Not holding ownership is, for the surfaces the user operates, the same condition as being unable to reach the dedicated driver at all, and it folds into that same judgement rather than into the top-bar warning: another session using the audio path is a normal state, and reporting it as an anomaly would misdirect the search for a cause on a machine working as designed. Losing ownership goes further than the other terms and folds away a surface already open, because the session it belongs to is about to be driven by someone else. Driver installation is the exception, gated on ownership alone — folding it in with the rest would make a first install impossible before anyone holds ownership yet. Where ownership cannot be read at all, that gate reads the seat as free, since a state that cannot be read is what a machine with no driver installed looks like.
+
+Whether the window comes up at launch when the setting asks for it turns on the same distinction. The one case it stays down is another session actually holding the path, since the picture would be of controls that cannot reach the audio. A state that could not be read is not that case — it looks the same as a machine with no driver installed, and the way to install one is inside the window.
+
+Telling the user that another session holds the path is a separate judgement from offering to take it. Ownership having actually been read and the driver being usable are among what the offer asks for, because a read that fails falls to "not the owner" — a deliberate bias, since the opposite risks two instances playing at once — and treating that as an invitation would offer a takeover on a machine whose driver is merely missing. Both are withheld until the launch sequence has settled where the audio goes, for the same reason nothing is reported while the driver's availability is still being determined.
+
+Route reconciliation knows nothing about ownership; it acts on the processing state. That is why an instance starts out suspended for lack of ownership rather than for lack of a route: settling ownership is asynchronous, and in the interval before it settles the reconciliation would otherwise read an ordinary missing route and resume the output stage on its own, seizing the default output before anyone knows whether this instance may drive anything. Starting from the right state closes that window with the gates that already exist, rather than adding a new gate to each place it could open.
+
+Writing the device's display name needs its own reading of the state. An instance that does not hold ownership would write the fixed name, erasing the holder's, and would seize the default output in passing because publishing a name change works by handing it away and taking it back. The gate closes only for the lack of ownership: an instance stopped for a driver operation or its own termination is still the one carrying the route, so this is not the same condition as whether to keep maintaining visibility, and the two must not share a predicate.
+
+The per-application gains are gated on ownership as well, since the table is one and pushing while another instance owns the path would replace what that instance laid down. The gate is a refusal to write at all rather than a table left empty: an empty table is itself a write, and it would clear the new owner's rows on the way out. Nothing is left applied by refusing, because the expiry the gains carry lapses on its own and the new owner's own push arrives first (→ The Per-Application Mixer). This is the one gate that reads the ownership this instance still counts as its own — its own seat, or one it held that nobody has taken since — instead of the safe-side reading the surfaces take, because the audio goes on playing through a window where the state cannot be read, and standing down there would let the expiry return every application the user had turned down to neutral while it is still sounding.
+
+Whether this session is on the console is read from the same place the screen's own visibility is, but tracks the raw signals as independent values rather than only their combined one. Change is otherwise detected by comparing the combined value against its previous reading, so a change in one raw signal that the combined value absorbs — console moving underneath a screen that stays locked throughout — would go unnoticed for as long as the lock persists.
 
 ---
 
@@ -512,6 +580,7 @@ The other entry point is the Settings button on the preset rail in the normal vi
 The screen is divided into panels (sections), each of which tries to answer a different question.
 
 - A panel that reflects what configuration it is running in right now. Versions, the sample rates in various places, the driver's IO running state, the ring capacity, the target and ceiling occupancy, and so on are laid out here.
+- A panel that reflects what the header says about who holds the audio path right now.
 - A panel that reflects how much the screen is being redrawn and how much of that redrawing changes anything. Whether each drawing clock runs, the rate it is scheduled at, and the rate actually measured are laid out here.
 - A panel that reflects whether the audio is flowing without interruption. Occupancy and its gauge, the recent fluctuation range, the peak amplitude, and so on are laid out here.
 - A panel that reflects what has happened so far. The number of times occupancy was cleared, the number of anomalies observed on the writing side, and so on are laid out as cumulative totals since the last reset.
@@ -547,7 +616,11 @@ The window is shorter than the interval at which the screen refreshes itself, so
 
 ### How to Read the Numbers
 
-The following is a guide to reading, in actual operation, the values on each of the panels reflecting "the current configuration", "the drawing", "the health of the audio flow", and "what has happened so far".
+The following is a guide to reading, in actual operation, the values on each of the panels reflecting "the current configuration", "who holds the audio path", "the drawing", "the health of the audio flow", and "what has happened so far".
+
+**Ownership**
+Every row but the first shows the header as it stands rather than a judgement made from it. A name still sitting beside a hold with no time left is therefore ordinary, and says nothing about whether the seat counts as taken — everywhere else it counts as free. The first row is the judgement this instance acts on, which asks only whether the name is its own and not whether the time has run out, so a spent seat of one's own reads as owned there while the rows beneath it read as free.
+The uid beside a process id is what that instance declared when it wrote, not something the host vouches for; only the process id is the identity the arbitration goes by.
 
 **The visualizer's drawing clock (scheduled, fired, applied)**
 Three values are read down the column. The scheduled rate is what the clock was built to run at. It sits below the setting for either of two reasons — the visualizer has dropped to its idle step, or the ceiling is being held down while the machine is on low power — so the two have to be told apart by what else is true at the time rather than by this row alone. The fired rate is how often the clock actually came round: it falling short of the scheduled rate means the main thread is not keeping up. The applied rate is how much of that firing reached the layers at all.
@@ -689,7 +762,9 @@ What is read for this is whether the window is visible, not its occlusion state,
 Where one surface inside the EQ window stands in the visualizer's place, the gates for the two are derived at a single place from the same inputs rather than written from each side that shows or hides something, because a gate assembled from more than one input is where one of them gets left behind.
 A meter that is redrawn every frame discards what it was left holding — the values that piled up while its clock was stopped, and the height it is still drawn at — at the moment it becomes visible again, whether or not the clock itself starts on that occasion. What the smoothing is holding counts as held as well: emptying the input alone leaves it to decay from the height it had, since the next displayed value is built from the previous one. A peak that is cleared on retrieval keeps growing while nothing retrieves it, and a counter read as a difference has no baseline for the interval nobody watched, so the first frame after resuming would otherwise show the whole stopped period at once. Totals that accumulate from a reset are not among them.
 
-Whether the screen is visible is decided by reading the actual state — whether the session is locked, whether the main display is asleep, whether the session holds the console — rather than by remembering what the last notification said. Notifications only say when to read again. The three do not move together and their order is not fixed, so any one of them pointing away from visible is what settles it. Reading on a notification can also be too early: the display's own flag has been observed still saying asleep at the moment the wake notification arrives, which leaves the drawing stopped until something reads again. That is why any application coming to the front counts as a trigger — it is what ends that state, and removing it leaves a screen that comes back with nothing being drawn on it. What no reading covers at all is a display switched off at the panel over DDC; that path never reaches the OS, and the screen stays visible as far as anything here can tell.
+Whether the screen is visible is decided by reading the actual state — whether the session is locked, whether the main display is asleep, whether the session holds the console — rather than by remembering what the last notification said. Notifications only say when to read again. The three do not move together and their order is not fixed.
+
+The lock settles it on its own, since a locked session has to be unlocked to be seen at all, remotely or not. What the remaining two mean depends on where the session is being looked at from. The main display answers for the session on the console, so that one follows it and stops drawing when the display sleeps. A session that is not on the console is being looked at from elsewhere, where neither the console nor the main display says anything about whether anyone is watching; what stands in for them there is whether the session is driving the audio, since that is the picture worth drawing. Only one instance carries the audio at a time, so this does not multiply the drawing across sessions (→ Cross-Session Ownership). Reading on a notification can also be too early: the display's own flag has been observed still saying asleep at the moment the wake notification arrives, which leaves the drawing stopped until something reads again. That is why any application coming to the front counts as a trigger — it is what ends that state, and removing it leaves a screen that comes back with nothing being drawn on it. What no reading covers at all is a display switched off at the panel over DDC; that path never reaches the OS, and the screen stays visible as far as anything here can tell.
 
 The ceiling both drawing clocks read is derived at a single point from the setting and the power state, and is held as plain storage rather than behind a change publisher. Each clock then applies its own further limit — an idle step for one, a rate cap for the other — which belong to that clock rather than to the shared ceiling. What Diagnostics shows as the setting stays the value the user chose, so that a ceiling holding it down reads as the gap between the two rather than being hidden by replacing one with the other.
 
@@ -781,6 +856,8 @@ Building the app includes building the driver and bundles the product under Reso
 The scripts read the header relative to their own location, so the bundled items are placed in the same relative arrangement as in the source tree. This arrangement appears split between the side that writes it (`project.yml`) and the side that reads it (the app and both scripts), and the match is enforced by the tests.
 The tests do not assemble the app bundle, so whether the bundling itself succeeded is confirmed on a real machine.
 The install script looks for the driver binary in the bundled location and, failing that, looks at the build product in the source tree. This is what keeps alive the path for replacing the driver without going through the app.
+
+Two conditions end the install rather than leaving it half-done: an older driver will not go over a newer one, and the directory holding the shared memory must end up owned by the account the audio service runs as. The first keeps the version from walking backwards when an older instance reaches its own reinstall path; it compares the two bundles' own version strings, and where either cannot be read it lets the install through rather than blocking on a comparison it cannot make. The second is what lets the driver recreate the ring at all — a leftover ring file owned by anyone else stops it, and the symptom is silence with nothing pointing at the cause — so the file is removed on every install. Both read as an ordinary failed install; the reason is said on the way out rather than encoded for the caller, which can do nothing with it either way.
 
 Installing and removing the driver requires administrator privileges, so they are not run from `make`; it only prints the commands. The printed commands are run by hand.
 

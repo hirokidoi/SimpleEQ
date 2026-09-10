@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "SimpleEQRingLayout.h"
 
@@ -188,11 +189,18 @@ static void SimpleEQRing_Init(void)
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/%s", kSimpleEQRingDirectoryPath, kSimpleEQRingFileName);
 
-    int fd = open(path, O_CREAT | O_RDWR, 0666);
+    int fd = open(path, O_CREAT | O_RDWR, 0644);
     if(fd < 0)
     {
         DebugMsg("SimpleEQRing_Init: open(%s) failed errno=%d", path, errno);
         return;
+    }
+
+    // 狭めると所有権を読む経路が全セッションで閉じ、緩めると他ユーザが音声と席を書き換えられる。
+    // 作成時のモードは既存ファイルへ効かないため、開いた後で揃え直す。
+    if(fchmod(fd, 0644) != 0)
+    {
+        DebugMsg("SimpleEQRing_Init: fchmod(%s) failed errno=%d", path, errno);
     }
 
     UInt32 theRingFrames = SimpleEQRing_ComputeRingFrames();
@@ -246,6 +254,14 @@ static void SimpleEQRing_Init(void)
     atomic_store_explicit(&gSimpleEQRing_Header->mixerNeutralizedCount, 0, memory_order_relaxed);
     atomic_store_explicit(&gSimpleEQRing_Header->mixerGainEntryDroppedCount, 0, memory_order_relaxed);
     memset(gSimpleEQRing_Header->mixerClients, 0, sizeof(gSimpleEQRing_Header->mixerClients));
+    atomic_store_explicit(&gSimpleEQRing_Header->ownerProcessID, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->ownerUID, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->ownershipLeaseDeadlineHostTime, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->ownershipGeneration, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->requestProcessID, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->requestUID, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->ownershipRequestLeaseDeadlineHostTime, 0, memory_order_relaxed);
+    atomic_store_explicit(&gSimpleEQRing_Header->ownershipRequestGeneration, 0, memory_order_relaxed);
 
     gSimpleEQRing_Body = SimpleEQRingBody(theMappedMemory);
 
@@ -347,6 +363,18 @@ static void SimpleEQRing_WriteAudio(const float *inInterleaved, UInt32 inFrames,
 
 //==================================================================================================
 #pragma mark -
+#pragma mark Host Clock
+//==================================================================================================
+
+static Float64 HostTicksPerSecond(void)
+{
+    struct mach_timebase_info theTimeBaseInfo;
+    mach_timebase_info(&theTimeBaseInfo);
+    return ((Float64)theTimeBaseInfo.denom / (Float64)theTimeBaseInfo.numer) * 1000000000.0;
+}
+
+//==================================================================================================
+#pragma mark -
 #pragma mark SimpleEQ Mixer
 //==================================================================================================
 
@@ -374,9 +402,7 @@ static Float64 gMixer_HostTicksPerSecond = 0.0;
 
 static void SimpleEQMixer_Init(void)
 {
-    struct mach_timebase_info theTimeBaseInfo;
-    mach_timebase_info(&theTimeBaseInfo);
-    gMixer_HostTicksPerSecond = ((Float64)theTimeBaseInfo.denom / (Float64)theTimeBaseInfo.numer) * 1000000000.0;
+    gMixer_HostTicksPerSecond = HostTicksPerSecond();
 
     for(uint32_t i = 0; i < kSimpleEQMixerClientSlotCount; i++)
     {
@@ -702,6 +728,229 @@ static CFDictionaryRef SimpleEQMixer_CopyGainTable(void)
 
 //==================================================================================================
 #pragma mark -
+#pragma mark SimpleEQ Ownership
+//==================================================================================================
+
+static pthread_mutex_t gOwnership_Mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static uint64_t SimpleEQOwnership_LeaseDeadline(double inLeaseSeconds)
+{
+    return mach_absolute_time() + (uint64_t)(inLeaseSeconds * HostTicksPerSecond());
+}
+
+static bool SimpleEQOwnership_SeatIsHeld(uint32_t inProcessID, _Atomic uint64_t *inDeadline)
+{
+    uint64_t theDeadline = atomic_load_explicit(inDeadline, memory_order_acquire);
+    return SimpleEQOwnershipSeatIsHeld(inProcessID, theDeadline, mach_absolute_time());
+}
+
+// 期限を落とすだけで、席の中身には触れない。触れると IO 経路が制御経路と並んでフィールドを書く側になり、
+// 世代で括る書き込みの単一性が崩れる。読む側は期限だけで席の空きを決めるため、中身の消去には依存しない。
+static bool SimpleEQOwnership_ReclaimOwnerIfExpired(SimpleEQRingHeader *inHeader)
+{
+    uint64_t theDeadline = atomic_load_explicit(&inHeader->ownershipLeaseDeadlineHostTime, memory_order_acquire);
+    if(theDeadline == 0 || mach_absolute_time() < theDeadline) { return false; }
+
+    uint64_t theExpected = theDeadline;
+    return atomic_compare_exchange_strong_explicit(&inHeader->ownershipLeaseDeadlineHostTime,
+                                                    &theExpected, 0,
+                                                    memory_order_acq_rel, memory_order_relaxed);
+}
+
+static bool SimpleEQOwnership_ReclaimRequestIfExpired(SimpleEQRingHeader *inHeader)
+{
+    uint64_t theDeadline = atomic_load_explicit(&inHeader->ownershipRequestLeaseDeadlineHostTime, memory_order_acquire);
+    if(theDeadline == 0 || mach_absolute_time() < theDeadline) { return false; }
+
+    uint64_t theExpected = theDeadline;
+    return atomic_compare_exchange_strong_explicit(&inHeader->ownershipRequestLeaseDeadlineHostTime,
+                                                    &theExpected, 0,
+                                                    memory_order_acq_rel, memory_order_relaxed);
+}
+
+// 書き込みの前後で世代を進める。奇数の間は中身が書き換え中で、読む側はその回を捨てる。
+// 呼ぶのは制御経路だけで、そこは mutex で直列化されている (IO 経路はフィールドを書かない)。
+static void SimpleEQOwnership_BeginWrite_Locked(_Atomic uint32_t *inGeneration)
+{
+    atomic_fetch_add_explicit(inGeneration, 1, memory_order_relaxed);
+    atomic_thread_fence(memory_order_release);
+}
+
+static void SimpleEQOwnership_EndWrite_Locked(_Atomic uint32_t *inGeneration)
+{
+    atomic_thread_fence(memory_order_release);
+    atomic_fetch_add_explicit(inGeneration, 1, memory_order_relaxed);
+}
+
+static bool SimpleEQOwnership_ReclaimExpired(SimpleEQRingHeader *inHeader)
+{
+    if(inHeader == NULL) { return false; }
+    bool theOwnerReclaimed = SimpleEQOwnership_ReclaimOwnerIfExpired(inHeader);
+    bool theRequestReclaimed = SimpleEQOwnership_ReclaimRequestIfExpired(inHeader);
+    return theOwnerReclaimed || theRequestReclaimed;
+}
+
+static SimpleEQOwnershipOp SimpleEQOwnership_OperationFromString(CFStringRef inOperation)
+{
+    if(CFEqual(inOperation, CFSTR(kSimpleEQOwnershipOperationClaim)))   { return kSimpleEQOwnershipOp_Claim; }
+    if(CFEqual(inOperation, CFSTR(kSimpleEQOwnershipOperationRequest))) { return kSimpleEQOwnershipOp_Request; }
+    if(CFEqual(inOperation, CFSTR(kSimpleEQOwnershipOperationCancel)))  { return kSimpleEQOwnershipOp_Cancel; }
+    if(CFEqual(inOperation, CFSTR(kSimpleEQOwnershipOperationRelease))) { return kSimpleEQOwnershipOp_Release; }
+    if(CFEqual(inOperation, CFSTR(kSimpleEQOwnershipOperationRenew)))   { return kSimpleEQOwnershipOp_Renew; }
+    return kSimpleEQOwnershipOp_Unknown;
+}
+
+// 両方の席を動かす回は、所有者の窓の内側に要求の窓を置く。
+static void SimpleEQOwnership_ApplyPlan_Locked(SimpleEQRingHeader *inHeader, SimpleEQOwnershipPlan inPlan)
+{
+    if(inPlan.writesOwnerSeat)
+    {
+        SimpleEQOwnership_BeginWrite_Locked(&inHeader->ownershipGeneration);
+        atomic_store_explicit(&inHeader->ownerProcessID, inPlan.ownerProcessID, memory_order_relaxed);
+        atomic_store_explicit(&inHeader->ownerUID, inPlan.ownerUID, memory_order_relaxed);
+        atomic_store_explicit(&inHeader->ownershipLeaseDeadlineHostTime,
+                               inPlan.ownerProcessID == 0
+                                   ? (uint64_t)0
+                                   : SimpleEQOwnership_LeaseDeadline(kSimpleEQOwnershipLeaseSeconds),
+                               memory_order_relaxed);
+    }
+    if(inPlan.writesRequestSeat)
+    {
+        SimpleEQOwnership_BeginWrite_Locked(&inHeader->ownershipRequestGeneration);
+        atomic_store_explicit(&inHeader->requestProcessID, inPlan.requestProcessID, memory_order_relaxed);
+        atomic_store_explicit(&inHeader->requestUID, inPlan.requestUID, memory_order_relaxed);
+        atomic_store_explicit(&inHeader->ownershipRequestLeaseDeadlineHostTime,
+                               inPlan.requestProcessID == 0
+                                   ? (uint64_t)0
+                                   : SimpleEQOwnership_LeaseDeadline(kSimpleEQOwnershipRequestLeaseSeconds),
+                               memory_order_relaxed);
+        SimpleEQOwnership_EndWrite_Locked(&inHeader->ownershipRequestGeneration);
+    }
+    if(inPlan.writesOwnerSeat)
+    {
+        SimpleEQOwnership_EndWrite_Locked(&inHeader->ownershipGeneration);
+    }
+
+    if(inPlan.renewsOwnerLease)
+    {
+        atomic_store_explicit(&inHeader->ownershipLeaseDeadlineHostTime,
+                               SimpleEQOwnership_LeaseDeadline(kSimpleEQOwnershipLeaseSeconds), memory_order_relaxed);
+    }
+    if(inPlan.renewsRequestLease)
+    {
+        atomic_store_explicit(&inHeader->ownershipRequestLeaseDeadlineHostTime,
+                               SimpleEQOwnership_LeaseDeadline(kSimpleEQOwnershipRequestLeaseSeconds), memory_order_relaxed);
+    }
+}
+
+static SimpleEQOwnershipOutcome SimpleEQOwnership_ApplyOperation_Locked(
+    SimpleEQRingHeader *inHeader, pid_t inClientProcessID, uint32_t inDeclaredUID, CFStringRef inOperation)
+{
+    uint32_t theOwnerID    = atomic_load_explicit(&inHeader->ownerProcessID, memory_order_relaxed);
+    uint32_t theRequestID  = atomic_load_explicit(&inHeader->requestProcessID, memory_order_relaxed);
+    uint32_t theRequestUID = atomic_load_explicit(&inHeader->requestUID, memory_order_relaxed);
+
+    SimpleEQOwnershipPlan thePlan = SimpleEQOwnershipComputePlan(
+        SimpleEQOwnership_OperationFromString(inOperation),
+        (uint32_t)inClientProcessID, inDeclaredUID,
+        theOwnerID, SimpleEQOwnership_SeatIsHeld(theOwnerID, &inHeader->ownershipLeaseDeadlineHostTime),
+        theRequestID, theRequestUID, SimpleEQOwnership_SeatIsHeld(theRequestID, &inHeader->ownershipRequestLeaseDeadlineHostTime)
+    );
+    SimpleEQOwnership_ApplyPlan_Locked(inHeader, thePlan);
+    return thePlan.outcome;
+}
+
+static uint32_t SimpleEQOwnership_ExtractDeclaredUID(CFDictionaryRef inDict)
+{
+    CFTypeRef theValue = CFDictionaryGetValue(inDict, CFSTR(kSimpleEQOwnershipUIDKey));
+    if(theValue == NULL || CFGetTypeID(theValue) != CFNumberGetTypeID()) { return 0; }
+
+    int64_t theUID = 0;
+    if(!CFNumberGetValue((CFNumberRef)theValue, kCFNumberSInt64Type, &theUID)) { return 0; }
+    if(theUID < 0 || theUID > (int64_t)UINT32_MAX) { return 0; }
+    return (uint32_t)theUID;
+}
+
+#define kSimpleEQOwnershipReadMaxAttempts 8
+
+// 世代が偶数であることを確かめ、内容を読み、世代を再読して一致を見る。奇数か不一致なら再試行する
+// (制御経路のみ。リアルタイム経路はこれを使わない)。
+static void SimpleEQOwnership_ReadOwnerSnapshot(const SimpleEQRingHeader *inHeader, uint32_t *outProcessID, uint32_t *outUID)
+{
+    for(int theAttempt = 0; theAttempt < kSimpleEQOwnershipReadMaxAttempts; theAttempt++)
+    {
+        uint32_t theBefore = atomic_load_explicit(&inHeader->ownershipGeneration, memory_order_acquire);
+        if((theBefore & 1u) != 0u) { continue; }
+        uint32_t theProcessID = atomic_load_explicit(&inHeader->ownerProcessID, memory_order_relaxed);
+        uint32_t theUID = atomic_load_explicit(&inHeader->ownerUID, memory_order_relaxed);
+        atomic_thread_fence(memory_order_acquire);
+        uint32_t theAfter = atomic_load_explicit(&inHeader->ownershipGeneration, memory_order_acquire);
+        if(theBefore == theAfter)
+        {
+            *outProcessID = theProcessID;
+            *outUID = theUID;
+            return;
+        }
+    }
+    *outProcessID = atomic_load_explicit(&inHeader->ownerProcessID, memory_order_relaxed);
+    *outUID = atomic_load_explicit(&inHeader->ownerUID, memory_order_relaxed);
+}
+
+static void SimpleEQOwnership_ReadRequestSnapshot(const SimpleEQRingHeader *inHeader, uint32_t *outProcessID, uint32_t *outUID)
+{
+    for(int theAttempt = 0; theAttempt < kSimpleEQOwnershipReadMaxAttempts; theAttempt++)
+    {
+        uint32_t theBefore = atomic_load_explicit(&inHeader->ownershipRequestGeneration, memory_order_acquire);
+        if((theBefore & 1u) != 0u) { continue; }
+        uint32_t theProcessID = atomic_load_explicit(&inHeader->requestProcessID, memory_order_relaxed);
+        uint32_t theUID = atomic_load_explicit(&inHeader->requestUID, memory_order_relaxed);
+        atomic_thread_fence(memory_order_acquire);
+        uint32_t theAfter = atomic_load_explicit(&inHeader->ownershipRequestGeneration, memory_order_acquire);
+        if(theBefore == theAfter)
+        {
+            *outProcessID = theProcessID;
+            *outUID = theUID;
+            return;
+        }
+    }
+    *outProcessID = atomic_load_explicit(&inHeader->requestProcessID, memory_order_relaxed);
+    *outUID = atomic_load_explicit(&inHeader->requestUID, memory_order_relaxed);
+}
+
+static void SimpleEQOwnership_SetUInt32(CFMutableDictionaryRef inDict, CFStringRef inKey, uint32_t inValue)
+{
+    int64_t theValue = (int64_t)inValue;
+    CFNumberRef theNumber = CFNumberCreate(NULL, kCFNumberSInt64Type, &theValue);
+    if(theNumber == NULL) { return; }
+    CFDictionarySetValue(inDict, inKey, theNumber);
+    CFRelease(theNumber);
+}
+
+// 状態を二重に持たない。共有ヘッダの内容をそのまま映すだけで、driver 側に別の保存場所は作らない。
+static CFDictionaryRef SimpleEQOwnership_CopySnapshot(const SimpleEQRingHeader *inHeader)
+{
+    uint32_t theOwnerProcessID = 0, theOwnerUID = 0, theRequestProcessID = 0, theRequestUID = 0;
+    if(inHeader != NULL)
+    {
+        SimpleEQOwnership_ReadOwnerSnapshot(inHeader, &theOwnerProcessID, &theOwnerUID);
+        SimpleEQOwnership_ReadRequestSnapshot(inHeader, &theRequestProcessID, &theRequestUID);
+    }
+
+    CFMutableDictionaryRef theSnapshot = CFDictionaryCreateMutable(NULL, 4,
+                                                                    &kCFTypeDictionaryKeyCallBacks,
+                                                                    &kCFTypeDictionaryValueCallBacks);
+    if(theSnapshot == NULL) { return NULL; }
+
+    SimpleEQOwnership_SetUInt32(theSnapshot, CFSTR(kSimpleEQOwnershipOwnerProcessIDKey), theOwnerProcessID);
+    SimpleEQOwnership_SetUInt32(theSnapshot, CFSTR(kSimpleEQOwnershipOwnerUIDKey), theOwnerUID);
+    SimpleEQOwnership_SetUInt32(theSnapshot, CFSTR(kSimpleEQOwnershipRequestProcessIDKey), theRequestProcessID);
+    SimpleEQOwnership_SetUInt32(theSnapshot, CFSTR(kSimpleEQOwnershipRequestUIDKey), theRequestUID);
+
+    return theSnapshot;
+}
+
+//==================================================================================================
+#pragma mark -
 #pragma mark Helpers
 //==================================================================================================
 
@@ -740,11 +989,7 @@ static bool IsValidSampleRate(Float64 inSampleRate)
 
 static void RecalculateTicksPerFrame_Locked(void)
 {
-    struct mach_timebase_info theTimeBaseInfo;
-    mach_timebase_info(&theTimeBaseInfo);
-    Float64 theHostClockFrequency = (Float64)theTimeBaseInfo.denom / (Float64)theTimeBaseInfo.numer;
-    theHostClockFrequency *= 1000000000.0;
-    Float64 theHostTicksPerFrame = theHostClockFrequency / gDevice_SampleRate;
+    Float64 theHostTicksPerFrame = HostTicksPerSecond() / gDevice_SampleRate;
     pthread_mutex_lock(&gDevice_IOMutex);
     gDevice_AdjustedTicksPerFrame = theHostTicksPerFrame * (1.0 - gDriftCompositionPpm * 1e-6);
     pthread_mutex_unlock(&gDevice_IOMutex);
@@ -1739,6 +1984,7 @@ static const AudioServerPlugInCustomPropertyInfo kDevice_CustomPropertyList[] = 
     { kAudioDevicePropertyCustom_NameOverride,       kAudioServerPlugInCustomPropertyDataTypeCFString,       kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQDriftCompositionSelector,             kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQMixerGainSelector,                    kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
+    { kSimpleEQOwnershipSelector,                    kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
 };
 static const UInt32 kDevice_CustomPropertyListBytes = sizeof(kDevice_CustomPropertyList);
 
@@ -1777,6 +2023,7 @@ static Boolean SimpleEQAudio_HasDeviceProperty(AudioServerPlugInDriverRef inDriv
         case kAudioDevicePropertyCustom_NameOverride:
         case kSimpleEQDriftCompositionSelector:
         case kSimpleEQMixerGainSelector:
+        case kSimpleEQOwnershipSelector:
             theAnswer = true;
             break;
 
@@ -1842,6 +2089,7 @@ static OSStatus SimpleEQAudio_IsDevicePropertySettable(AudioServerPlugInDriverRe
         case kAudioDevicePropertyCustom_NameOverride:
         case kSimpleEQDriftCompositionSelector:
         case kSimpleEQMixerGainSelector:
+        case kSimpleEQOwnershipSelector:
             *outIsSettable = true;
             break;
 
@@ -1899,6 +2147,7 @@ static OSStatus SimpleEQAudio_GetDevicePropertyDataSize(AudioServerPlugInDriverR
         case kAudioDevicePropertyCustom_NameOverride: *outDataSize = sizeof(CFStringRef); break;
         case kSimpleEQDriftCompositionSelector: *outDataSize = sizeof(CFPropertyListRef); break;
         case kSimpleEQMixerGainSelector: *outDataSize = sizeof(CFPropertyListRef); break;
+        case kSimpleEQOwnershipSelector: *outDataSize = sizeof(CFPropertyListRef); break;
         case kAudioDevicePropertyPreferredChannelsForStereo: *outDataSize = 2 * sizeof(UInt32); break;
         case kAudioDevicePropertyPreferredChannelLayout:
             *outDataSize = offsetof(AudioChannelLayout, mChannelDescriptions) + (kNumber_Of_Channels * sizeof(AudioChannelDescription));
@@ -2131,6 +2380,12 @@ static OSStatus SimpleEQAudio_GetDevicePropertyData(AudioServerPlugInDriverRef i
             *outDataSize = sizeof(CFPropertyListRef);
             break;
 
+        case kSimpleEQOwnershipSelector:
+            FailWithAction(inDataSize < sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kSimpleEQOwnershipSelector");
+            *((CFPropertyListRef*)outData) = SimpleEQOwnership_CopySnapshot(gSimpleEQRing_Header);
+            *outDataSize = sizeof(CFPropertyListRef);
+            break;
+
         case kAudioDevicePropertyPreferredChannelsForStereo:
             FailWithAction(inDataSize < (2 * sizeof(UInt32)), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kAudioDevicePropertyPreferredChannelsForStereo");
             ((UInt32*)outData)[0] = 1;
@@ -2174,7 +2429,7 @@ Done:
 
 static OSStatus SimpleEQAudio_SetDevicePropertyData(AudioServerPlugInDriverRef inDriver, AudioObjectID inObjectID, pid_t inClientProcessID, const AudioObjectPropertyAddress* inAddress, UInt32 inQualifierDataSize, const void* inQualifierData, UInt32 inDataSize, const void* inData, UInt32* outNumberPropertiesChanged, AudioObjectPropertyAddress outChangedAddresses[2])
 {
-    #pragma unused(inClientProcessID, inQualifierDataSize, inQualifierData)
+    #pragma unused(inQualifierDataSize, inQualifierData)
     OSStatus theAnswer = 0;
     Float64 theOldSampleRate;
 
@@ -2284,6 +2539,36 @@ static OSStatus SimpleEQAudio_SetDevicePropertyData(AudioServerPlugInDriverRef i
             // 変更を告知しない。
             // リースの更新で同じ表が周期的に押し込まれるため、告知すると中身が変わらないまま通知だけが撒かれ続ける。
             SimpleEQMixer_ApplyGainTable((CFDictionaryRef)(*((const CFPropertyListRef*)inData)));
+            break;
+
+        case kSimpleEQOwnershipSelector:
+            FailWithAction(inDataSize != sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_SetDevicePropertyData: wrong size for kSimpleEQOwnershipSelector");
+            FailWithAction(*((const CFPropertyListRef*)inData) == NULL || CFGetTypeID(*((const CFPropertyListRef*)inData)) != CFDictionaryGetTypeID(), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQOwnershipSelector expects a CFDictionaryRef");
+            FailWithAction(gSimpleEQRing_Header == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: shared memory is not ready for kSimpleEQOwnershipSelector");
+            {
+                CFDictionaryRef theRequestDict = (CFDictionaryRef)(*((const CFPropertyListRef*)inData));
+                CFTypeRef theOperationValue = CFDictionaryGetValue(theRequestDict, CFSTR(kSimpleEQOwnershipOperationKey));
+                FailWithAction(theOperationValue == NULL || CFGetTypeID(theOperationValue) != CFStringGetTypeID(), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQOwnershipSelector requires a string \"op\"");
+
+                uint32_t theDeclaredUID = SimpleEQOwnership_ExtractDeclaredUID(theRequestDict);
+
+                pthread_mutex_lock(&gOwnership_Mutex);
+                bool theReclaimed = SimpleEQOwnership_ReclaimExpired(gSimpleEQRing_Header);
+                SimpleEQOwnershipOutcome theResult = SimpleEQOwnership_ApplyOperation_Locked(
+                    gSimpleEQRing_Header, inClientProcessID, theDeclaredUID, (CFStringRef)theOperationValue);
+                pthread_mutex_unlock(&gOwnership_Mutex);
+
+                // 回収は操作の成否と別に起きる。拒否で先に抜けると、席が空いた事実を誰にも知らせないまま終わる。
+                if(theResult == kSimpleEQOwnershipOutcome_Applied || theReclaimed)
+                {
+                    *outNumberPropertiesChanged = 1;
+                    outChangedAddresses[0].mSelector = kSimpleEQOwnershipSelector;
+                    outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
+                    outChangedAddresses[0].mElement = kAudioObjectPropertyElementMain;
+                }
+
+                FailWithAction(theResult == kSimpleEQOwnershipOutcome_Denied, theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQOwnershipSelector operation denied");
+            }
             break;
 
         default:
@@ -3148,6 +3433,9 @@ static OSStatus SimpleEQAudio_DoIOOperation(AudioServerPlugInDriverRef inDriver,
                         Done, "SimpleEQAudio_DoIOOperation: overload, missed the WriteMix deadline");
 
         SimpleEQRing_WriteAudio((const float*)ioMainBuffer, inIOBufferFrameSize, inIOCycleInfo->mOutputTime.mSampleTime);
+        // 回収の契機はここと Set の 2 つだけで、所有者が黙るとどちらも起きない。
+        // 読む側が満了を自分で判定して掴みにくることが、その状態からの出口になる。
+        SimpleEQOwnership_ReclaimExpired(gSimpleEQRing_Header);
     }
     else if(inOperationID == kAudioServerPlugInIOOperationProcessOutput)
     {

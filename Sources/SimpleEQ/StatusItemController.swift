@@ -213,6 +213,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem === mixerItem { return viewModel.settingsReachAudio }
         guard menuItem === viewModeItem else { return true }
         return windowController.window?.isVisible ?? false
     }

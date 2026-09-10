@@ -105,6 +105,29 @@ final class MixerAppResolverTests: XCTestCase {
         XCTAssertEqual(resolver.resolve(pid: 500).channelKey, MixerSpec.processKey("Player"))
     }
 
+    // MARK: - バンドルから読む表示名
+
+    // 鳴っている行と鳴っていない行が同じ口から名前を読む。読む順が食い違うと、
+    // 両方のキーを持つアプリの行が「鳴っているか」で名前を変える。
+    func testBundleDisplayNameWinsOverTheShortName() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SimpleEQTests-\(UUID().uuidString)")
+        let bundleURL = root.appendingPathComponent("Player.app")
+        let contents = bundleURL.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.example.player",
+            "CFBundleDisplayName": "Player Deluxe",
+            "CFBundleName": "Player",
+        ]
+        try (info as NSDictionary).write(to: contents.appendingPathComponent("Info.plist"))
+
+        let read = try XCTUnwrap(MixerAppResolver.BundleInfo.read(from: bundleURL))
+        XCTAssertEqual(read.bundleID, "com.example.player")
+        XCTAssertEqual(read.displayName, "Player Deluxe", "利用者が Finder で見ている名前を採る")
+    }
+
     // MARK: - バンドルへの遡り
 
     func testEnclosingBundleURLWalksUpToTheNearestBundle() {
@@ -120,5 +143,44 @@ final class MixerAppResolverTests: XCTestCase {
             "最も内側のバンドルで止まる"
         )
         XCTAssertNil(MixerAppResolver.enclosingBundleURL(executablePath: "/usr/bin/afplay"))
+    }
+
+    // 走行中コードの署名を安定させるための複製は `<名前>.app.bundle` を名乗る。
+    // 拾えないと、その複製から走っているアプリはバンドル ID へ遡れず、保存済みの行にマッチしなくなる。
+    func testEnclosingBundleURLWalksUpToASigningClone() {
+        let clonePath =
+            "/private/var/folders/ab/X/com.example.player.code_sign_clone/code_sign_clone.aB1cD2"
+            + "/Player.app.bundle/Contents/MacOS/Player"
+        XCTAssertEqual(
+            MixerAppResolver.enclosingBundleURL(executablePath: clonePath),
+            URL(fileURLWithPath:
+                "/private/var/folders/ab/X/com.example.player.code_sign_clone/code_sign_clone.aB1cD2/Player.app.bundle"
+            )
+        )
+    }
+
+    // 拡張子だけで受けると、アプリの内側のプラグインで止まって別のバンドル ID へ落ちる。
+    func testEnclosingBundleURLWalksPastAPluginBundleToTheApp() {
+        XCTAssertEqual(
+            MixerAppResolver.enclosingBundleURL(
+                executablePath: "/Applications/Browser.app/Contents/PlugIns/Codec.bundle/Contents/MacOS/Codec"
+            ),
+            URL(fileURLWithPath: "/Applications/Browser.app"),
+            "プラグインでは止まらない"
+        )
+    }
+
+    // 複製から走っていても、名乗るバンドル ID は同じなので保存済みの行と同じ鍵へ落ちる。
+    func testAnAppRunningFromASigningCloneKeepsItsBundleKey() {
+        let cloneURL = URL(fileURLWithPath: "/private/var/folders/ab/X/clone/Player.app.bundle")
+        let clonePath = cloneURL.appendingPathComponent("Contents/MacOS/Player").path
+        let resolver = makeResolver(
+            paths: [500: clonePath],
+            bundles: [cloneURL.path: MixerAppResolver.BundleInfo(bundleID: "com.example.player", displayName: "Player")]
+        )
+        let resolution = resolver.resolve(pid: 500)
+
+        XCTAssertEqual(resolution.channelKey, MixerSpec.bundleKey("com.example.player"))
+        XCTAssertNil(resolution.identity?.subtitle, "バンドルへ遡れているので副題は出さない")
     }
 }

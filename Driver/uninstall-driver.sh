@@ -3,6 +3,7 @@
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+INSTALLED_DRIVER="/Library/Audio/Plug-Ins/HAL/SimpleEQAudio.driver"
 LAYOUT_HEADER="$SCRIPT_DIR/Shared/SimpleEQRingLayout.h"
 SHM_DIR=$(sed -n 's/^#define[[:space:]]*kSimpleEQRingDirectoryPath[[:space:]]*"\(.*\)".*$/\1/p' "$LAYOUT_HEADER")
 SHM_FILE_NAME=$(sed -n 's/^#define[[:space:]]*kSimpleEQRingFileName[[:space:]]*"\(.*\)".*$/\1/p' "$LAYOUT_HEADER")
@@ -12,7 +13,7 @@ if [ -z "$SHM_DIR" ] || [ -z "$SHM_FILE_NAME" ]; then
   exit 1
 fi
 
-rm -rf "/Library/Audio/Plug-Ins/HAL/SimpleEQAudio.driver"
+rm -rf "$INSTALLED_DRIVER"
 
 # 共有メモリファイルも削除する。
 # ドライバがロードされていない間はアプリ側の起動時検出 (SharedRingReader.open) がこのファイルのヘッダだけを見て判定するため、
@@ -20,6 +21,9 @@ rm -rf "/Library/Audio/Plug-Ins/HAL/SimpleEQAudio.driver"
 # 既にこのファイルを mmap 済みの実行中プロセスがあっても、unlink 後もその参照は有効なままアクセスでき (POSIX のセマンティクス)、
 # 次回インストール時にはドライバが改めて作成し直すため、削除して実害はない。
 rm -f "$SHM_DIR/$SHM_FILE_NAME"
+
+# ディレクトリも片付ける。リングファイルの削除で通常は空になっているはずで、空でなければ何もしない。
+rmdir "$SHM_DIR" 2>/dev/null || true
 
 killall coreaudiod || true
 

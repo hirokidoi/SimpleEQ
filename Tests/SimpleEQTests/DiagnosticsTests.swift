@@ -338,6 +338,45 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(valuesOfRow("ミキサーへの登録失敗", in: metrics), ["2 回"])
     }
 
+    // MARK: - 所有権
+
+    func testOwnershipRowsCarryTheObservedValues() {
+        let metrics = AudioRuntimeMetrics()
+        metrics.recordOwnershipObservation(
+            OwnershipObservationSnapshot(
+                ownerProcessID: 501, ownerUID: 20, leaseRemainingSeconds: 4.2,
+                requestProcessID: 777, requestUID: 30, requestLeaseRemainingSeconds: 5.1,
+                isSelfOwner: true
+            ),
+            observed: true
+        )
+        XCTAssertEqual(valuesOfRow("自分が所有者か", in: metrics), ["はい"])
+        XCTAssertEqual(valuesOfRow("所有者", in: metrics), ["pid 501 / uid 20"])
+        XCTAssertEqual(valuesOfRow("所有権リース", in: metrics), ["4.2 s"])
+        XCTAssertEqual(valuesOfRow("要求", in: metrics), ["pid 777 / uid 30"])
+        XCTAssertEqual(valuesOfRow("要求リース", in: metrics), ["5.1 s"])
+    }
+
+    func testOwnershipAbsenceIsSpelledOutRatherThanShownAsZero() {
+        let metrics = AudioRuntimeMetrics()
+        metrics.recordOwnershipObservation(OwnershipObservationSnapshot(), observed: true)
+        XCTAssertEqual(valuesOfRow("自分が所有者か", in: metrics), ["いいえ"])
+        XCTAssertEqual(valuesOfRow("所有者", in: metrics), ["なし"])
+        XCTAssertEqual(valuesOfRow("所有権リース", in: metrics), ["所有者なし"], "リースの不在は席が空いていることであって、制御していないことではない")
+        XCTAssertEqual(valuesOfRow("要求", in: metrics), ["なし"])
+        XCTAssertEqual(valuesOfRow("要求リース", in: metrics), ["要求なし"])
+    }
+
+    /// 共有ヘッダを開けなかった間は、内容を 0 で埋めず読めなかったこと自体を示す。
+    func testOwnershipIsUnobservedUntilTheFirstSuccessfulRead() {
+        let metrics = AudioRuntimeMetrics()
+        XCTAssertEqual(valuesOfRow("自分が所有者か", in: metrics), [unreadableValue])
+        XCTAssertEqual(valuesOfRow("所有者", in: metrics), [unreadableValue])
+
+        metrics.recordOwnershipObservation(OwnershipObservationSnapshot(), observed: false)
+        XCTAssertEqual(valuesOfRow("所有者", in: metrics), [unreadableValue], "読めなかった回は observed のままにする")
+    }
+
     private func valuesOfRow(_ title: String, in metrics: AudioRuntimeMetrics) -> [String]? {
         DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender())
             .flatMap { $0.rows }.first { $0.title == title }?.values
