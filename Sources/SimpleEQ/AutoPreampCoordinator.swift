@@ -13,7 +13,7 @@ final class AutoPreampCoordinator {
 
     private static let measurementQueue = DispatchQueue(label: "com.simpleeq.autopreamp.measurement", qos: .utility)
 
-    private let measure: @Sendable ([Double], Double, MeasuredSoundLab) -> EQMagnitudeResponse?
+    private let measure: @Sendable ([Double], Double, MeasuredSoundLab) -> AutoPreampResponse?
     private let runMeasurement: (@escaping @Sendable () -> Void) -> Void
     private let deliver: @Sendable (@escaping @MainActor () -> Void) -> Void
 
@@ -56,7 +56,7 @@ final class AutoPreampCoordinator {
     }
 
     init(
-        measure: @escaping @Sendable ([Double], Double, MeasuredSoundLab) -> EQMagnitudeResponse? = AutoPreampCoordinator.makeDefaultMeasure(),
+        measure: @escaping @Sendable ([Double], Double, MeasuredSoundLab) -> AutoPreampResponse? = AutoPreampCoordinator.makeDefaultMeasure(),
         runMeasurement: @escaping (@escaping @Sendable () -> Void) -> Void = { work in
             AutoPreampCoordinator.measurementQueue.async(execute: work)
         },
@@ -71,21 +71,20 @@ final class AutoPreampCoordinator {
         self.responses = ResponseCache(capacity: cacheCapacity)
     }
 
-    /// EQ とステレオ段は直列なので、それぞれの応答をまとめて 1 つの合成応答として返す。
-    static func makeDefaultMeasure() -> @Sendable ([Double], Double, MeasuredSoundLab) -> EQMagnitudeResponse? {
+    static func makeDefaultMeasure() -> @Sendable ([Double], Double, MeasuredSoundLab) -> AutoPreampResponse? {
         let box = LazyProbeBox()
         return { curve, sampleRate, soundLab in
             if box.eq == nil { box.eq = EQResponseProbe() }
             guard let eq = box.eq?.measure(curve: curve, sampleRate: sampleRate) else { return nil }
-            guard soundLab.raisesLevel else { return eq }
+            guard soundLab.anyEnabled else { return AutoPreampResponse(eq: eq) }
             if box.stereo == nil || box.stereoSampleRate != sampleRate {
                 box.stereo = SoundLabStereoProbe(sampleRate: sampleRate)
                 box.stereoSampleRate = sampleRate
             }
             guard let stereo = box.stereo?.measure(
-                bass: soundLab.bassHarmonics, exciter: soundLab.trebleExciter
-            ) else { return eq }
-            return AutoPreampSpec.combined([eq, stereo])
+                expander: soundLab.stereoExpander, bass: soundLab.bassHarmonics, exciter: soundLab.trebleExciter
+            ) else { return AutoPreampResponse(eq: eq) }
+            return AutoPreampResponse(eq: eq, soundLab: stereo)
         }
     }
 
@@ -177,7 +176,7 @@ final class AutoPreampCoordinator {
     }
 
     private func completeMeasurement(
-        curve: [Double], sampleRate: Double, soundLab: MeasuredSoundLab, result: EQMagnitudeResponse?
+        curve: [Double], sampleRate: Double, soundLab: MeasuredSoundLab, result: AutoPreampResponse?
     ) {
         measuring = false
         // 測定失敗時は値を据え置き、再試行しない (次の入力変化で自然に再挑戦する)。
@@ -190,7 +189,7 @@ final class AutoPreampCoordinator {
 
     private struct ResponseCache {
         private let capacity: Int
-        private var storage: [ResponseKey: EQMagnitudeResponse] = [:]
+        private var storage: [ResponseKey: AutoPreampResponse] = [:]
         /// 先頭が最も古い。
         private var order: [ResponseKey] = []
 
@@ -198,13 +197,13 @@ final class AutoPreampCoordinator {
             self.capacity = capacity
         }
 
-        mutating func value(for key: ResponseKey) -> EQMagnitudeResponse? {
+        mutating func value(for key: ResponseKey) -> AutoPreampResponse? {
             guard let value = storage[key] else { return nil }
             touch(key)
             return value
         }
 
-        mutating func insert(_ value: EQMagnitudeResponse, for key: ResponseKey) {
+        mutating func insert(_ value: AutoPreampResponse, for key: ResponseKey) {
             storage[key] = value
             touch(key)
             while order.count > capacity, let oldest = order.first {

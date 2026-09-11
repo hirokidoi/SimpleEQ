@@ -334,21 +334,22 @@ A rate change has no dedicated follow-up mechanism of its own: a mismatch betwee
 
 Two instruments are in play, each matched to what it measures. The EQ is measured with an impulse and an FFT. That tool does not fit the features that saturate: saturation is non-linear, so its behaviour depends on the input amplitude, and a full-scale impulse is flattened outright — the measurement would answer that the feature attenuates. The EQ's own chain is also built in mono, which leaves nothing for a feature operating on the difference between channels to act on.
 
-So the counted-in features are measured by passing decorrelated stereo noise straight through the stereo stage and taking the ratio of input to output. The stage is a plain type that touches no CoreAudio, so a buffer through it is the whole measurement. Both instruments are cheap, and their results are combined into one composite response held in a single cache.
+So the counted-in features are measured by passing decorrelated stereo noise straight through the stereo stage and taking the ratio of input to output. The stage is a plain type that touches no CoreAudio, so a buffer through it is the whole measurement. Both instruments are cheap, and their results are held side by side in a single cache.
 
-Measuring saturation requires choosing one input level. It is derived from the crest factor of the input rather than held as a constant, so that the measurement sits where material that actually reaches full scale sits. Where neither counted-in feature is on, the stage is a pass-through and the noise is not run at all.
+Measuring saturation requires choosing one input level. It is derived from the crest factor of the input rather than held as a constant, so that the measurement sits where material that actually reaches full scale sits. Where none of the counted-in features is on, the stage is a pass-through and the noise is not run at all.
 
-Summarising follows the same rule as the response measurement — the greater of the average ratio and the peak ratio less a margin. The results are in series, so their terms add. The rules for rounding and clamping the depth are stated over the composite alone and hold whatever the number of terms.
+The stage's result is summarised as the greater of the average ratio and the peak ratio, and added on top of what the EQ is read as. The margin the EQ's reading allows is for its worst frequency sitting above the typical one; the stage is measured as a ratio over the whole signal, so there is no worst frequency for that margin to apply to. Taking the margin off after adding lets a curve that lifts little swallow the stage's rise whole. A result below zero counts as zero: the noise that makes widening's rise a worst case (→ Which Features Are Counted In) makes its fall deeper than real material sees, and counting it would leave the preamp shallower than the material needs. Rounding and the bounds apply to the sum, never to either term alone.
 
 ### Which Features Are Counted In
 
-Only the two that saturate. The type that carries them into the derivation names them, so moving anything about the rest changes neither the depth nor the cache key.
+The three the stereo stage carries. The type that carries them into the derivation names them, so moving anything about the rest changes neither the depth nor the cache key.
+
+The feature that widens the image is among them even though decorrelated noise, the only thing it can be measured with, carries far more of the component it acts on than real material does, which makes what it measures a worst case. On material mastered right up to full scale that worst case has been observed to sit close to the depth the material actually needs, so leaving it out lights the peak indicator on that material. Scaling it down to a representative amount instead would put a calibrated constant into the derivation, which would drift silently every time the processing is touched.
 
 The rest are left out for reasons of their own.
 
 - The stage whose depth is inversely proportional to the volume sits behind the point the level is read from, so what it does is outside the judgement altogether. Measuring it and lowering by what it adds would cancel exactly what it was added to supply — the feature would negate itself. Where the stage sits is what guarantees this rather than a rule that has to be remembered.
 - The feature that adds the sound of a space raises the level by less than the rounding step even at its strongest, and in the smaller spaces it attenuates. Measuring it would also mean building the same chain the audio runs on, which costs an order of magnitude more than the other instruments.
-- The feature that widens the image can only be measured with decorrelated noise, and that is the worst case rather than a representative one. Real material carries far less of the component it acts on, and the rise there does not reach the rounding step. Measuring it would lower the preamp against a rise that does not exist, and the gap widens the lower the frequency it starts widening from. Choosing a representative amount instead would put a calibrated constant into the derivation, which would drift silently every time the processing is touched.
 
 Automatic mode blocks none of the preamp's controls: placing a value through any of them drops automatic mode, and the controls that hand it back take it back to automatic. What gates them is the same rule that gates every other control — while there is no way for the setting to reach the audio, they are dimmed and refused. The one that sets the target carries a second condition of its own, since it has nothing to act on while the derivation is off. Deriving still continues there, so the value is already right at the moment the audio comes back.
 
@@ -356,9 +357,9 @@ What a preview shows is only ever what applying it would produce. Since applying
 
 The point where it is applied to the audio sits ahead of everything it offsets, so what it takes away lands at the same place in the chain as what is added. How much it takes away is not the whole of that: the result is shifted by the target, and is bounded at both ends and rounded to the nearest step, with a tie going to the deeper side. The target is not a ceiling, so there is no reason to bias the whole result deep; rounding always down would drop a flat curve by a step on measurement noise alone.
 
-What is added is read two ways, and the deeper of the two decides. One is the rise a typical signal would see. The other is the steepest rise anywhere in the band, allowed to sit a fixed distance above the first; it is there so that lifting one narrow band steeply is not waved through by an average that barely moves. Where the second decides, the peak can still land above the target.
+What the EQ adds is read two ways, and the deeper of the two decides. One is the rise a typical signal would see. The other is the steepest rise anywhere in the band, allowed to sit a fixed distance above the first; it is there so that lifting one narrow band steeply is not waved through by an average that barely moves. Where the second decides, the peak can still land above the target.
 
-Running both counted-in features near their upper bounds can stack up enough that the depth needed exceeds the lower bound the preamp can reach. That bound is shared with the EQ and is not moved for the Sound Lab's sake. The settings that far up do not stand up to ordinary listening, so the shortfall is accepted.
+Running the counted-in features near their upper bounds can stack up enough that the depth needed exceeds the lower bound the preamp can reach. That bound is shared with the EQ and is not moved for the Sound Lab's sake. The settings that far up do not stand up to ordinary listening, so the shortfall is accepted.
 
 ---
 

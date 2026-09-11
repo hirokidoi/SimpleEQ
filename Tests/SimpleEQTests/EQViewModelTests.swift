@@ -50,8 +50,8 @@ final class EQViewModelTests: XCTestCase {
     /// 同期実行の runMeasurement/deliver と、
     /// カーブ→応答の対応表を返す偽 measure を注入した AutoPreampCoordinator 付き ViewModel を作る。
     private func makeVMWithAutoPreamp(
-        _ store: SettingsStore, responses: [[Double]: EQMagnitudeResponse],
-        responsesByRate: [Double: [[Double]: EQMagnitudeResponse]] = [:]
+        _ store: SettingsStore, responses: [[Double]: AutoPreampResponse],
+        responsesByRate: [Double: [[Double]: AutoPreampResponse]] = [:]
     ) -> (vm: EQViewModel, engine: AudioEngine, audioWorld: AudioWorld) {
         let engine = AudioEngine()
         let audioWorld = makeTestAudioWorld()
@@ -70,7 +70,7 @@ final class EQViewModelTests: XCTestCase {
     /// 測定の完了タイミングを明示的に制御できる AutoPreampCoordinator 付き ViewModel を作る。
     /// runPending() を呼ぶまで、溜まった測定要求は完了しない。
     private func makeVMWithControllableAutoPreamp(
-        _ store: SettingsStore, responses: [[Double]: EQMagnitudeResponse],
+        _ store: SettingsStore, responses: [[Double]: AutoPreampResponse],
         measureCount: Recorded<Int> = Recorded(0),
         measuredCurves: Recorded<[[Double]]> = Recorded([])
     ) -> (vm: EQViewModel, runPending: () -> Void) {
@@ -721,7 +721,7 @@ final class EQViewModelTests: XCTestCase {
     func testPreampAutoToggleAndTargetChangeKeepSelectedPresetWhenCurveUnchanged() {
         let store = SettingsStore(defaults: defaults)
         let slot2Curve = EQSpec.builtInSeeds[.slot2]!.curve
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
         let (vm, _, _) = makeVMWithAutoPreamp(store, responses: [slot2Curve: response])
         vm.applyPreset(.slot2)
         XCTAssertEqual(vm.selectedPreset, .slot2, "前提")
@@ -1032,7 +1032,7 @@ final class EQViewModelTests: XCTestCase {
     func testDerivedPreampIsPersistedOnlyWhenTheBandDragEnds() {
         let store = SettingsStore(defaults: defaults)
         let curve = { () -> [Double] in var c = [Double](repeating: 0, count: EQSpec.bandCount); c[0] = 6; return c }()
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
         let (vm, _, _) = makeVMWithAutoPreamp(store, responses: [curve: response])
         vm.confirmDriverProbe(.versionsUnreadable(.ok))
         let persistedBeforeDrag = store.preampDb
@@ -1111,8 +1111,8 @@ final class EQViewModelTests: XCTestCase {
         // ドラッグは band 0 だけを書き換えるため、直前の状態 (slot2Curve) からの派生形になる。
         var dragCurve = slot2Curve
         dragCurve[0] = 4
-        let slot2Response = EQMagnitudeResponse(energyWeightedGainDb: 5, worstCaseGainDb: 8)
-        let dragResponse = EQMagnitudeResponse(energyWeightedGainDb: 2, worstCaseGainDb: 3)
+        let slot2Response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 5, worstCaseGainDb: 8))
+        let dragResponse = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 2, worstCaseGainDb: 3))
         let (vm, _, _) = makeVMWithAutoPreamp(store, responses: [slot2Curve: slot2Response, dragCurve: dragResponse])
 
         vm.applyPreset(.slot2)
@@ -1146,7 +1146,7 @@ final class EQViewModelTests: XCTestCase {
     func testManualPreampOverrideDisablesAutoAndCurveChangesNoLongerMoveIt() {
         let store = SettingsStore(defaults: defaults)
         let slot2Curve = EQSpec.builtInSeeds[.slot2]!.curve
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
         let cases: [(String, (EQViewModel) -> Void)] = [
             ("updatePreampDrag", { $0.updatePreampDrag(db: -2) }),
             ("overridePreamp", { $0.overridePreamp(db: -3) }),
@@ -1168,7 +1168,7 @@ final class EQViewModelTests: XCTestCase {
     func testDisablingAutoPreservesTheLastDerivedValue() {
         let store = SettingsStore(defaults: defaults)
         let curve = EQSpec.builtInSeeds[.slot1]!.curve
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
         let (vm, _, _) = makeVMWithAutoPreamp(store, responses: [curve: response])
         vm.startAutoPreampDerivation()
         let derived = vm.preampDb
@@ -1182,7 +1182,7 @@ final class EQViewModelTests: XCTestCase {
     func testApplyPresetSetsPreampToDerivedValueNotSavedValueAndKeepsSelection() {
         let store = SettingsStore(defaults: defaults)
         let slot2Curve = EQSpec.builtInSeeds[.slot2]!.curve
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
         let (vm, engine, _) = makeVMWithAutoPreamp(store, responses: [slot2Curve: response])
 
         vm.applyPreset(.slot2)
@@ -1197,7 +1197,7 @@ final class EQViewModelTests: XCTestCase {
     func testPreviewPresetMovesHandleTargetToDerivedValueOnceCached() {
         let store = SettingsStore(defaults: defaults)
         let slot2Curve = EQSpec.builtInSeeds[.slot2]!.curve
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
         let (vm, runPending) = makeVMWithControllableAutoPreamp(store, responses: [slot2Curve: response])
         vm.confirmDriverProbe(.versionsUnreadable(.ok))
         let liveValue = vm.preampDb
@@ -1282,7 +1282,7 @@ final class EQViewModelTests: XCTestCase {
     func testPreviewPresetStaysAtLiveValueWhenAutoDisabled() {
         let store = SettingsStore(defaults: defaults)
         let slot2Curve = EQSpec.builtInSeeds[.slot2]!.curve
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
         let (vm, _, _) = makeVMWithAutoPreamp(store, responses: [slot2Curve: response])
         vm.confirmDriverProbe(.versionsUnreadable(.ok))
         vm.overridePreamp(db: -2)
@@ -1301,10 +1301,10 @@ final class EQViewModelTests: XCTestCase {
         let store = SettingsStore(defaults: defaults)
         let curve = EQSpec.builtInSeeds[.slot1]!.curve
         let newRate = 96000.0
-        let atNewRate = EQMagnitudeResponse(energyWeightedGainDb: 9, worstCaseGainDb: 9)
+        let atNewRate = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 9, worstCaseGainDb: 9))
         let (vm, engine, audioWorld) = makeVMWithAutoPreamp(
             store,
-            responses: [curve: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)],
+            responses: [curve: AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))],
             responsesByRate: [newRate: [curve: atNewRate]]
         )
         vm.startAutoPreampDerivation()
@@ -1326,8 +1326,8 @@ final class EQViewModelTests: XCTestCase {
     func testHandleAppliedSampleRateDidChangeUpdatesAutoPreampInput() {
         let store = SettingsStore(defaults: defaults)
         let curve = EQSpec.builtInSeeds[.slot1]!.curve
-        let baseRateResponse = EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6)
-        let newRateResponse = EQMagnitudeResponse(energyWeightedGainDb: 3, worstCaseGainDb: 3)
+        let baseRateResponse = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 6, worstCaseGainDb: 6))
+        let newRateResponse = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 3, worstCaseGainDb: 3))
         let newRate = AudioConfig.baseSampleRate * 2
         let coordinator = AutoPreampCoordinator(
             measure: { c, rate, _ in
@@ -3017,7 +3017,7 @@ final class EQViewModelTests: XCTestCase {
         let coordinator = AutoPreampCoordinator(
             measure: { _, _, soundLab in
                 measuredSoundLab.update { $0.append(soundLab) }
-                return EQMagnitudeResponse(energyWeightedGainDb: 3, worstCaseGainDb: 3)
+                return AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 3, worstCaseGainDb: 3))
             },
             runMeasurement: { work in work() },
             deliver: { work in MainActor.assumeIsolated { work() } }

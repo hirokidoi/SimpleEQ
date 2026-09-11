@@ -8,8 +8,8 @@ private func autoPreampTestCurve(_ tag: Double) -> [Double] {
     Array(repeating: tag, count: EQSpec.bandCount)
 }
 
-private func autoPreampTestResponse(_ gain: Double) -> EQMagnitudeResponse {
-    EQMagnitudeResponse(energyWeightedGainDb: gain, worstCaseGainDb: gain)
+private func autoPreampTestResponse(_ gain: Double) -> AutoPreampResponse {
+    AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: gain, worstCaseGainDb: gain))
 }
 
 @MainActor
@@ -17,7 +17,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
     /// runMeasurement/deliver がともに即実行 (同期完了) する調停役。
     /// 対応表に無い curve は測定失敗 (nil) として扱われる。
     private func makeSyncCoordinator(
-        measureCount: Recorded<Int> = Recorded(0), responses: [[Double]: EQMagnitudeResponse] = [:],
+        measureCount: Recorded<Int> = Recorded(0), responses: [[Double]: AutoPreampResponse] = [:],
         cacheCapacity: Int = AutoPreampCoordinator.defaultCacheCapacity
     ) -> AutoPreampCoordinator {
         AutoPreampCoordinator(
@@ -34,7 +34,7 @@ final class AutoPreampCoordinatorTests: XCTestCase {
     /// runMeasurement が即実行せず溜めるだけの調停役。テストが runNext() を呼んだ回だけ、
     /// 溜まった測定要求のうち最も古いものが 1 件完了する (非同期実行を模す)。
     private func makeQueuedCoordinator(
-        measureCount: Recorded<Int> = Recorded(0), responses: [[Double]: EQMagnitudeResponse] = [:],
+        measureCount: Recorded<Int> = Recorded(0), responses: [[Double]: AutoPreampResponse] = [:],
         cacheCapacity: Int = AutoPreampCoordinator.defaultCacheCapacity
     ) -> (coordinator: AutoPreampCoordinator, runNext: () -> Bool) {
         let pending = Recorded<[@Sendable () -> Void]>([])
@@ -519,13 +519,12 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(measureCount.value, 1, "前提: 最初の測定が走る")
 
-        var widened = SoundLabSettings()
-        widened.stereoExpander.enabled = true
-        widened.loudness.enabled = true
-        widened.liveSimulation.enabled = true
+        var uncounted = SoundLabSettings()
+        uncounted.loudness.enabled = true
+        uncounted.liveSimulation.enabled = true
         coordinator.refresh(
             enabled: true, curve: c, targetDb: 0, sampleRate: 48000,
-            soundLab: widened, currentPreampDb: last
+            soundLab: uncounted, currentPreampDb: last
         )
 
         XCTAssertEqual(measureCount.value, 1, "外した機能をどう動かしても測り直さない")
@@ -566,9 +565,8 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         )
     }
 
-    /// 既定の測定は EQ とステレオ段を直列に合成する。
-    /// 勘定に入れる機能が切なら段は素通しで、EQ 単独の応答と一致する。
-    func testTheDefaultMeasureAddsTheStereoStageOnTopOfTheEQ() {
+    /// 既定の測定は、ステレオ段の応答を EQ の応答と分けて返す。
+    func testTheDefaultMeasureKeepsTheStereoStageApartFromTheEQ() {
         let measure = AutoPreampCoordinator.makeDefaultMeasure()
         let curve = autoPreampTestCurve(0)
         let rate = TestSampleRates.all[0]
@@ -581,13 +579,36 @@ final class AutoPreampCoordinatorTests: XCTestCase {
         lifted.bassHarmonics.enabled = true
         lifted.trebleExciter.enabled = true
         guard let raised = measure(curve, rate, MeasuredSoundLab(lifted)) else {
-            XCTFail("合成した応答を測れない")
+            XCTFail("ステレオ段を含めた応答を測れない")
             return
         }
 
         XCTAssertGreaterThan(
-            raised.energyWeightedGainDb - flat.energyWeightedGainDb, 0.05,
-            "飽和する機能を入れれば合成応答が持ち上がる"
+            AutoPreampSpec.soundLabGainDb(raised.soundLab), 0.05, "飽和する機能を入れれば段の項が立つ"
+        )
+        XCTAssertEqual(
+            raised.eq.energyWeightedGainDb, flat.eq.energyWeightedGainDb, accuracy: 1e-9,
+            "段の分は EQ の応答へ混ざらない"
+        )
+        XCTAssertEqual(raised.eq.worstCaseGainDb, flat.eq.worstCaseGainDb, accuracy: 1e-9)
+    }
+
+    func testTheDefaultMeasureCountsTheExpander() {
+        let measure = AutoPreampCoordinator.makeDefaultMeasure()
+        let curve = autoPreampTestCurve(0)
+        let rate = TestSampleRates.all[0]
+
+        var widened = SoundLabSettings()
+        widened.stereoExpander.enabled = true
+        guard let flat = measure(curve, rate, MeasuredSoundLab(SoundLabSettings())),
+              let raised = measure(curve, rate, MeasuredSoundLab(widened)) else {
+            XCTFail("応答を測れない")
+            return
+        }
+
+        XCTAssertGreaterThan(
+            AutoPreampSpec.compositeGainDb(raised) - AutoPreampSpec.compositeGainDb(flat), 0.05,
+            "広げれば見積もりが持ち上がる"
         )
     }
 }

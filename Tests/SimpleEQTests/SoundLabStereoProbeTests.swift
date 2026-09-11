@@ -30,8 +30,7 @@ final class SoundLabStereoProbeTests: XCTestCase {
     }
 
     /// 広がりは Side を上げるため、非相関のノイズに対しては押し上げとして出る。
-    /// 導出がこれを勘定に入れないのは測れないからではない (→ MeasuredSoundLab)。
-    func testTheExpanderIsMeasurableEvenThoughTheDerivationLeavesItOut() {
+    func testTheExpanderRaisesTheMeasuredLevel() {
         var expander = StereoExpanderSettings()
         expander.enabled = true
         XCTAssertGreaterThan(probe().measure(expander: expander).energyWeightedGainDb, 0)

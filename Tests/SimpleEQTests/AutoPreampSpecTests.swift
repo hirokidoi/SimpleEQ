@@ -50,9 +50,9 @@ final class AutoPreampSpecTests: XCTestCase {
 
     func testDerivedPreampDbMatchesConfirmedTable() {
         for curve in curves {
-            let response = EQMagnitudeResponse(
+            let response = AutoPreampResponse(eq: EQMagnitudeResponse(
                 energyWeightedGainDb: curve.energyWeightedGainDb, worstCaseGainDb: curve.worstCaseGainDb
-            )
+            ))
             for target in targetSteps {
                 guard let expected = curve.expectedByTarget[target] else {
                     XCTFail("期待値表が目標 \(target)dB を含んでいない (\(curve.name))")
@@ -67,34 +67,35 @@ final class AutoPreampSpecTests: XCTestCase {
     // MARK: - 丸め方向
 
     func testRoundsToTheNearestStep() {
-        let shallow = EQMagnitudeResponse(energyWeightedGainDb: 11.37, worstCaseGainDb: 0)
+        let shallow = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 11.37, worstCaseGainDb: 0))
         XCTAssertEqual(
             AutoPreampSpec.derivedPreampDb(response: shallow, targetDb: 0), -11,
             "切り下げなら -12 になる"
         )
-        let deep = EQMagnitudeResponse(energyWeightedGainDb: 11.63, worstCaseGainDb: 0)
+        let deep = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 11.63, worstCaseGainDb: 0))
         XCTAssertEqual(AutoPreampSpec.derivedPreampDb(response: deep, targetDb: 0), -12)
     }
 
     /// 半端は深い側へ倒す。
     func testHalfStepFallsToTheDeeperSide() {
-        let half = EQMagnitudeResponse(energyWeightedGainDb: 5.50, worstCaseGainDb: 0)
+        let half = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 5.50, worstCaseGainDb: 0))
         XCTAssertEqual(AutoPreampSpec.derivedPreampDb(response: half, targetDb: 0), -6)
     }
 
     // MARK: - 導出が勘定に入れる範囲
 
-    /// ライブシミュレーターとステレオエクスパンダーは下げ幅を動かさない。
-    func testTheDerivationTakesOnlyTheSaturatingFeatures() {
+    func testTheDerivationTakesEveryStereoStageFeature() {
         var settings = SoundLabSettings()
         settings.liveSimulation.enabled = true
+        settings.loudness.enabled = true
         settings.stereoExpander.enabled = true
         settings.bassHarmonics.enabled = true
         settings.trebleExciter.enabled = true
 
         let measured = MeasuredSoundLab(settings)
-        XCTAssertTrue(measured.bassHarmonics.enabled, "飽和を持つ機能は残る")
-        XCTAssertTrue(measured.trebleExciter.enabled, "飽和を持つ機能は残る")
+        XCTAssertEqual(measured.stereoExpander, settings.stereoExpander)
+        XCTAssertEqual(measured.bassHarmonics, settings.bassHarmonics)
+        XCTAssertEqual(measured.trebleExciter, settings.trebleExciter)
         XCTAssertEqual(
             measured, MeasuredSoundLab(sameExceptTheExcludedFeatures(settings)),
             "外した機能をどう動かしても勘定は変わらない"
@@ -106,25 +107,75 @@ final class AutoPreampSpecTests: XCTestCase {
         var other = settings
         other.liveSimulation.enabled.toggle()
         other.liveSimulation.mix = LiveSimulationSettings.mixRange.bounds.upperBound
-        other.stereoExpander.enabled.toggle()
-        other.stereoExpander.width = StereoExpanderSettings.widthRange.bounds.upperBound
-        other.stereoExpander.crossover = StereoExpanderSettings.crossoverRange.bounds.lowerBound
+        other.loudness.enabled.toggle()
         return other
     }
 
-    /// 直列の段は項が増えるだけで、丸めもクランプも変わらない。
-    func testCombinedSumsEachTerm() {
-        let a = EQMagnitudeResponse(energyWeightedGainDb: 2, worstCaseGainDb: 9)
-        let b = EQMagnitudeResponse(energyWeightedGainDb: 3, worstCaseGainDb: 4)
-        let combined = AutoPreampSpec.combined([a, b])
-        XCTAssertEqual(combined.energyWeightedGainDb, 5)
-        XCTAssertEqual(combined.worstCaseGainDb, 13)
-        XCTAssertEqual(AutoPreampSpec.derivedPreampDb(response: combined, targetDb: 0), -7)
+    func testTheExpanderAloneEngagesTheStage() {
+        var settings = SoundLabSettings()
+        XCTAssertFalse(MeasuredSoundLab(settings).anyEnabled, "前提: 既定ではすべて切")
+        settings.stereoExpander.enabled = true
+        XCTAssertTrue(MeasuredSoundLab(settings).anyEnabled)
+    }
+
+    // MARK: - ステレオ段の上がり
+
+    /// EQ の持ち上げが小さいカーブでも、段の上がりが余裕に吸われない。
+    func testTheStageRiseIsNotSpentOnTheEQHeadroom() {
+        let response = AutoPreampResponse(
+            eq: EQMagnitudeResponse(energyWeightedGainDb: 0, worstCaseGainDb: 0),
+            soundLab: EQMagnitudeResponse(energyWeightedGainDb: 1.2, worstCaseGainDb: 2)
+        )
+        XCTAssertEqual(
+            AutoPreampSpec.derivedPreampDb(response: response, targetDb: 0), -2,
+            "足してから余裕を引けば -1 になる"
+        )
+    }
+
+    /// 大きい方で決まるのではなく、EQ の分に上乗せされる。
+    func testTheStageRiseAddsOnTopOfTheEQ() {
+        let response = AutoPreampResponse(
+            eq: EQMagnitudeResponse(energyWeightedGainDb: 5, worstCaseGainDb: 5),
+            soundLab: EQMagnitudeResponse(energyWeightedGainDb: 2, worstCaseGainDb: 2)
+        )
+        XCTAssertEqual(AutoPreampSpec.derivedPreampDb(response: response, targetDb: 0), -7)
+    }
+
+    func testTheStageRiseTakesTheGreaterOfAverageAndPeak() {
+        func derived(average: Double, peak: Double) -> Double {
+            AutoPreampSpec.derivedPreampDb(
+                response: AutoPreampResponse(
+                    eq: EQMagnitudeResponse(energyWeightedGainDb: 0, worstCaseGainDb: 0),
+                    soundLab: EQMagnitudeResponse(energyWeightedGainDb: average, worstCaseGainDb: peak)
+                ),
+                targetDb: 0
+            )
+        }
+        XCTAssertEqual(derived(average: 2.4, peak: 1), -2, "平均が大きい")
+        XCTAssertEqual(derived(average: 1, peak: 2.6), -3, "ピークが大きい")
+    }
+
+    func testAFallingStageDoesNotMakeThePreampShallower() {
+        let response = AutoPreampResponse(
+            eq: EQMagnitudeResponse(energyWeightedGainDb: 5, worstCaseGainDb: 5),
+            soundLab: EQMagnitudeResponse(energyWeightedGainDb: -2, worstCaseGainDb: -1)
+        )
+        XCTAssertEqual(AutoPreampSpec.derivedPreampDb(response: response, targetDb: 0), -5)
+    }
+
+    /// クランプは合計に掛かる。EQ の分だけで先に打ち止めると、段の上がりが下限を越えて足される。
+    func testTheClampAppliesToTheSum() {
+        let eqGain = -EQSpec.DB_MIN - 2
+        let response = AutoPreampResponse(
+            eq: EQMagnitudeResponse(energyWeightedGainDb: eqGain, worstCaseGainDb: eqGain),
+            soundLab: EQMagnitudeResponse(energyWeightedGainDb: 4, worstCaseGainDb: 4)
+        )
+        XCTAssertEqual(AutoPreampSpec.derivedPreampDb(response: response, targetDb: 0), EQSpec.DB_MIN)
     }
 
     /// 測定の数値誤差が段をまたがせない。
     func testNegligibleGainStaysAtZero() {
-        let noise = EQMagnitudeResponse(energyWeightedGainDb: 2.2e-9, worstCaseGainDb: 0)
+        let noise = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 2.2e-9, worstCaseGainDb: 0))
         XCTAssertEqual(
             AutoPreampSpec.derivedPreampDb(response: noise, targetDb: 0), 0,
             "切り下げなら -1 になる"
@@ -135,7 +186,7 @@ final class AutoPreampSpecTests: XCTestCase {
 
     func testClampNeverExceedsMaxPreampDb() {
         // カット系カーブ (加重・最悪ともに負) は 0 を超えない。
-        let response = EQMagnitudeResponse(energyWeightedGainDb: -16.28, worstCaseGainDb: -3.19)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: -16.28, worstCaseGainDb: -3.19))
         for target in targetSteps {
             let got = AutoPreampSpec.derivedPreampDb(response: response, targetDb: target)
             XCTAssertLessThanOrEqual(got, AutoPreampSpec.maxPreampDb)
@@ -144,7 +195,7 @@ final class AutoPreampSpecTests: XCTestCase {
 
     func testClampNeverGoesBelowEQSpecDbMin() {
         // 深いカーブ (全バンド+12) は EQSpec.DB_MIN を下回らない。
-        let response = EQMagnitudeResponse(energyWeightedGainDb: 17.91, worstCaseGainDb: 20.41)
+        let response = AutoPreampResponse(eq: EQMagnitudeResponse(energyWeightedGainDb: 17.91, worstCaseGainDb: 20.41))
         for target in targetSteps {
             let got = AutoPreampSpec.derivedPreampDb(response: response, targetDb: target)
             XCTAssertGreaterThanOrEqual(got, EQSpec.DB_MIN)
@@ -160,13 +211,13 @@ final class AutoPreampSpecTests: XCTestCase {
     func testFloorIsAdoptedWhenWorstCaseDominatesOverEnergy() {
         // 単一+12@1kHz: 加重 1.93 は低いが最悪値 12.00 が高い → 床 (最悪-Δ) が採用される。
         let response = EQMagnitudeResponse(energyWeightedGainDb: 1.93, worstCaseGainDb: 12.00)
-        XCTAssertEqual(AutoPreampSpec.compositeGainDb(response), 12.00 - AutoPreampSpec.worstCaseHeadroomDb)
+        XCTAssertEqual(AutoPreampSpec.eqGainDb(response), 12.00 - AutoPreampSpec.worstCaseHeadroomDb)
     }
 
     func testEnergyIsAdoptedForWideCurves() {
         // 加重が最悪値から Δ を引いた値を上回るカーブでは、加重が採用される。
         let response = EQMagnitudeResponse(energyWeightedGainDb: 6.51, worstCaseGainDb: 12.06)
-        XCTAssertEqual(AutoPreampSpec.compositeGainDb(response), 6.51)
+        XCTAssertEqual(AutoPreampSpec.eqGainDb(response), 6.51)
     }
 
     // MARK: - response(powerSpectrum:sampleRate:)
