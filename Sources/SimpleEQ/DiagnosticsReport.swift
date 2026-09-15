@@ -98,6 +98,8 @@ enum DiagnosticsReport {
             DiagnosticsRow(
                 title: "レイアウト version", values: [readerValue(s, "\(s.driverLayoutVersion)")]
             ),
+            DiagnosticsRow(title: "音の入口", values: [audioInputText(s.audioInput)]),
+            DiagnosticsRow(title: "収録の許可", values: [captureAuthorizationText(s.captureAuthorization)]),
             DiagnosticsRow(
                 title: "出力デバイスの実レート", subtitle: "音を出しているデバイスの公称レート",
                 values: [hertzText(s.outputDeviceSampleRate)]
@@ -424,6 +426,23 @@ enum DiagnosticsReport {
         case .app: carrier = downgraded ? "アプリ (降格)" : "アプリ"
         }
         return carrier + " " + (value ?? unreadableValue)
+    }
+
+    private static func audioInputText(_ input: AudioRuntimeMetrics.AudioInputSource) -> String {
+        switch input {
+        case .none: return unobserved
+        case .dedicatedDriver: return "専用ドライバ"
+        case .airPlay: return "AirPlay"
+        }
+    }
+
+    private static func captureAuthorizationText(_ authorization: CaptureAuthorization) -> String {
+        switch authorization {
+        case .unread: return "未確認"
+        case .granted: return "許可済み"
+        case .denied: return "拒否"
+        case .unreadable: return "読み取り不可"
+        }
     }
 
     /// 副題は画面で折り返して読ませることがあるが、書き出しでは 1 行に収める。

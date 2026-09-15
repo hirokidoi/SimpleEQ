@@ -2761,30 +2761,30 @@ final class EQViewModelTests: XCTestCase {
     // 稼働中・異常なしでは nil。
     func testTopBarWarningIdentifierPrioritizesDriverAvailabilityOverSuspensionOverRingStalled() {
         XCTAssertEqual(
-            topBarWarningIdentifier(driverAvailability: .notFound, processingState: .suspended(.driverOperation), ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true),
+            topBarWarningIdentifier(driverAvailability: .notFound, processingState: .suspended(.driverOperation), ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive),
             .driverNotFound, "ドライバ未検出が最優先"
         )
         XCTAssertEqual(
-            topBarWarningIdentifier(driverAvailability: .versionMismatch, processingState: .active, ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true),
+            topBarWarningIdentifier(driverAvailability: .versionMismatch, processingState: .active, ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive),
             .driverVersionMismatch
         )
         XCTAssertEqual(
-            topBarWarningIdentifier(driverAvailability: .ok, processingState: .suspended(.routeUnavailable), ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true),
+            topBarWarningIdentifier(driverAvailability: .ok, processingState: .suspended(.routeUnavailable), ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive),
             .outputRouteSelectionRequired, "選び直しで再開できる停止は音声取得失敗より優先"
         )
         XCTAssertEqual(
-            topBarWarningIdentifier(driverAvailability: .ok, processingState: .suspended(.driverOperation), ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true),
+            topBarWarningIdentifier(driverAvailability: .ok, processingState: .suspended(.driverOperation), ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive),
             .restartRequired
         )
         XCTAssertEqual(
-            topBarWarningIdentifier(driverAvailability: .ok, processingState: .suspended(.applicationTermination), ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true),
+            topBarWarningIdentifier(driverAvailability: .ok, processingState: .suspended(.applicationTermination), ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive),
             .restartRequired
         )
         XCTAssertEqual(
-            topBarWarningIdentifier(driverAvailability: .ok, processingState: .active, ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true),
+            topBarWarningIdentifier(driverAvailability: .ok, processingState: .active, ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive),
             .audioUnavailable
         )
-        XCTAssertNil(topBarWarningIdentifier(driverAvailability: .ok, processingState: .active, ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true), "異常なしは nil")
+        XCTAssertNil(topBarWarningIdentifier(driverAvailability: .ok, processingState: .active, ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive), "異常なしは nil")
     }
 
     // 占有が解けている間は書き手の IO が動かず、正常な無音と区別が付かないため停止の判定は立たない。
@@ -2793,7 +2793,7 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(
             topBarWarningIdentifier(
                 driverAvailability: .ok, processingState: .active,
-                ringStalled: false, defaultOutputReachesDriver: false, audioWorldUnresponsive: false, startupActivationSettled: true
+                ringStalled: false, defaultOutputReachesDriver: false, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive
             ),
             .audioUnavailable
         )
@@ -2805,14 +2805,14 @@ final class EQViewModelTests: XCTestCase {
             topBarWarningIdentifier(
                 driverAvailability: .ok, processingState: .suspended(.routeUnavailable),
                 ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false,
-                startupActivationSettled: false
+                startupActivationSettled: false, airPlayMode: .inactive
             )
         )
         XCTAssertEqual(
             topBarWarningIdentifier(
                 driverAvailability: .ok, processingState: .suspended(.routeUnavailable),
                 ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false,
-                startupActivationSettled: true
+                startupActivationSettled: true, airPlayMode: .inactive
             ),
             .outputRouteSelectionRequired, "試した結果として決まらなかった場合は伝える"
         )
@@ -2824,7 +2824,7 @@ final class EQViewModelTests: XCTestCase {
             topBarWarningIdentifier(
                 driverAvailability: .notFound, processingState: .suspended(.routeUnavailable),
                 ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false,
-                startupActivationSettled: false
+                startupActivationSettled: false, airPlayMode: .inactive
             ),
             .driverNotFound
         )
@@ -2834,7 +2834,7 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(
             topBarWarningIdentifier(
                 driverAvailability: .ok, processingState: .suspended(.routeUnavailable),
-                ringStalled: false, defaultOutputReachesDriver: false, audioWorldUnresponsive: false, startupActivationSettled: true
+                ringStalled: false, defaultOutputReachesDriver: false, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive
             ),
             .outputRouteSelectionRequired
         )
@@ -2846,14 +2846,14 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(
             topBarWarningIdentifier(
                 driverAvailability: .notFound, processingState: .suspended(.driverOperation),
-                ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: true, startupActivationSettled: true
+                ringStalled: true, defaultOutputReachesDriver: true, audioWorldUnresponsive: true, startupActivationSettled: true, airPlayMode: .inactive
             ),
             .audioWorldUnresponsive, "ドライバ未検出より前に出る"
         )
         XCTAssertEqual(
             topBarWarningIdentifier(
                 driverAvailability: .ok, processingState: .active,
-                ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: true, startupActivationSettled: true
+                ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: true, startupActivationSettled: true, airPlayMode: .inactive
             ),
             .audioWorldUnresponsive, "他がすべて正常でも出る"
         )
@@ -2864,14 +2864,14 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertNil(
             topBarWarningIdentifier(
                 driverAvailability: .checking, processingState: .suspended(.routeUnavailable),
-                ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true
+                ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive
             ),
             "確認中だけでは警告を出さない"
         )
         XCTAssertEqual(
             topBarWarningIdentifier(
                 driverAvailability: .checking, processingState: .suspended(.routeUnavailable),
-                ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: true, startupActivationSettled: true
+                ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: true, startupActivationSettled: true, airPlayMode: .inactive
             ),
             .audioWorldUnresponsive
         )
@@ -2880,7 +2880,7 @@ final class EQViewModelTests: XCTestCase {
     func testTopBarWarningIdentifierDoesNotSurfaceAudioUnavailableWhileSuspended() {
         let identifier = topBarWarningIdentifier(
             driverAvailability: .ok, processingState: .suspended(.routeUnavailable), ringStalled: true, defaultOutputReachesDriver: true,
-            audioWorldUnresponsive: false, startupActivationSettled: true
+            audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive
         )
         XCTAssertEqual(identifier, .outputRouteSelectionRequired)
     }
@@ -2893,7 +2893,8 @@ final class EQViewModelTests: XCTestCase {
                     topBarWarningIdentifier(
                         driverAvailability: .ok, processingState: .suspended(.ownershipUnavailable),
                         ringStalled: ringStalled, defaultOutputReachesDriver: !ringStalled,
-                        audioWorldUnresponsive: false, startupActivationSettled: startupActivationSettled
+                        audioWorldUnresponsive: false, startupActivationSettled: startupActivationSettled,
+                        airPlayMode: .inactive
                     ),
                     "startupActivationSettled=\(startupActivationSettled) ringStalled=\(ringStalled)"
                 )
@@ -2901,7 +2902,141 @@ final class EQViewModelTests: XCTestCase {
         }
     }
 
+    // AirPlay モードでは共有メモリにもドライバにも音が通らないため、それらの観測からは警告を出さない。
+    // 入力はどれも、AirPlay モードでなければ警告になる組み合わせにしてある。
+    func testTopBarWarningIdentifierInAirPlayModeIgnoresTheDriverPathObservations() {
+        let driverPathProblems: [(ProcessingState, Bool, Bool)] = [
+            (.suspended(.routeUnavailable), false, true),
+            (.active, true, true),
+            (.active, false, false),
+        ]
+        for (processingState, ringStalled, reaches) in driverPathProblems {
+            let label = "state=\(processingState) stalled=\(ringStalled) reaches=\(reaches)"
+            XCTAssertNotNil(
+                topBarWarningIdentifier(
+                    driverAvailability: .ok, processingState: processingState, ringStalled: ringStalled,
+                    defaultOutputReachesDriver: reaches, audioWorldUnresponsive: false,
+                    startupActivationSettled: true, airPlayMode: .inactive
+                ),
+                "前提: AirPlay モードでなければ警告になる \(label)"
+            )
+            for phase: AirPlayModePhase in [.awaitingCapture, .capturing] {
+                XCTAssertNil(
+                    topBarWarningIdentifier(
+                        driverAvailability: .ok, processingState: processingState, ringStalled: ringStalled,
+                        defaultOutputReachesDriver: reaches, audioWorldUnresponsive: false,
+                        startupActivationSettled: true, airPlayMode: phase
+                    ),
+                    "\(phase) \(label)"
+                )
+            }
+        }
+    }
+
+    // 許可待ちの間は何も出さず、拒否と失敗だけを伝える。どちらも他の観測が正常でも出る。
+    func testTopBarWarningIdentifierInAirPlayModeReportsDeniedAndFailedCapture() {
+        XCTAssertEqual(
+            topBarWarningIdentifier(
+                driverAvailability: .ok, processingState: .active, ringStalled: false,
+                defaultOutputReachesDriver: true, audioWorldUnresponsive: false,
+                startupActivationSettled: true, airPlayMode: .captureDenied
+            ),
+            .captureAuthorizationRequired
+        )
+        XCTAssertEqual(
+            topBarWarningIdentifier(
+                driverAvailability: .ok, processingState: .active, ringStalled: false,
+                defaultOutputReachesDriver: true, audioWorldUnresponsive: false,
+                startupActivationSettled: true, airPlayMode: .captureFailed
+            ),
+            .audioUnavailable
+        )
+        XCTAssertEqual(
+            topBarWarningIdentifier(
+                driverAvailability: .ok, processingState: .suspended(.routeUnavailable), ringStalled: false,
+                defaultOutputReachesDriver: true, audioWorldUnresponsive: false,
+                startupActivationSettled: true, airPlayMode: .captureFailed
+            ),
+            .audioUnavailable, "停止していても出力先の選び直しを求めない"
+        )
+    }
+
+    // 応答なし・ドライバ系・再起動要は AirPlay モードより先に出し、他セッションの使用中は AirPlay モードでも出さない。
+    func testTopBarWarningIdentifierPrioritizesDriverAndRestartOverAirPlayMode() {
+        let phases: [AirPlayModePhase] = [.awaitingCapture, .capturing, .captureDenied, .captureFailed]
+        for phase in phases {
+            func identifier(
+                _ availability: DriverAvailability, _ state: ProcessingState, unresponsive: Bool = false
+            ) -> TopBarWarningIdentifier? {
+                topBarWarningIdentifier(
+                    driverAvailability: availability, processingState: state, ringStalled: false,
+                    defaultOutputReachesDriver: true, audioWorldUnresponsive: unresponsive,
+                    startupActivationSettled: true, airPlayMode: phase
+                )
+            }
+            XCTAssertEqual(identifier(.ok, .active, unresponsive: true), .audioWorldUnresponsive, "\(phase)")
+            XCTAssertNil(identifier(.checking, .active), "\(phase)")
+            XCTAssertEqual(identifier(.notFound, .active), .driverNotFound, "\(phase)")
+            XCTAssertEqual(identifier(.versionMismatch, .active), .driverVersionMismatch, "\(phase)")
+            XCTAssertEqual(identifier(.ok, .suspended(.driverOperation)), .restartRequired, "\(phase)")
+            XCTAssertEqual(identifier(.ok, .suspended(.applicationTermination)), .restartRequired, "\(phase)")
+            XCTAssertNil(identifier(.ok, .suspended(.ownershipUnavailable)), "\(phase)")
+        }
+    }
+
+    // ビューモデルは押し出された相をそのまま警告の判定へ渡す。
+    func testTopBarWarningFollowsTheAirPlayPhasePushedIn() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        vm.noteStartupActivationSettled()
+        vm.updateRingStalled(true)
+        XCTAssertEqual(vm.topBarWarning, TopBarWarningPolicy.content(for: .audioUnavailable), "前提: AirPlay モードでなければ警告になる")
+
+        vm.updateAirPlayMode(.capturing)
+        XCTAssertNil(vm.topBarWarning)
+        XCTAssertTrue(vm.settingsReachAudio, "警告が無ければ設定は音へ届く")
+
+        vm.updateAirPlayMode(.captureDenied)
+        XCTAssertEqual(vm.topBarWarning, TopBarWarningPolicy.content(for: .captureAuthorizationRequired))
+        XCTAssertFalse(vm.settingsReachAudio)
+    }
+
+    // AirPlay の端末はシステム側の UI でしか選べないため、チップもメニューも固定の文言にする。
+    func testAirPlayModeReplacesOutputSelectionWithTheFixedLabel() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld(),
+            driverAvailability: .ok, processingState: .active
+        )
+        XCTAssertTrue(vm.canSelectOutputDevice, "前提: 稼働中は選び直せる")
+        XCTAssertNil(vm.fixedOutputDeviceLabel)
+
+        for phase: AirPlayModePhase in [.awaitingCapture, .capturing, .captureDenied, .captureFailed] {
+            vm.updateAirPlayMode(phase)
+            XCTAssertTrue(vm.isAirPlayMode, "\(phase)")
+            XCTAssertFalse(vm.canSelectOutputDevice, "\(phase)")
+            XCTAssertNotNil(vm.fixedOutputDeviceLabel, "\(phase)")
+        }
+
+        vm.updateAirPlayMode(.inactive)
+        XCTAssertFalse(vm.isAirPlayMode)
+        XCTAssertTrue(vm.canSelectOutputDevice)
+        XCTAssertNil(vm.fixedOutputDeviceLabel)
+    }
+
     // MARK: - TopBarWarningPolicy.content (表示内容の対応表)
+
+    // 原因を取り除く場所はアプリの外にあるため、システム設定の画面へ直接送る。
+    func testCaptureAuthorizationRequiredLeadsToTheSystemSettingsScreen() {
+        let destination = TopBarWarningPolicy.content(for: .captureAuthorizationRequired).destination
+        XCTAssertEqual(destination, .captureAuthorizationSettings)
+        XCTAssertNotNil(TopBarWarningPolicy.systemSettingsURL(for: destination))
+        XCTAssertNil(TopBarWarningPolicy.systemSettingsURL(for: .settings), "アプリ内の画面へ送る誘導先は URL を持たない")
+        XCTAssertNil(TopBarWarningPolicy.systemSettingsURL(for: .none))
+    }
 
     // 選び直せるのは同じ画面のピッカーであり、別画面の設定は次回起動の既定値だけを変えるため。
     func testOutputRouteSelectionRequiredContentHasNoDestination() {

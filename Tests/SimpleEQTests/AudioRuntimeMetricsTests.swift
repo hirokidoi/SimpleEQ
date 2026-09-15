@@ -477,4 +477,21 @@ final class AudioRuntimeMetricsTests: XCTestCase {
         XCTAssertEqual(snapshot.writeDeadlineMissedCount, 6)
         XCTAssertNil(snapshot.lastResetAt)
     }
+
+    // MARK: - 音の入口と収録の許可
+
+    func testTheInputAndTheCaptureAuthorizationRideOnTheSnapshotAndSurviveAReset() {
+        let metrics = AudioRuntimeMetrics()
+        let initial = metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
+        XCTAssertEqual(initial.audioInput, .none)
+        XCTAssertEqual(initial.captureAuthorization, .unread)
+
+        metrics.recordAudioInput(.airPlay)
+        metrics.recordCaptureAuthorization(.denied)
+        metrics.reset()
+
+        let snapshot = metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate)
+        XCTAssertEqual(snapshot.audioInput, .airPlay, "現在の状態なのでリセットの対象にしない")
+        XCTAssertEqual(snapshot.captureAuthorization, .denied)
+    }
 }

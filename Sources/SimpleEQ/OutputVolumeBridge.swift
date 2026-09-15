@@ -141,6 +141,15 @@ final class OutputVolumeBridge: @unchecked Sendable {
         muteDowngraded = false
     }
 
+    /// 音量も消音も機器が担う経路として束ねを外し、アプリのゲイン段を中立にする。
+    func releaseForDeviceCarriedRoute(_ token: AudioWorldToken) {
+        unbind(token)
+        volumeMode = .device
+        muteMode = .device
+        // 同値判定の記憶を更新しておかないと、戻ったときに同じゲインの押し出しが省かれ単位ゲインのまま残る。
+        publishGain()
+    }
+
     func routeObservation(_ token: AudioWorldToken) -> VolumeRouteObservation? {
         guard let id = boundDeviceID else { return nil }
         return VolumeRouteObservation(
@@ -155,17 +164,15 @@ final class OutputVolumeBridge: @unchecked Sendable {
 
     private func applyListenerActions(_ actions: OutputDeviceRebindActions, deviceID: AudioDeviceID?, _ token: AudioWorldToken) {
         if actions.unregisterListener, let id = listenerDeviceID, let block = listenerBlock {
-            deviceIO.removeVolumeMuteListener(id, queue: audioWorld.queue, block)
+            deviceIO.removeVolumeMuteListener(id, queue: audioWorld.listenerQueue, block)
             listenerBlock = nil
             listenerDeviceID = nil
         }
         if actions.registerListener, let id = deviceID {
-            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                guard let self else { return }
-                let t = self.audioWorld.assumingOnQueue()
-                self.realDeviceDidNotify?(id, t)
+            let block = audioWorld.propertyListener { [weak self] token in
+                self?.realDeviceDidNotify?(id, token)
             }
-            deviceIO.addVolumeMuteListener(id, queue: audioWorld.queue, block)
+            deviceIO.addVolumeMuteListener(id, queue: audioWorld.listenerQueue, block)
             listenerBlock = block
             listenerDeviceID = id
         }

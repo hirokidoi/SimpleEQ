@@ -8,7 +8,6 @@ struct TopBarView: View {
     @ObservedObject var viewModel: EQViewModel
     /// 右クリックメニューの Mixer 項目は表示状態で文言が変わるため、観測して受ける。
     @ObservedObject var mixer: MixerModel
-    /// 警告チップからは Settings だけを開く (原因を取り除く出口がそこにあるため)。
     var onOpenWindow: (WindowDestination) -> Void
 
     @State private var showingPreampPopover = false
@@ -98,16 +97,25 @@ struct TopBarView: View {
         .frame(height: height, alignment: .bottom)
     }
 
-    /// ドライバ未検出 / ドライバ更新要 / 出力先の選び直し要 / 再起動要 / 音声取得失敗を知らせる警告チップ。
-    /// 優先順位・文言・誘導先はすべてビューモデル側が決める。正常時は何も表示しない。
+    /// 異常を知らせる警告チップ。優先順位・文言・誘導先はすべてビューモデル側が決める。正常時は何も表示しない。
     @ViewBuilder
     private var warningChip: some View {
         if let warning = viewModel.topBarWarning {
-            if warning.destination == .settings {
+            switch warning.destination {
+            case .settings:
                 chip(text: warning.message)
                     .contentShape(Capsule())
+                    .pointerStyle(.link)
                     .onTapGesture { onOpenWindow(.settings) }
-            } else {
+            case .captureAuthorizationSettings:
+                chip(text: warning.message)
+                    .contentShape(Capsule())
+                    .pointerStyle(.link)
+                    .onTapGesture {
+                        guard let url = TopBarWarningPolicy.systemSettingsURL(for: warning.destination) else { return }
+                        NSWorkspace.shared.open(url)
+                    }
+            case .none:
                 chip(text: warning.message).modifier(chrome)
             }
         }
@@ -158,16 +166,24 @@ struct TopBarView: View {
 
     /// 出力先チップ。実際に採用されている出力デバイス名を表示しつつ、その場から選び直せる。
     /// 選択はセッション限定 (非永続) で、選び直しは即座に実デバイスへ反映される。
+    /// 選ばせない間は固定の文言だけを出す。
     private var outputDevicePicker: some View {
         HStack(spacing: 6) {
             preampIconButton
-            sharedOutputDevicePicker(
-                selection: $viewModel.sessionOutputDeviceUID,
-                options: viewModel.availableOutputDeviceOptions,
-                autoLabel: nil,
-                fallbackLabel: viewModel.resolvedOutputDeviceName
-            )
-            .disabled(!viewModel.canSelectOutputDevice)
+            if let label = viewModel.fixedOutputDeviceLabel {
+                Text(label)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .modifier(chrome)
+            } else {
+                sharedOutputDevicePicker(
+                    selection: $viewModel.sessionOutputDeviceUID,
+                    options: viewModel.availableOutputDeviceOptions,
+                    autoLabel: nil,
+                    fallbackLabel: viewModel.resolvedOutputDeviceName
+                )
+                .disabled(!viewModel.canSelectOutputDevice)
+            }
         }
         .modifier(BarCapsule(foreground: EQLayout.Palette.dim, stroke: EQLayout.Palette.line) {
             Capsule().fill(Color.white.opacity(0.02)).modifier(chrome)

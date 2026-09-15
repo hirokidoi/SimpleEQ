@@ -145,6 +145,7 @@ final class OwnershipCoordinator: @unchecked Sendable {
     private let isOnConsole: @Sendable () -> Bool
     /// 書き込みを伴う経路の照合を打つ入口。
     private let requestRouteReconciliation: @Sendable (AudioWorldToken) -> Void
+    private let abandonAirPlayMode: @Sendable (AudioWorldToken) -> Void
 
     // 以下は queue 上だけが読み書きする。
     private var wasSelfOwner = false
@@ -168,6 +169,7 @@ final class OwnershipCoordinator: @unchecked Sendable {
         queue: DispatchQueue = DispatchQueue(label: "com.simpleeq.ownership", qos: .utility),
         configuredOutputDeviceUID: @escaping @Sendable () -> String? = { nil },
         requestRouteReconciliation: @escaping @Sendable (AudioWorldToken) -> Void = { _ in },
+        abandonAirPlayMode: @escaping @Sendable (AudioWorldToken) -> Void = { _ in },
         isOnConsole: @escaping @Sendable () -> Bool
     ) {
         self.audioWorld = audioWorld
@@ -181,6 +183,7 @@ final class OwnershipCoordinator: @unchecked Sendable {
         self.queue = queue
         self.configuredOutputDeviceUID = configuredOutputDeviceUID
         self.requestRouteReconciliation = requestRouteReconciliation
+        self.abandonAirPlayMode = abandonAirPlayMode
         self.isOnConsole = isOnConsole
     }
 
@@ -367,6 +370,7 @@ final class OwnershipCoordinator: @unchecked Sendable {
                 // 所有しているのに経路が作れないのは経路の問題。所有権の停止種別のまま置くと、
                 // 警告も出ず操作できる見た目のまま音が出ず、自動再開の対象にもならない。
                 engine.suspend(cause: .routeUnavailable, token)
+                requestRouteReconciliation(token)
                 return
             }
             activationCoordinator.resume(outputDevice: target, trigger: .ownershipAcquired, token)
@@ -382,6 +386,7 @@ final class OwnershipCoordinator: @unchecked Sendable {
     private func standDownFromOwnership(_ token: AudioWorldToken) {
         driverLifecycle.abandonVisibilityOwnership(token)
         outputController.abandonRestoreObligation(token)
+        abandonAirPlayMode(token)
         switch engine.processingState {
         case .suspended(.driverOperation), .suspended(.applicationTermination), .suspended(.ownershipUnavailable):
             return
@@ -456,7 +461,7 @@ final class OwnershipCoordinator: @unchecked Sendable {
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.runPass() }
         var addr = Self.ownershipAddress
         // 登録できなかった回を記録すると、以降は同じ id で素通りして周期パスだけに縮退したままになる。
-        guard AudioObjectAddPropertyListenerBlock(resolvedID, &addr, audioWorld.queue, block) == noErr else { return }
+        guard AudioObjectAddPropertyListenerBlock(resolvedID, &addr, audioWorld.listenerQueue, block) == noErr else { return }
         listenerDeviceID = resolvedID
         listenerBlock = block
     }
@@ -464,7 +469,7 @@ final class OwnershipCoordinator: @unchecked Sendable {
     private func removeListener(_ token: AudioWorldToken) {
         if let previousID = listenerDeviceID, let block = listenerBlock {
             var addr = Self.ownershipAddress
-            AudioObjectRemovePropertyListenerBlock(previousID, &addr, audioWorld.queue, block)
+            AudioObjectRemovePropertyListenerBlock(previousID, &addr, audioWorld.listenerQueue, block)
         }
         listenerDeviceID = nil
         listenerBlock = nil

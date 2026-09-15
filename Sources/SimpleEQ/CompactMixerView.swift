@@ -37,7 +37,12 @@ struct CompactMixerView: View {
 
     @ViewBuilder
     private var column: some View {
-        if model.channels.isEmpty {
+        if viewModel.isAirPlayMode {
+            ZStack {
+                dragStrip
+                AirPlayUnavailableNotice()
+            }
+        } else if model.channels.isEmpty {
             emptyState
         } else {
             ScrollView {

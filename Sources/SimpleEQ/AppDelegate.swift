@@ -50,7 +50,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requestRouteReconciliation: { [reconciler = deviceRoutingReconciler] token in
             reconciler.reconcile(trigger: .explicit, token)
         },
+        abandonAirPlayMode: { [airPlayMode] token in airPlayMode.abandon(token) },
         isOnConsole: { [weak self] in self?.onConsoleBox.withLock { $0 } ?? true }
+    )
+    private lazy var airPlayMode = AirPlayModeCoordinator(
+        engine: engine, activationCoordinator: activationCoordinator,
+        driverDeviceUID: DriverConfig.deviceUID, metrics: engine.runtimeMetrics
+    )
+    private lazy var airPlayCaptureBuilder = AirPlayCaptureBuilder(
+        didFinish: { [audioWorld, airPlayMode] outcome, generation in
+            audioWorld.submitUncoalesced { token in airPlayMode.deliver(outcome, generation: generation, token) }
+        },
+        authorizationResultDidArrive: { [audioWorld, airPlayMode] in
+            audioWorld.submitUncoalesced { token in airPlayMode.authorizationRequestDidComplete(token) }
+        }
     )
     private lazy var deviceRoutingReconciler: DeviceRoutingReconciler = DeviceRoutingReconciler(
         engine: engine,
@@ -69,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didObserveRingStalled: { [weak self] stalled in
             DispatchQueue.main.async { self?.viewModel.updateRingStalled(stalled) }
         },
+        airPlayMode: airPlayMode,
         audioWorld: audioWorld
     )
     private lazy var viewModel: EQViewModel = EQViewModel(
@@ -136,6 +150,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         engine.appliedSampleRateDidChange = { [weak self] rate in
             DispatchQueue.main.async { self?.viewModel.handleAppliedSampleRateDidChange(rate) }
+        }
+        airPlayMode.requestCapture = { [airPlayCaptureBuilder] request in airPlayCaptureBuilder.build(request) }
+        airPlayMode.requestRouteReconciliation = { [deviceRoutingReconciler] token in
+            deviceRoutingReconciler.reconcile(trigger: .explicit, token)
+        }
+        airPlayMode.scheduleRouteReconciliation = { [deviceRoutingReconciler] after in
+            deviceRoutingReconciler.requestReconcile(after: after)
+        }
+        airPlayMode.phaseDidChange = { [weak self] phase in
+            DispatchQueue.main.async { self?.viewModel.updateAirPlayMode(phase) }
         }
         ownershipCoordinator.didUpdate = { [weak self, mixer = mixerCoordinator] update in
             guard let self else { return }
@@ -244,7 +268,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let configuredOutputDeviceUID = settings.outputDeviceUID
-        audioWorld.submitUncoalesced { [activationCoordinator, outputController, weak self] token in
+        audioWorld.submitUncoalesced {
+            [activationCoordinator, outputController, deviceRoutingReconciler, airPlayMode, weak self] token in
             let outcome = activationCoordinator.activate(
                 resolveOutputDevice: { t in
                     Self.resolveOutputDevice(
@@ -253,12 +278,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 },
                 attempt: .launch, token
             )
+            // 決着を知らせる前に是正を回し、AirPlay モードの相を先に確定させる。
+            deviceRoutingReconciler.reconcile(trigger: .explicit, token)
             DispatchQueue.main.async { self?.viewModel.noteStartupActivationSettled() }
             if outcome.processingState != .active {
                 print("[warn] audio engine not started (output=\(configuredOutputDeviceUID ?? "nil"))")
             }
             // 出力先を選ぶのは利用者であり、ここでアプリが代わりに選ぶことはしない。
-            if outcome.outputRouteNotEstablished {
+            if outcome.outputRouteNotEstablished, airPlayMode.phase == .inactive {
                 DispatchQueue.main.async { self?.windowController?.show() }
             }
         }

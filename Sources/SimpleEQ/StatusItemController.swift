@@ -6,12 +6,20 @@ enum PresetMenuEntries {
     }
 }
 
-enum OutputDeviceMenuEntries {
-    static func visibleOptions(
-        canSelect: Bool, selection: String?, options: [OutputDeviceOption], fallbackLabel: String
-    ) -> [OutputDeviceOption] {
-        guard canSelect else { return [] }
-        return resolvedOutputDevicePickerOptions(selection: selection, options: options, fallbackLabel: fallbackLabel)
+enum OutputDeviceMenuEntries: Equatable {
+    case devices([OutputDeviceOption])
+    /// 選べる出力先を並べず、今の出力先を示す 1 項目だけを出す。
+    case fixed(title: String)
+
+    static func entries(
+        isOwner: Bool, fixedLabel: String?, canSelect: Bool, selection: String?,
+        options: [OutputDeviceOption], fallbackLabel: String
+    ) -> OutputDeviceMenuEntries {
+        if isOwner, let fixedLabel { return .fixed(title: fixedLabel) }
+        guard canSelect else { return .devices([]) }
+        return .devices(
+            resolvedOutputDevicePickerOptions(selection: selection, options: options, fallbackLabel: fallbackLabel)
+        )
     }
 }
 
@@ -172,19 +180,31 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
 
     private func rebuildOutputDeviceItems() {
         let selection = viewModel.sessionOutputDeviceUID
-        let options = OutputDeviceMenuEntries.visibleOptions(
+        let entries = OutputDeviceMenuEntries.entries(
+            isOwner: viewModel.isOwner,
+            fixedLabel: viewModel.fixedOutputDeviceLabel,
             canSelect: viewModel.canSelectOutputDevice,
             selection: selection,
             options: viewModel.availableOutputDeviceOptions,
             fallbackLabel: viewModel.resolvedOutputDeviceName
         )
-        outputSection.rebuild(
-            entries: options.map {
-                MenuSection.Entry(title: $0.name, representedObject: $0.uid, isChecked: $0.uid == selection)
-            },
-            target: self,
-            action: #selector(selectOutputDevice(_:))
-        )
+        switch entries {
+        case .devices(let options):
+            outputSection.rebuild(
+                entries: options.map {
+                    MenuSection.Entry(title: $0.name, representedObject: $0.uid, isChecked: $0.uid == selection)
+                },
+                target: self,
+                action: #selector(selectOutputDevice(_:))
+            )
+        case .fixed(let title):
+            // グレーにすると、選択中なのか使えないのかが読めなくなる。
+            outputSection.rebuild(
+                entries: [MenuSection.Entry(title: title, representedObject: nil, isChecked: true)],
+                target: self,
+                action: #selector(keepFixedOutputDevice(_:))
+            )
+        }
     }
 
     private func addDiagnosticsItem(_ title: String, _ action: Selector) {
@@ -235,6 +255,8 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSMenuItemValidation
         guard let uid = sender.representedObject as? String else { return }
         viewModel.sessionOutputDeviceUID = uid
     }
+
+    @objc private func keepFixedOutputDevice(_ sender: NSMenuItem) {}
 
     @objc private func openSettingsWindow() {
         windowController.showSettings()

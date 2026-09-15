@@ -1,3 +1,5 @@
+import Foundation
+
 /// 上部バーの警告の識別子。識別子だけを表し、文言・誘導先は持たない。
 /// 表示内容は対応表として別に持つ。
 enum TopBarWarningIdentifier: Equatable {
@@ -14,6 +16,8 @@ enum TopBarWarningIdentifier: Equatable {
     /// ドライバは見つかっているが、音が届いていない。共有メモリへの書き込みが直近で停止している場合と、
     /// システムのデフォルト出力から自ドライバへ音が届かない場合の両方を表す。
     case audioUnavailable
+    /// AirPlay モードで稼働しているが、システムオーディオ録音の許可が拒否されている。
+    case captureAuthorizationRequired
 }
 
 /// 上部バーの警告の誘導先。
@@ -22,6 +26,8 @@ enum TopBarWarningDestination: Equatable {
     case none
     /// Settings 画面を開く。
     case settings
+    /// システム設定のシステムオーディオ録音の許可の画面を開く。
+    case captureAuthorizationSettings
 }
 
 /// 上部バーの警告チップの表示内容 (文言 + 誘導先)。View から定数を直参照させないための型。
@@ -35,7 +41,8 @@ struct TopBarWarningContent: Equatable {
 /// 音声取得失敗 (共有メモリへの書き込み停止 / 出力デバイス制御の到達判定の否定) は経路が違っても同じ識別子で表す。
 func topBarWarningIdentifier(
     driverAvailability: DriverAvailability, processingState: ProcessingState, ringStalled: Bool,
-    defaultOutputReachesDriver: Bool, audioWorldUnresponsive: Bool, startupActivationSettled: Bool
+    defaultOutputReachesDriver: Bool, audioWorldUnresponsive: Bool, startupActivationSettled: Bool,
+    airPlayMode: AirPlayModePhase
 ) -> TopBarWarningIdentifier? {
     if audioWorldUnresponsive { return .audioWorldUnresponsive }
     switch driverAvailability {
@@ -47,13 +54,22 @@ func topBarWarningIdentifier(
     }
     if case .suspended(let cause) = processingState {
         switch cause {
-        case .routeUnavailable:
-            // 起動の最初の組み立てを終えるまでは、まだ何も試していない状態を異常として伝えない。
-            return startupActivationSettled ? .outputRouteSelectionRequired : nil
+        case .routeUnavailable: break
         case .driverOperation, .applicationTermination: return .restartRequired
         // 他セッションが使用中は正常な状態であり、警告チップには含めない (dim と拒否は別経路で効く)。
         case .ownershipUnavailable: return nil
         }
+    }
+    // AirPlay モードでは共有メモリにもドライバにも音が通らないため、それらの観測を警告に使わない。
+    switch airPlayMode {
+    case .captureDenied: return .captureAuthorizationRequired
+    case .captureFailed: return .audioUnavailable
+    case .awaitingCapture, .capturing: return nil
+    case .inactive: break
+    }
+    if case .suspended(.routeUnavailable) = processingState {
+        // 起動の最初の組み立てを終えるまでは、まだ何も試していない状態を異常として伝えない。
+        return startupActivationSettled ? .outputRouteSelectionRequired : nil
     }
     return (ringStalled || !defaultOutputReachesDriver) ? .audioUnavailable : nil
 }
@@ -77,6 +93,23 @@ enum TopBarWarningPolicy {
             return TopBarWarningContent(message: "再起動が必要です", destination: .settings)
         case .audioUnavailable:
             return TopBarWarningContent(message: "音声を取得できません", destination: .none)
+        case .captureAuthorizationRequired:
+            // 語はシステム設定の項目名に合わせる。
+            return TopBarWarningContent(
+                message: "システムオーディオ録音の許可が必要です", destination: .captureAuthorizationSettings
+            )
         }
     }
+
+    /// 誘導先がシステム設定の画面のときに開く URL。
+    static func systemSettingsURL(for destination: TopBarWarningDestination) -> URL? {
+        switch destination {
+        case .none, .settings: return nil
+        case .captureAuthorizationSettings: return captureAuthorizationSettingsURL
+        }
+    }
+
+    private static let captureAuthorizationSettingsURL = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+    )
 }

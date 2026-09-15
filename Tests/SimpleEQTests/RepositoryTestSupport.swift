@@ -7,6 +7,8 @@ enum RepositoryFiles {
 
     static var appProjectDefinition: URL { root.appendingPathComponent("project.yml") }
 
+    static var appInfoPlist: URL { root.appendingPathComponent("Info.plist") }
+
     static var makefile: URL { root.appendingPathComponent("Makefile") }
 
     static var driverProjectFile: URL {

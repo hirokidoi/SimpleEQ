@@ -12,15 +12,19 @@ func restorePlanarBufferByteSize(_ ioData: UnsafeMutablePointer<AudioBufferList>
     for c in 0..<abl.count { abl[c].mDataByteSize = bytesPerChannel }
 }
 
-/// 共有メモリリング → EQ (AUNBandEQ) → 出力 AUHAL のオーディオエンジン。
+/// 共有メモリリング (AirPlay モードでは取り込み経路のリング) → EQ (AUNBandEQ) → 出力 AUHAL のオーディオエンジン。
 /// 共有メモリリングは読み取り専用 (書き込み/出力ターゲットにしない)。
 final class AudioEngine: @unchecked Sendable {
     private var outputUnit: AudioUnit?
     private var eqUnit: EQUnit?
+    /// 取り込み経路で稼働している間も、所有権の門・名簿・ヘッダの観測のために持つ。
     private var ringReader: SharedRingReader?
+    private var captureSource: AirPlayCaptureSource?
+    private var captureRing: CaptureRing?
+    private(set) var presentationDelay: PresentationDelayLine?
+    private let presentationDelayScratch: UnsafeMutablePointer<Float>
 
     private let audioWorld: AudioWorld
-    private var driverDeviceListenerQueue: DispatchQueue { audioWorld.queue }
 
     private(set) var processingState: ProcessingState = .suspended(.routeUnavailable)
     /// オーディオ世界のキュー上で発火する (呼び出し元は必要に応じてメインキューへ戻すこと)。
@@ -47,6 +51,15 @@ final class AudioEngine: @unchecked Sendable {
             return nil
         }
         return eq
+    }
+    /// 取り込み経路の出力先が申告する遅延 (フレーム)。既定は実装本体で、差し替え可能な境界として持つ。
+    var readPresentationDelayFrames: (AudioDeviceID, Double, AudioWorldToken) -> Int = { deviceID, sampleRate, token in
+        PresentationDelayLine.presentationDelayFrames(
+            deviceLatency: outputDeviceLatencyFrames(deviceID, token) ?? 0,
+            streamLatency: firstOutputStreamLatencyFrames(deviceID, token) ?? 0,
+            safetyOffset: outputSafetyOffsetFrames(deviceID, token) ?? 0,
+            sampleRate: sampleRate
+        )
     }
     /// 出力ユニットの生成と出力デバイスの適用 (失敗時は生成済みの資源を後始末してから nil を返す)。
     private static func makeOutputUnit(
@@ -77,6 +90,32 @@ final class AudioEngine: @unchecked Sendable {
     func evaluateRingStalled(_ token: AudioWorldToken) -> Bool {
         guard let reader = ringReader else { return true }
         return reader.checkWriterStalled()
+    }
+
+    var airPlayRoute: String? { captureSource?.endpointUID }
+
+    func evaluateAirPlayCaptureStalled(_ token: AudioWorldToken) -> Bool {
+        guard let capture = captureSource else { return true }
+        // 書き込みの有無を先に読む。時刻を先に読むと、その間の最初の書き込みで開始の印からの経過を周期しきい値と比べてしまう。
+        let hasReceivedWrite = capture.ring.hasReceivedWriteSinceStart
+        return AirPlayModePolicy.captureStalled(
+            elapsedSinceLastWrite: HostTime.seconds(from: capture.ring.lastWriteHostTime, to: mach_absolute_time()),
+            hasReceivedWriteSinceStart: hasReceivedWrite,
+            cycleThreshold: SharedRingReader.writerStallThreshold(
+                ioCycleFrames: UInt32(capture.ioBufferFrames), sampleRate: capture.sampleRate
+            )
+        )
+    }
+
+    func airPlayRouteHealthy(_ token: AudioWorldToken) -> Bool {
+        guard let capture = captureSource else { return false }
+        return AirPlayModePolicy.routeHealthy(
+            auhalDeviceUID: currentOutputDeviceID(token).flatMap { deviceUID($0, token) },
+            endpointUID: capture.endpointUID,
+            captureStalled: evaluateAirPlayCaptureStalled(token),
+            appliedRate: AudioConfig.appliedSampleRate,
+            aggregateRate: capture.currentSampleRate(token)
+        )
     }
 
     func refreshDriverObservations(_ token: AudioWorldToken) {
@@ -168,6 +207,7 @@ final class AudioEngine: @unchecked Sendable {
         self.volumeDeviceIO = volumeDeviceIO
         outputVolumeBridge = OutputVolumeBridge(audioWorld: audioWorld, deviceIO: volumeDeviceIO)
         eqInputScratch = UnsafeMutablePointer<Float>.allocate(capacity: AudioConfig.maxRenderFrames * Int(AudioConfig.channels))
+        presentationDelayScratch = UnsafeMutablePointer<Float>.allocate(capacity: AudioConfig.maxRenderFrames * Int(AudioConfig.channels))
         levelMeter = LevelMeter(bandFrequencies: EQSpec.FREQS, appliedSampleRate: AudioConfig.appliedSampleRate)
         wireOutputVolumeBridge()
     }
@@ -208,40 +248,86 @@ final class AudioEngine: @unchecked Sendable {
     @discardableResult
     func assemble(outputDevice: ResolvedOutputDevice, ringReader: SharedRingReader, driverDeviceID: AudioDeviceID? = nil, _ token: AudioWorldToken) -> Bool {
         guard processingState != .active else { return false }
-        self.ringReader = ringReader
         ringReader.adopt(metrics: runtimeMetrics)
         // ヘッダの申告値が不正なら基準レートへ倒す (安全側)。
         let headerSampleRate = ringReader.driverReportedSampleRate
-        applySampleRate(headerSampleRate > 0 ? headerSampleRate : AudioConfig.baseSampleRate, token)
+        let assembled = assembleOutputStage(
+            outputDeviceID: outputDevice.deviceID, ringReader: ringReader,
+            inputSampleRate: headerSampleRate > 0 ? headerSampleRate : AudioConfig.baseSampleRate,
+            driverDeviceID: driverDeviceID,
+            prepareRoute: { [self] in
+                intendedOutputDeviceUID = outputDevice.uid
+                let driverAtAssemble = refreshDriverVolumeAndMute(token)
+                outputVolumeBridge.rebind(
+                    outputUID: outputDevice.uid, outputDeviceID: outputDevice.deviceID,
+                    driverVolume: driverAtAssemble.volume, driverMuted: driverAtAssemble.muted, token
+                )
+                return true
+            },
+            outputDidStart: { [self] in startDriverDeviceMonitoring(token) },
+            input: .dedicatedDriver, token
+        )
+        guard assembled else { return false }
+        outputDeviceDidConfirm?(outputDevice.uid)
+        return true
+    }
+
+    /// 出力先は取り込み対象のエンドポイントそのものだが、あるべき出力先としては持たない。
+    @discardableResult
+    func assembleAirPlay(capture: AirPlayCaptureSource, ringReader: SharedRingReader, driverDeviceID: AudioDeviceID? = nil, _ token: AudioWorldToken) -> Bool {
+        guard processingState != .active else { return false }
+        captureSource = capture
+        captureRing = capture.ring
+        // レンダは読まないが、ドライバの版と書き手の観測はこの読み手から転記する。
+        ringReader.adopt(metrics: runtimeMetrics)
+        capture.ring.adopt(metrics: runtimeMetrics)
+        return assembleOutputStage(
+            outputDeviceID: capture.endpointDeviceID, ringReader: ringReader,
+            inputSampleRate: capture.sampleRate, driverDeviceID: driverDeviceID,
+            prepareRoute: { [self] in
+                outputVolumeBridge.releaseForDeviceCarriedRoute(token)
+                let delayFrames = readPresentationDelayFrames(capture.endpointDeviceID, AudioConfig.appliedSampleRate, token)
+                presentationDelay = delayFrames > 0
+                    ? PresentationDelayLine(delayFrames: delayFrames, channels: Int(AudioConfig.channels))
+                    : nil
+                capture.ring.markWriterStarting()
+                return capture.start(token)
+            },
+            outputDidStart: {},
+            input: .airPlay, token
+        )
+    }
+
+    /// 失敗時は routeUnavailable で停止し、途中まで作った資源を解放する。
+    private func assembleOutputStage(
+        outputDeviceID: AudioDeviceID, ringReader: SharedRingReader, inputSampleRate: Double,
+        driverDeviceID: AudioDeviceID?, prepareRoute: () -> Bool, outputDidStart: () -> Void,
+        input: AudioRuntimeMetrics.AudioInputSource, _ token: AudioWorldToken
+    ) -> Bool {
+        self.ringReader = ringReader
+        applySampleRate(inputSampleRate, token)
         levelMeter.rebuild(appliedSampleRate: AudioConfig.appliedSampleRate)
         updateDriverDeviceID(driverDeviceID ?? translateUIDToDeviceID(forUID: DriverConfig.deviceUID, token), token)
 
-        guard let outUnit = AudioEngine.makeOutputUnit(for: outputDevice.deviceID, metrics: runtimeMetrics, token) else {
+        guard let outUnit = AudioEngine.makeOutputUnit(for: outputDeviceID, metrics: runtimeMetrics, token) else {
             print("[ERROR] output unit create/apply failed")
             suspend(cause: .routeUnavailable, token)
             return false
         }
         outputUnit = outUnit
-        intendedOutputDeviceUID = outputDevice.uid
-        let driverAtAssemble = refreshDriverVolumeAndMute(token)
-        outputVolumeBridge.rebind(
-            outputUID: outputDevice.uid, outputDeviceID: outputDevice.deviceID,
-            driverVolume: driverAtAssemble.volume, driverMuted: driverAtAssemble.muted, token
-        )
-
-        guard buildEQUnitAndStartOutput(on: outUnit, token) else {
+        guard prepareRoute(), buildEQUnitAndStartOutput(on: outUnit, token) else {
             suspend(cause: .routeUnavailable, token)
             return false
         }
-        startDriverDeviceMonitoring(token)
+        outputDidStart()
 
         levelMeterRestartGeneration.add(1)
 
         intendedOutputDeviceUIDAtSuspension = nil
         processingState = .active
+        runtimeMetrics.recordAudioInput(input)
         processingStateDidChange?(processingState, activeOutputDeviceInfo(token))
         appliedSampleRateDidChange?(AudioConfig.appliedSampleRate)
-        outputDeviceDidConfirm?(outputDevice.uid)
         return true
     }
 
@@ -336,7 +422,7 @@ final class AudioEngine: @unchecked Sendable {
     /// (失敗して旧デバイスへ戻す経路でも同じ要求を行うが、その経路では復旧の Start が要求のあとに来る)。
     @discardableResult
     func switchOutputDevice(to device: ResolvedOutputDevice, _ token: AudioWorldToken) -> Bool {
-        guard let outUnit = outputUnit else { return false }
+        guard let outUnit = outputUnit, captureSource == nil else { return false }
         let previousID = currentOutputDeviceID(token)
         if case .notNeeded = outputSwitchDecision(intendedUID: device.uid, currentUID: previousID.flatMap({ deviceUID($0, token) })) {
             intendedOutputDeviceUID = device.uid
@@ -409,6 +495,11 @@ final class AudioEngine: @unchecked Sendable {
         stopDriverDeviceMonitoring(token)
         outputVolumeBridge.unbind(token)
         if let u = outputUnit { AudioOutputUnitStop(u); AudioUnitUninitialize(u); AudioComponentInstanceDispose(u); outputUnit = nil }
+        captureSource?.destroy(token)
+        captureSource = nil
+        captureRing = nil
+        presentationDelay = nil
+        runtimeMetrics.recordAudioInput(.none)
         intendedOutputDeviceUID = nil
         eqUnit?.dispose()
         eqUnit = nil
@@ -430,8 +521,10 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     /// バイパス中は素通しの操作値を配る。レンダ経路自体は分岐させない。
+    /// 取り込み経路では音量を機器が担うため、ラウドネスは中立にする。
     private func refreshSoundLabStages() {
-        let settings = bypassed ? SoundLabSettings() : soundLabSettings
+        var settings = bypassed ? SoundLabSettings() : soundLabSettings
+        if captureSource != nil { settings.loudness = SoundLabSettings().loudness }
         soundLabSettingsInEffect = settings
         soundLabOutputVolumeInEffect = outputVolume
         soundLabStereo?.apply(
@@ -524,7 +617,7 @@ final class AudioEngine: @unchecked Sendable {
         )
         if actions.unregister, let id = driverDeviceListenerDeviceID, let block = driverDeviceListenerBlock {
             for var addr in AudioEngine.driverDeviceListenerAddresses {
-                AudioObjectRemovePropertyListenerBlock(id, &addr, driverDeviceListenerQueue, block)
+                AudioObjectRemovePropertyListenerBlock(id, &addr, audioWorld.listenerQueue, block)
             }
             driverDeviceListenerBlock = nil
             driverDeviceListenerDeviceID = nil
@@ -532,16 +625,13 @@ final class AudioEngine: @unchecked Sendable {
         if actions.register, let id = driverDeviceID {
             bindOutputVolumeRoute(forcingAdoption: true, token)
             // block は登録先の id を直接キャプチャする (self.driverDeviceID の再読みだと登録先と食い違う)。
-            // 通知はこのキュー自身から届くため、通行証はオーディオ世界の直列キュー上にいる根拠から得る。
-            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                guard let self else { return }
-                let t = self.audioWorld.assumingOnQueue()
-                self.handleDriverDevicePropertyNotification(deviceID: id, t)
+            let block = audioWorld.propertyListener { [weak self] token in
+                self?.handleDriverDevicePropertyNotification(deviceID: id, token)
             }
             driverDeviceListenerBlock = block
             driverDeviceListenerDeviceID = id
             for var addr in AudioEngine.driverDeviceListenerAddresses {
-                AudioObjectAddPropertyListenerBlock(id, &addr, driverDeviceListenerQueue, block)
+                AudioObjectAddPropertyListenerBlock(id, &addr, audioWorld.listenerQueue, block)
             }
         }
     }
@@ -594,7 +684,7 @@ final class AudioEngine: @unchecked Sendable {
     // --- レート変更の検知・再構築 --------------------------------------------
 
     func applyDriverSampleRateIfChanged(_ token: AudioWorldToken) {
-        guard processingState == .active, let reader = ringReader else { return }
+        guard processingState == .active, captureSource == nil, let reader = ringReader else { return }
         let headerRate = reader.driverReportedSampleRate
         guard headerRate > 0, headerRate != AudioConfig.appliedSampleRate else { return }
         performRateChange(newSampleRate: headerRate, token)
@@ -603,7 +693,11 @@ final class AudioEngine: @unchecked Sendable {
     /// 呼び出しは出力 AUHAL が停止している間に限る。
     private func applySampleRate(_ rate: Double, _ token: AudioWorldToken) {
         AudioConfig.applySampleRate(rate)
-        ringReader?.applySampleRate(rate)
+        if let captureRing {
+            captureRing.applySampleRate(rate)
+        } else {
+            ringReader?.applySampleRate(rate)
+        }
     }
 
     /// レンダ側 (realtime) が減じる。release/acquire で共有する。
@@ -686,11 +780,11 @@ final class AudioEngine: @unchecked Sendable {
         if abl.count == 1 {
             guard let mData = abl[0].mData else { return noErr }
             let dst = mData.assumingMemoryBound(to: Float.self)
-            got = readRing(ringReader, into: dst, frames: Int(frames), sampleCount: sampleCount)
+            got = readInput(ownershipGate: ringReader, into: dst, frames: Int(frames), sampleCount: sampleCount)
             applyPreampGain(dst, count: sampleCount)
             soundLabStereo?.process(dst, frames: Int(frames))
         } else {
-            got = readRing(ringReader, into: eqInputScratch, frames: Int(frames), sampleCount: sampleCount)
+            got = readInput(ownershipGate: ringReader, into: eqInputScratch, frames: Int(frames), sampleCount: sampleCount)
             applyPreampGain(eqInputScratch, count: sampleCount)
             soundLabStereo?.process(eqInputScratch, frames: Int(frames))
             let channels = abl.count
@@ -705,10 +799,15 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     /// セッション横断の所有権を持たない間は自分で無音化する (制御経路の停止・遅延に依存しない安全弁)。
-    private func readRing(
-        _ reader: SharedRingReader, into buf: UnsafeMutablePointer<Float>, frames: Int, sampleCount: Int
+    private func readInput(
+        ownershipGate reader: SharedRingReader, into buf: UnsafeMutablePointer<Float>, frames: Int, sampleCount: Int
     ) -> Int {
-        let got = reader.read(into: buf, frames: frames)
+        let got: Int
+        if let captureRing {
+            got = captureRing.read(into: buf, frames: frames)
+        } else {
+            got = reader.read(into: buf, frames: frames)
+        }
         if !reader.isSelfOwner { for i in 0..<sampleCount { buf[i] = 0 } }
         return got
     }
@@ -722,7 +821,22 @@ final class AudioEngine: @unchecked Sendable {
     func captureLevelsAndApplyOutputGain(
         _ buf: UnsafeMutablePointer<Float>, frameCount: Int, channels: Int, gain: Float
     ) -> Float {
-        levelMeter.capture(buf, frameCount: frameCount, channels: channels)
+        captureLevelsAndApplyOutputGain(
+            buf, frameCount: frameCount, channels: channels, gain: gain, presentationDelay: presentationDelay
+        )
+    }
+
+    /// 返すピークは遅らせない。
+    func captureLevelsAndApplyOutputGain(
+        _ buf: UnsafeMutablePointer<Float>, frameCount: Int, channels: Int, gain: Float,
+        presentationDelay: PresentationDelayLine?
+    ) -> Float {
+        if let presentationDelay {
+            presentationDelay.process(buf, frames: frameCount, into: presentationDelayScratch)
+            levelMeter.capture(presentationDelayScratch, frameCount: frameCount, channels: channels)
+        } else {
+            levelMeter.capture(buf, frameCount: frameCount, channels: channels)
+        }
 
         let count = frameCount * channels
         var peak: Float = 0
@@ -777,7 +891,7 @@ final class AudioEngine: @unchecked Sendable {
 
         recordOutputLevel(
             dst, frameCount: Int(frames), channels: Int(AudioConfig.channels),
-            peakBeforeVolume: peakBeforeVolume, effectiveOutputGain: gain, reader: ringReader
+            peakBeforeVolume: peakBeforeVolume, effectiveOutputGain: gain, reader: ringReader, captureRing: captureRing
         )
         ringReader?.foldMixerClients(into: mixerLevelStore)
         return noErr
@@ -787,13 +901,17 @@ final class AudioEngine: @unchecked Sendable {
     /// (フェード末尾で無音判定寄りに振れるが、継続長がクロスフェード長を超えないため実害はない)。
     func recordOutputLevel(
         _ dst: UnsafePointer<Float>, frameCount: Int, channels: Int,
-        peakBeforeVolume: Float, effectiveOutputGain: Float, reader: SharedRingReader?
+        peakBeforeVolume: Float, effectiveOutputGain: Float, reader: SharedRingReader?, captureRing: CaptureRing? = nil
     ) {
         var peak: Float = 0
         for i in 0..<(frameCount * channels) { peak = max(peak, abs(dst[i])) }
         runtimeMetrics.recordPeak(peak)
         runtimeMetrics.recordPeakBeforeVolume(peakBeforeVolume)
-        reader?.observeOutputLevel(peak: peak, effectiveOutputGain: effectiveOutputGain, frames: frameCount)
+        if let captureRing {
+            captureRing.observeOutputLevel(peak: peak, effectiveOutputGain: effectiveOutputGain, frames: frameCount)
+        } else {
+            reader?.observeOutputLevel(peak: peak, effectiveOutputGain: effectiveOutputGain, frames: frameCount)
+        }
     }
 
     private func applyOutputFade(_ dst: UnsafeMutablePointer<Float>, frameCount: Int, channels: Int) {

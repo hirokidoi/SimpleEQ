@@ -30,6 +30,10 @@ protocol AudioDeviceDirectory: Sendable {
     func containsDriverDevice(_ id: AudioDeviceID, driverDeviceUID: String, _ token: AudioWorldToken) -> Bool
 
     func isAirPlayDevice(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool
+
+    func isDeviceAlive(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool?
+
+    func selfProcessObjectID(_ token: AudioWorldToken) -> AudioObjectID?
 }
 
 extension AudioDeviceDirectory {
@@ -99,6 +103,14 @@ final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
         SimpleEQ.isAirPlayDevice(id, token)
     }
 
+    func isDeviceAlive(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool? {
+        deviceIsAlive(id, token)
+    }
+
+    func selfProcessObjectID(_ token: AudioWorldToken) -> AudioObjectID? {
+        processObjectID(forPID: getpid(), token)
+    }
+
     private func setCustomProperty(
         _ selector: AudioObjectPropertySelector, _ value: CFTypeRef,
         forDeviceID id: AudioDeviceID, _ token: AudioWorldToken
@@ -151,13 +163,13 @@ final class DriverLifecycleController: @unchecked Sendable {
     @discardableResult
     func resolveAndMakeVisible(_ token: AudioWorldToken) -> AudioDeviceID? {
         guard let id = resolveDeviceID(token) else { return nil }
-        reapplyVisibility(deviceID: id, token)
+        applyVisibility(hidden: false, deviceID: id, token)
         return id
     }
 
-    func reapplyVisibility(deviceID: AudioDeviceID, _ token: AudioWorldToken) {
+    func applyVisibility(hidden: Bool, deviceID: AudioDeviceID, _ token: AudioWorldToken) {
         resolvedDeviceID = deviceID
-        directory.setHidden(false, forDeviceID: deviceID, token)
+        directory.setHidden(hidden, forDeviceID: deviceID, token)
     }
 
     /// 切り戻せたかに関わらず戻す。鳴っていない出力先を名乗ったまま残すと、無音の原因を探す側を誤誘導する。
@@ -181,7 +193,7 @@ final class DriverLifecycleController: @unchecked Sendable {
         resolvedDeviceID = nil
     }
 
-    private func resolveDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
+    func resolveDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
         directory.deviceID(forUID: targetDeviceUID, token) ?? directory.resolveHiddenDeviceID(forUID: targetDeviceUID, token)
     }
 }
@@ -206,17 +218,17 @@ final class OutputDeviceController: @unchecked Sendable {
     }
 
     func restoreObligationNeedsReconcile(_ token: AudioWorldToken) -> Bool {
-        guard let currentUID = currentDefaultOutputUID(token) else {
+        guard let current = currentDefaultOutput(token) else {
             guard let cached = resolvedRestoreTargetID, let uid = savedDefaultOutputUID else { return false }
             return cached != directory.deviceID(forUID: uid, token)
         }
-        if currentUID == targetDeviceUID {
+        if current.uid == targetDeviceUID {
             guard switchPending || switchedDefaultOutputThisSession else { return false }
             guard switchPending else { return true }
             guard let uid = savedDefaultOutputUID else { return false }
             return resolvedRestoreTargetID != directory.deviceID(forUID: uid, token)
         }
-        return switchPending || savedDefaultOutputUID != currentUID
+        return switchPending || restoreTargetRecordingNeeded(current, token)
     }
 
     @MainActor
@@ -259,23 +271,28 @@ final class OutputDeviceController: @unchecked Sendable {
     }
 
     func reconcileRestoreObligation(_ token: AudioWorldToken) {
-        guard let currentUID = currentDefaultOutputUID(token) else {
+        guard let current = currentDefaultOutput(token) else {
             guard resolvedRestoreTargetID != nil else { return }
             refreshRestoreTarget(token)
             return
         }
-        if currentUID == targetDeviceUID {
+        if current.uid == targetDeviceUID {
             guard switchPending || switchedDefaultOutputThisSession else { return }
             switchPending = true
             persistRestoreState(savedDefaultOutputUID, switchPending)
             refreshRestoreTarget(token)
             return
         }
-        if savedDefaultOutputUID != currentUID {
-            savedDefaultOutputUID = currentUID
+        if restoreTargetRecordingNeeded(current, token) {
+            savedDefaultOutputUID = current.uid
             persistRestoreState(savedDefaultOutputUID, switchPending)
         }
         discardRestoreObligation()
+    }
+
+    // 選択から外れた AirPlay のデバイスは二度と解決できない。
+    private func restoreTargetRecordingNeeded(_ current: (id: AudioDeviceID, uid: String), _ token: AudioWorldToken) -> Bool {
+        savedDefaultOutputUID != current.uid && !directory.isAirPlayDevice(current.id, token)
     }
 
     /// 義務を負っている間 (switchPending) に限り記録する。
@@ -288,9 +305,13 @@ final class OutputDeviceController: @unchecked Sendable {
         persistRestoreState(savedDefaultOutputUID, switchPending)
     }
 
+    private func currentDefaultOutput(_ token: AudioWorldToken) -> (id: AudioDeviceID, uid: String)? {
+        guard let id = directory.defaultOutputDeviceID(token), let uid = directory.uid(forDeviceID: id, token) else { return nil }
+        return (id, uid)
+    }
+
     private func currentDefaultOutputUID(_ token: AudioWorldToken) -> String? {
-        guard let id = directory.defaultOutputDeviceID(token) else { return nil }
-        return directory.uid(forDeviceID: id, token)
+        currentDefaultOutput(token)?.uid
     }
 
     /// 切り戻すのは復帰の義務が残っている間だけ。義務が既に解けている場合は書き換えず、フラグのみ畳む。

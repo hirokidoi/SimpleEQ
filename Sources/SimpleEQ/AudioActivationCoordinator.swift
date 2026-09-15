@@ -5,6 +5,9 @@ protocol ActivatableAudioEngine: AnyObject, Sendable {
     var processingState: ProcessingState { get }
     @discardableResult
     func assemble(outputDevice: ResolvedOutputDevice, ringReader: SharedRingReader, driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> Bool
+    @discardableResult
+    func assembleAirPlay(capture: AirPlayCaptureSource, ringReader: SharedRingReader, driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> Bool
+    func suspend(cause: SuspensionCause, _ token: AudioWorldToken)
 }
 
 extension AudioEngine: ActivatableAudioEngine {}
@@ -90,6 +93,10 @@ final class AudioActivationCoordinator: Sendable {
 
         guard let outputDevice = resolveOutputDevice(token) else {
             if switchedOutput { outputController.restore(token) }
+            // 所有者として呼ばれている以上、経路が作れないのは経路の問題。
+            if engine.processingState == .suspended(.ownershipUnavailable) {
+                engine.suspend(cause: .routeUnavailable, token)
+            }
             return outcome(activeOutputDevice: nil, outputRouteNotEstablished: true)
         }
 
@@ -102,6 +109,14 @@ final class AudioActivationCoordinator: Sendable {
         outputController.assumeRestoreObligation(outputDeviceUID: outputDevice.uid, token)
 
         return outcome(activeOutputDevice: outputDevice)
+    }
+
+    /// デフォルト出力・ドライバの可視性・戻す義務には触れない。
+    @discardableResult
+    func activateAirPlay(capture: AirPlayCaptureSource, _ token: AudioWorldToken) -> Bool {
+        guard let ringReader = try? openSharedMemory().get() else { return false }
+        let driverDeviceID = driverLifecycle.resolvedDeviceID ?? driverLifecycle.resolveDeviceID(token)
+        return engine.assembleAirPlay(capture: capture, ringReader: ringReader, driverDeviceID: driverDeviceID, token)
     }
 
     /// ドライバ可用性とバージョンを確定する。

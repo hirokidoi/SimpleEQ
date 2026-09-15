@@ -1,3 +1,4 @@
+import CoreAudio
 import XCTest
 @testable import SimpleEQ
 
@@ -147,5 +148,60 @@ final class AudioWorldTests: XCTestCase {
         XCTAssertNil(produced, "上限を超えて完了しなければ待ちを諦め、値を持ち帰らない")
         wait(for: [workStarted], timeout: 1.0)
         workMayFinish.signal() // work 自体はキュー上で走り続けているため、後始末として完了させる。
+    }
+
+    // HAL の同期の配送を模して、オーディオ世界が詰まっている間にリスナーを呼んでも待たずに戻り、work は後で 1 回走る。
+    func testPropertyListenerReturnsWithoutWaitingForTheAudioWorld() {
+        let queue = DispatchQueue(label: "AudioWorldTests.listener")
+        queue.suspend()
+        let world = AudioWorld(queue: queue)
+        let executed = Recorded<Int>(0)
+        nonisolated(unsafe) let listener = world.propertyListener { _ in executed.update { $0 += 1 } }
+        let returned = expectation(description: "リスナーが戻る")
+
+        DispatchQueue.global().async {
+            var address = AudioObjectPropertyAddress()
+            listener(1, &address)
+            returned.fulfill()
+        }
+        wait(for: [returned], timeout: 1.0)
+        XCTAssertEqual(executed.value, 0)
+
+        queue.resume()
+        queue.sync {}
+        XCTAssertEqual(executed.value, 1)
+    }
+}
+
+/// CoreAudio のプロパティリスナーの登録・解除が、すべて専用のキューを渡していることをソースの記述で固定する。
+final class PropertyListenerQueueSourceTests: XCTestCase {
+    private static let callMarkers = [
+        "AudioObjectAddPropertyListenerBlock(", "AudioObjectRemovePropertyListenerBlock(",
+        ".addVolumeMuteListener(", ".removeVolumeMuteListener(",
+    ]
+    // 音量・消音の読み書き口が受け取ったキューを中継するだけの実装。
+    private static let passThroughFunctions = ["func addVolumeMuteListener(", "func removeVolumeMuteListener("]
+    private static let expectedCallCount = 11
+
+    func testEveryListenerRegistrationAndRemovalPassesTheListenerQueue() throws {
+        let files = try FileManager.default.contentsOfDirectory(
+            at: RepositoryFiles.appSourceDirectory, includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "swift" }
+
+        var calls: [(file: String, line: String)] = []
+        for file in files {
+            var enclosingFunction = ""
+            for line in try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines) {
+                if line.contains("func ") { enclosingFunction = line }
+                guard Self.callMarkers.contains(where: line.contains) else { continue }
+                guard !Self.passThroughFunctions.contains(where: enclosingFunction.contains) else { continue }
+                calls.append((file.lastPathComponent, line.trimmingCharacters(in: .whitespaces)))
+            }
+        }
+
+        XCTAssertEqual(calls.count, Self.expectedCallCount, calls.map { "\($0.file): \($0.line)" }.joined(separator: "\n"))
+        for call in calls {
+            XCTAssertTrue(call.line.contains("audioWorld.listenerQueue"), "\(call.file): \(call.line)")
+        }
     }
 }

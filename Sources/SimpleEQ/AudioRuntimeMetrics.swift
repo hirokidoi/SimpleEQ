@@ -452,6 +452,25 @@ final class AudioRuntimeMetrics {
         ownershipStorage.withLock { $0 = (observed, observation) }
     }
 
+    // MARK: - 音の入口と収録の許可 (現在の状態。オーディオ世界の直列キューのみが読み書きする)
+
+    enum AudioInputSource: Equatable, Sendable {
+        case none
+        case dedicatedDriver
+        case airPlay
+    }
+
+    private(set) var audioInput: AudioInputSource = .none
+    private(set) var captureAuthorization: CaptureAuthorization = .unread
+
+    func recordAudioInput(_ input: AudioInputSource) {
+        audioInput = input
+    }
+
+    func recordCaptureAuthorization(_ authorization: CaptureAuthorization) {
+        captureAuthorization = authorization
+    }
+
     // MARK: - 出力デバイスの実レート (現在の状態)
 
     private let outputDeviceSampleRateStorage = AtomicUInt64(0)
@@ -619,6 +638,8 @@ final class AudioRuntimeMetrics {
         let mixerCoordination: MixerCoordinationObservation
         let ownershipObserved: Bool
         let ownership: OwnershipObservationSnapshot
+        let audioInput: AudioInputSource
+        let captureAuthorization: CaptureAuthorization
         let lastResetAt: Date?
     }
 
@@ -672,6 +693,8 @@ final class AudioRuntimeMetrics {
             mixerCoordination: mixerCoordinationObservation,
             ownershipObserved: ownershipObserved,
             ownership: ownershipObservation,
+            audioInput: audioInput,
+            captureAuthorization: captureAuthorization,
             lastResetAt: lastResetAt
         )
     }

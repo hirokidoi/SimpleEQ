@@ -1,11 +1,23 @@
 import AppKit
 import SwiftUI
 
-/// ノーマルの面とコンパクトの面が共有する、行の見た目と 0 件の案内。
+/// ノーマルの面とコンパクトの面が共有する、行の見た目と案内。
 enum MixerRowParts {
     /// 一覧へ出すには何をすればよいか。0 件の面と編集モードの案内が同じ言い方を使う。
     static let addHint = "To add an app, play audio in it."
     static let emptyTitle = "No channels"
+    static let airPlayUnavailable = "AirPlay 中は使用できません"
+}
+
+/// AirPlay 中に効かない機能の面の中身の代わりに出す案内。
+struct AirPlayUnavailableNotice: View {
+    var body: some View {
+        Text(MixerRowParts.airPlayUnavailable)
+            .font(.system(size: 12))
+            .foregroundColor(EQLayout.Palette.dim)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 struct MixerRowIcon: View {

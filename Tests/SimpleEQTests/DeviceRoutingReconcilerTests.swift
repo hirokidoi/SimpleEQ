@@ -100,11 +100,41 @@ final class MockAudioRoutingEngine: AudioRoutingEngine, ActivatableAudioEngine, 
         return true
     }
 
+    @discardableResult
+    func assembleAirPlay(capture: AirPlayCaptureSource, ringReader: SharedRingReader, driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> Bool {
+        XCTFail("是正は取り込み経路を組み立てない")
+        return false
+    }
+
     private(set) var reoccupyOutputVolumeRouteCallCount = 0
 
     func reoccupyOutputVolumeRoute(_ token: AudioWorldToken) {
         reoccupyOutputVolumeRouteCallCount += 1
     }
+}
+
+/// 是正役から見た AirPlay モードの調停役。返す分岐と、呼ばれ方だけを持つ。
+final class FakeAirPlayMode: AirPlayModeReconciling, @unchecked Sendable {
+    var branch: AirPlayReconcileBranch = .notApplicable
+    var intentMatches = true
+    private(set) var reconcileCount = 0
+    private(set) var noteCount = 0
+
+    var isEngaged: Bool {
+        if case .engaged = branch { return true }
+        return false
+    }
+
+    func reconcile(adopts: Bool, _ token: AudioWorldToken) -> AirPlayReconcileBranch {
+        reconcileCount += 1
+        return branch
+    }
+
+    func noteConfigurationNotification(_ token: AudioWorldToken) {
+        noteCount += 1
+    }
+
+    func matchesIntent(adopts: Bool, _ token: AudioWorldToken) -> Bool { intentMatches }
 }
 
 /// 合流窓の待ち合わせを実時間なしで駆動するスケジューラ。読み書きをロックの内側で行う。
@@ -198,6 +228,7 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
         adoptsSystemOutputSelection: Bool = true,
         processingState: ProcessingState? = nil,
         openSharedMemory: @escaping @Sendable () -> Result<SharedRingReader, SharedRingReader.OpenFailure> = { .failure(.fileNotFound) },
+        airPlayMode: AirPlayModeReconciling = AirPlayModeNotApplicable(),
         now: @escaping @Sendable () -> Date = Date.init
     ) -> Fixture {
         let directory = MockAudioDeviceDirectory()
@@ -229,7 +260,7 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
 
         let lifecycle = DriverLifecycleController(directory: directory, targetDeviceUID: driverUID)
         // 可視性の掌握は稼働状態とは別の軸として明示的に立てる。
-        if driverOwnedBySession { lifecycle.reapplyVisibility(deviceID: driverDeviceID, testToken) }
+        if driverOwnedBySession { lifecycle.applyVisibility(hidden: false, deviceID: driverDeviceID, testToken) }
         let outputController = OutputDeviceController(directory: directory, settings: settings, targetDeviceUID: driverUID)
         // 起動シーケンスが済んだ状態に合わせ、復帰対象の ID を解決済みにする。
         if driverOwnedBySession { outputController.refreshRestoreTarget(testToken) }
@@ -250,6 +281,7 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
             didAdoptOutputDevice: { device, _ in adopted.append(device) },
             didObserveDefaultOutputReach: { observedDefaultOutputReach.append($0) },
             didObserveRingStalled: { observedRingStalled.append($0) },
+            airPlayMode: airPlayMode,
             audioWorld: makeTestAudioWorld(),
             schedule: scheduler.schedule,
             now: now
@@ -280,19 +312,40 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
 
     func testVisibilityReapplyFollowsActualHiddenValue() {
         XCTAssertTrue(
-            driverVisibilityReapplyNeeded(previousID: 40, resolvedID: 40, isHidden: true),
+            driverVisibilityWriteNeeded(intent: .visible, previousID: 40, resolvedID: 40, isHidden: true),
             "ID が変わらなくても非表示なら再適用する (ドライバ再ロードのみの経路)"
         )
         XCTAssertFalse(
-            driverVisibilityReapplyNeeded(previousID: nil, resolvedID: 40, isHidden: false),
+            driverVisibilityWriteNeeded(intent: .visible, previousID: nil, resolvedID: 40, isHidden: false),
             "可視なら ID が変わっていても再適用しない"
         )
     }
 
     func testVisibilityReapplyFallsBackToIDChangeWhenHiddenValueUnreadable() {
-        XCTAssertTrue(driverVisibilityReapplyNeeded(previousID: nil, resolvedID: 40, isHidden: nil))
-        XCTAssertTrue(driverVisibilityReapplyNeeded(previousID: 40, resolvedID: 41, isHidden: nil))
-        XCTAssertFalse(driverVisibilityReapplyNeeded(previousID: 40, resolvedID: 40, isHidden: nil))
+        XCTAssertTrue(driverVisibilityWriteNeeded(intent: .visible, previousID: nil, resolvedID: 40, isHidden: nil))
+        XCTAssertTrue(driverVisibilityWriteNeeded(intent: .visible, previousID: 40, resolvedID: 41, isHidden: nil))
+        XCTAssertFalse(driverVisibilityWriteNeeded(intent: .visible, previousID: 40, resolvedID: 40, isHidden: nil))
+    }
+
+    // AirPlay モードでは同じ判定を「隠れているべき」側から行う。
+    func testHiddenIntentWritesOnlyWhileTheDeviceIsShown() {
+        XCTAssertTrue(driverVisibilityWriteNeeded(intent: .hidden, previousID: 40, resolvedID: 40, isHidden: false))
+        XCTAssertFalse(driverVisibilityWriteNeeded(intent: .hidden, previousID: nil, resolvedID: 40, isHidden: true))
+        XCTAssertTrue(driverVisibilityWriteNeeded(intent: .hidden, previousID: 40, resolvedID: 41, isHidden: nil))
+        XCTAssertFalse(driverVisibilityWriteNeeded(intent: .hidden, previousID: 40, resolvedID: 40, isHidden: nil))
+    }
+
+    func testNoVisibilityIsWrittenWhileItIsNotMaintained() {
+        for isHidden: Bool? in [true, false, nil] {
+            XCTAssertFalse(driverVisibilityWriteNeeded(intent: .notMaintained, previousID: nil, resolvedID: 40, isHidden: isHidden))
+        }
+    }
+
+    func testVisibilityIntentFollowsMaintenanceAndAirPlayEngagement() {
+        XCTAssertEqual(driverVisibilityIntent(maintains: true, airPlayEngaged: false), .visible)
+        XCTAssertEqual(driverVisibilityIntent(maintains: true, airPlayEngaged: true), .hidden)
+        XCTAssertEqual(driverVisibilityIntent(maintains: false, airPlayEngaged: true), .notMaintained)
+        XCTAssertEqual(driverVisibilityIntent(maintains: false, airPlayEngaged: false), .notMaintained)
     }
 
     func testListenerRebindNeededOnlyWhenResolvedIDChanged() {
@@ -1332,6 +1385,196 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
         XCTAssertEqual(f.scheduler.scheduleCallCount, 2)
     }
 
+    // MARK: - AirPlay モード
+
+    private func airPlayMode(_ branch: AirPlayReconcileBranch) -> FakeAirPlayMode {
+        let mode = FakeAirPlayMode()
+        mode.branch = branch
+        return mode
+    }
+
+    private let airPlayEndpointID: AudioDeviceID = 150
+
+    // 対で見る。非該当の回に同じ状況で引き取り・是正が起きることが、AirPlay 中に起きないことの前提になる。
+    func testWhileAirPlayIsEngagedTheOrdinaryRoutingIsLeftAlone() {
+        for engaged in [true, false] {
+            let f = makeFixture(
+                initialDriverDeviceID: driverDeviceID,
+                airPlayMode: airPlayMode(engaged ? .engaged(endpointDeviceID: airPlayEndpointID) : .notApplicable)
+            )
+            f.directory.currentDefaultOutputID = hdmiID
+            f.engine.actualOutputDeviceID = restoreTargetID
+
+            f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+            XCTAssertEqual(f.engine.switchCalls.isEmpty, engaged, "引き取りと出力先の是正 (engaged=\(engaged))")
+            XCTAssertEqual(f.engine.reoccupyOutputVolumeRouteCallCount == 0, engaged, "音量経路の再束縛 (engaged=\(engaged))")
+        }
+    }
+
+    func testWhileAirPlayIsEngagedAnUnsafeRouteIsNotEvacuated() {
+        for engaged in [true, false] {
+            let f = makeFixture(
+                initialDriverDeviceID: driverDeviceID,
+                airPlayMode: airPlayMode(engaged ? .engaged(endpointDeviceID: airPlayEndpointID) : .notApplicable)
+            )
+            f.engine.actualOutputDeviceID = driverDeviceID
+            f.directory.deviceIDsByUID[speakerUID] = nil
+            f.directory.deviceIDsByUID[restoreTargetUID] = nil
+
+            f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+            XCTAssertEqual(f.engine.suspendCalls.isEmpty, engaged, "退避先が無いときの停止 (engaged=\(engaged))")
+        }
+    }
+
+    func testWhileAirPlayIsEngagedAStoppedEngineIsNotResumedAutomatically() {
+        for engaged in [true, false] {
+            let f = makeFixture(
+                initialDriverDeviceID: driverDeviceID, processingState: .suspended(.routeUnavailable),
+                openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) },
+                airPlayMode: airPlayMode(engaged ? .engaged(endpointDeviceID: airPlayEndpointID) : .notApplicable)
+            )
+            f.engine.intendedOutputDeviceUIDAtSuspension = speakerUID
+
+            f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+            XCTAssertEqual(f.engine.assembleCalls.isEmpty, engaged, "engaged=\(engaged)")
+        }
+    }
+
+    // 接続断・切り替え中の経由がドライバでなく一般デバイスになるよう隠す。隠れていれば書かない。
+    func testWhileAirPlayIsEngagedTheDriverIsHiddenOnceAndKeepsItsResponsibility() {
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: airPlayMode(.engaged(endpointDeviceID: airPlayEndpointID)))
+
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.directory.setHiddenCalls.map(\.hidden), [true])
+        XCTAssertTrue(f.lifecycle.isVisibilityOwnedBySession)
+
+        f.directory.isHiddenByDeviceID[driverDeviceID] = true
+        f.directory.resetCallRecords()
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertTrue(f.directory.setHiddenCalls.isEmpty)
+    }
+
+    func testWhileAirPlayIsEngagedTheDriverCarriesTheFixedNameWithoutAHandoff() {
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: airPlayMode(.engaged(endpointDeviceID: airPlayEndpointID)))
+        f.directory.namesByDeviceID[driverDeviceID] = "SimpleEQ - \(speakerName)"
+        f.directory.currentDefaultOutputID = driverDeviceID
+
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.directory.setNameCalls.map(\.name), [DriverConfig.deviceName])
+        XCTAssertTrue(f.directory.setDefaultOutputCalls.isEmpty, "デフォルト出力の往復をしない")
+    }
+
+    // 直前の自動再開の失敗で間隔抑制が効いている回に抜けても、抜けた先で即座に再開する。
+    func testDepartingFromAirPlayResumesOnTheDefaultOutputWithoutWaitingForTheRetryInterval() {
+        let opens = Recorded<Bool>(false)
+        let mode = airPlayMode(.notApplicable)
+        let f = makeFixture(
+            initialDriverDeviceID: driverDeviceID, processingState: .suspended(.routeUnavailable),
+            openSharedMemory: { [tempURLs] in
+                opens.value ? Self.openValidSharedRingReader(registeringInto: tempURLs) : .failure(.fileNotFound)
+            },
+            airPlayMode: mode, now: { Date(timeIntervalSince1970: 0) }
+        )
+        f.engine.intendedOutputDeviceUIDAtSuspension = speakerUID
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.engine.processingState, .suspended(.routeUnavailable), "前提: 自動再開が失敗し、間隔抑制が効いている")
+
+        opens.update { $0 = true }
+        mode.branch = .departed(resumeCandidateUID: hdmiUID)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.engine.assembleCalls, [ResolvedOutputDevice(uid: hdmiUID, deviceID: hdmiID)])
+        XCTAssertEqual(f.adoptedDevices.last?.uid, hdmiUID)
+    }
+
+    func testDepartingWithoutAUsableCandidateLeavesTheResumeToTheAutomaticResume() {
+        for candidate in [nil, hdmiUID] {
+            let f = makeFixture(
+                initialDriverDeviceID: driverDeviceID, processingState: .suspended(.routeUnavailable),
+                openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) },
+                airPlayMode: airPlayMode(.departed(resumeCandidateUID: candidate))
+            )
+            f.directory.airPlayDeviceIDs = [hdmiID]
+            f.engine.intendedOutputDeviceUIDAtSuspension = speakerUID
+
+            f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+            XCTAssertEqual(
+                f.engine.assembleCalls, [ResolvedOutputDevice(uid: speakerUID, deviceID: speakerID)],
+                "candidate=\(candidate ?? "nil")"
+            )
+        }
+    }
+
+    // 構築待ちの間は通常の経路のまま稼働しているので、非該当と同じ引き取りを行う。
+    func testDepartingWhileTheOrdinaryRouteIsStillRunningAdoptsLikeTheOrdinaryPath() {
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: airPlayMode(.departed(resumeCandidateUID: hdmiUID)))
+        f.directory.currentDefaultOutputID = hdmiID
+
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.engine.switchCalls, [ResolvedOutputDevice(uid: hdmiUID, deviceID: hdmiID)])
+        XCTAssertTrue(f.engine.assembleCalls.isEmpty)
+    }
+
+    func testEveryConfigurationNotificationIsNotedBeforeItIsCoalesced() {
+        let mode = airPlayMode(.notApplicable)
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: mode)
+
+        f.reconciler.scheduleConfigurationChangeReconcile(testToken)
+        f.reconciler.scheduleConfigurationChangeReconcile(testToken)
+
+        XCTAssertEqual(mode.noteCount, 2)
+        XCTAssertEqual(f.scheduler.scheduleCallCount, 1)
+    }
+
+    func testPeriodicVerificationEscalatesWhenAirPlayAsksForAnAction() {
+        let mode = airPlayMode(.notApplicable)
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: mode)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.reconciler.reconcile(trigger: .periodicVerification, testToken)
+        XCTAssertEqual(mode.reconcileCount, 1, "前提: 一致していれば昇格しない")
+
+        mode.intentMatches = false
+        f.reconciler.reconcile(trigger: .periodicVerification, testToken)
+
+        XCTAssertEqual(mode.reconcileCount, 2)
+    }
+
+    // 引き取り待ちとリスナーの張り替えは AirPlay 中は問わない。隠れているべきドライバが見えていれば昇格する。
+    func testPeriodicVerificationAsksOnlyWhatAppliesWhileAirPlayIsEngaged() {
+        // 非該当の回は、見えているドライバでも引き取り待ちとリスナーの食い違いで昇格する。
+        for (engaged, driverHidden, expectedEscalations) in [(true, true, 0), (false, false, 1), (true, false, 1)] {
+            let mode = airPlayMode(engaged ? .engaged(endpointDeviceID: airPlayEndpointID) : .notApplicable)
+            let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: mode)
+            f.directory.currentDefaultOutputID = hdmiID
+            f.outputController.reconcileRestoreObligation(testToken)
+            f.engine.driverDeviceListenerDeviceID = nil
+            f.directory.isHiddenByDeviceID[driverDeviceID] = driverHidden
+
+            f.reconciler.reconcile(trigger: .periodicVerification, testToken)
+
+            XCTAssertEqual(mode.reconcileCount, expectedEscalations, "engaged=\(engaged) hidden=\(driverHidden)")
+        }
+    }
+
+    func testADelayedReconcileRunsAWriteBearingPassWhenItFires() {
+        let mode = airPlayMode(.notApplicable)
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: mode)
+
+        f.reconciler.requestReconcile(after: AirPlayModePolicy.settleSeconds)
+        XCTAssertEqual(mode.reconcileCount, 0)
+
+        f.scheduler.fire()
+        XCTAssertEqual(mode.reconcileCount, 1)
+    }
+
     // MARK: - シナリオとして通す検証
     //
     // 協力オブジェクトを実物のまま組み合わせ、モックはデバイス台帳と音声エンジンの境界だけに限り、
@@ -1358,7 +1601,7 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
         XCTAssertEqual(f.engine.processingState, .suspended(.routeUnavailable))
         // 警告の識別子が「出力先の選び直し要」。
         XCTAssertEqual(
-            topBarWarningIdentifier(driverAvailability: .ok, processingState: f.engine.processingState, ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true),
+            topBarWarningIdentifier(driverAvailability: .ok, processingState: f.engine.processingState, ringStalled: false, defaultOutputReachesDriver: true, audioWorldUnresponsive: false, startupActivationSettled: true, airPlayMode: .inactive),
             .outputRouteSelectionRequired
         )
         // 復帰対象は (退避には使えなくても) UID→ID の解決自体は保たれ続ける。

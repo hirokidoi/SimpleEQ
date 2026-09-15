@@ -377,6 +377,27 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(valuesOfRow("所有者", in: metrics), [unreadableValue], "読めなかった回は observed のままにする")
     }
 
+    // MARK: - 音の入口と収録の許可
+
+    func testAudioInputAndCaptureAuthorizationRowsSpellOutTheCurrentState() {
+        let metrics = AudioRuntimeMetrics()
+        XCTAssertEqual(valuesOfRow("音の入口", in: metrics), [unreadableValue], "未稼働は読めていないことを示す")
+        XCTAssertEqual(valuesOfRow("収録の許可", in: metrics), ["未確認"])
+
+        metrics.recordAudioInput(.dedicatedDriver)
+        metrics.recordCaptureAuthorization(.granted)
+        XCTAssertEqual(valuesOfRow("音の入口", in: metrics), ["専用ドライバ"])
+        XCTAssertEqual(valuesOfRow("収録の許可", in: metrics), ["許可済み"])
+
+        metrics.recordAudioInput(.airPlay)
+        metrics.recordCaptureAuthorization(.denied)
+        XCTAssertEqual(valuesOfRow("音の入口", in: metrics), ["AirPlay"])
+        XCTAssertEqual(valuesOfRow("収録の許可", in: metrics), ["拒否"])
+
+        metrics.recordCaptureAuthorization(.unreadable)
+        XCTAssertEqual(valuesOfRow("収録の許可", in: metrics), ["読み取り不可"])
+    }
+
     private func valuesOfRow(_ title: String, in metrics: AudioRuntimeMetrics) -> [String]? {
         DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate), render: idleRender())
             .flatMap { $0.rows }.first { $0.title == title }?.values

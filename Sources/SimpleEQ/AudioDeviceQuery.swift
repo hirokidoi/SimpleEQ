@@ -72,6 +72,58 @@ func nominalSampleRate(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Double?
     return rate
 }
 
+private func readUInt32Property(
+    _ id: AudioObjectID, _ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope
+) -> UInt32? {
+    var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    var value: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return nil }
+    return value
+}
+
+/// 出力スコープのデバイスの遅延 (フレーム)。
+func outputDeviceLatencyFrames(_ id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? {
+    readUInt32Property(id, kAudioDevicePropertyLatency, scope: kAudioObjectPropertyScopeOutput)
+}
+
+/// 出力スコープの safety offset (フレーム)。
+func outputSafetyOffsetFrames(_ id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? {
+    readUInt32Property(id, kAudioDevicePropertySafetyOffset, scope: kAudioObjectPropertyScopeOutput)
+}
+
+/// 最初の出力ストリームの遅延 (フレーム)。
+func firstOutputStreamLatencyFrames(_ id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? {
+    var streamsAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyStreams, mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain
+    )
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(id, &streamsAddr, 0, nil, &size) == noErr else { return nil }
+    var streams = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+    guard let first = streams.indices.first,
+          AudioObjectGetPropertyData(id, &streamsAddr, 0, nil, &size, &streams) == noErr else { return nil }
+    return readUInt32Property(streams[first], kAudioStreamPropertyLatency, scope: kAudioObjectPropertyScopeGlobal)
+}
+
+func processObjectID(forPID pid: pid_t, _ token: AudioWorldToken) -> AudioObjectID? {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+        mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
+    )
+    var qualifier = pid
+    var objectID = AudioObjectID(kAudioObjectUnknown)
+    var size = UInt32(MemoryLayout<AudioObjectID>.size)
+    let st = AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject), &addr, UInt32(MemoryLayout<pid_t>.size), &qualifier, &size, &objectID
+    )
+    guard st == noErr, objectID != kAudioObjectUnknown else { return nil }
+    return objectID
+}
+
+func deviceIsAlive(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool? {
+    readUInt32Property(id, kAudioDevicePropertyDeviceIsAlive, scope: kAudioObjectPropertyScopeGlobal).map { $0 != 0 }
+}
+
 /// UID から一般出力デバイスを解決する (列挙+UID照合、可視デバイスのみ解決できる)。
 func findVisibleDeviceID(forUID target: String, needsOutput: Bool, _ token: AudioWorldToken) -> AudioDeviceID? {
     allDeviceIDs(token).first { deviceUID($0, token) == target && deviceHasStreams($0, needsOutput: needsOutput, token) }

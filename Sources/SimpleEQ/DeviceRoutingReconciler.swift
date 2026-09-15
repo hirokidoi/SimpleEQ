@@ -21,13 +21,31 @@ func deviceRoutingScope(trigger: DeviceRoutingTrigger) -> DeviceRoutingScope {
     }
 }
 
+enum DriverVisibilityIntent: Equatable {
+    case visible
+    /// AirPlay モードの間は、接続断・切り替え中の経由がドライバでなく一般デバイスになるよう隠す。
+    case hidden
+    case notMaintained
+}
+
+func driverVisibilityIntent(maintains: Bool, airPlayEngaged: Bool) -> DriverVisibilityIntent {
+    guard maintains else { return .notMaintained }
+    return airPlayEngaged ? .hidden : .visible
+}
+
 /// 可視性の実値を優先し、読めなかった場合のみ解決 ID の変化を代理指標にする。
 /// - Parameter isHidden: 可視性の実値。読めなかった場合は nil。
-func driverVisibilityReapplyNeeded(
-    previousID: AudioDeviceID?, resolvedID: AudioDeviceID, isHidden: Bool?
+func driverVisibilityWriteNeeded(
+    intent: DriverVisibilityIntent, previousID: AudioDeviceID?, resolvedID: AudioDeviceID, isHidden: Bool?
 ) -> Bool {
+    let wantsHidden: Bool
+    switch intent {
+    case .notMaintained: return false
+    case .visible: wantsHidden = false
+    case .hidden: wantsHidden = true
+    }
     guard let isHidden else { return resolvedID != previousID }
-    return isHidden
+    return isHidden != wantsHidden
 }
 
 /// 専用ドライバのデバイスが OS の一覧やボリューム表示で名乗る表示名。
@@ -133,6 +151,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     private let didAdoptOutputDevice: AdoptedOutputDeviceReporter
     private let didObserveDefaultOutputReach: DefaultOutputReachReporter
     private let didObserveRingStalled: RingStallReporter
+    private let airPlayMode: AirPlayModeReconciling
     private let now: @Sendable () -> Date
 
     private var adoptsSystemOutputSelection: Bool
@@ -140,8 +159,10 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     private var coalescingPending = false
     private var listenerBlock: AudioObjectPropertyListenerBlock?
     private var aliveListenerDeviceIDs: Set<AudioDeviceID> = []
-    private var consecutiveAutomaticResumeFailures = 0
-    private var lastAutomaticResumeAttempt: Date?
+    private var automaticResumeThrottle = RetryThrottle(
+        interval: DeviceRoutingReconciler.automaticResumeRetryInterval,
+        maxConsecutiveFailures: DeviceRoutingReconciler.automaticResumeMaxConsecutiveFailures
+    )
 
     /// 通知の再入で試行が自分自身を駆動し続けないよう、定期検算と同じ周期に揃える。
     static let automaticResumeRetryInterval: TimeInterval = verificationInterval
@@ -161,11 +182,13 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         didAdoptOutputDevice: @escaping AdoptedOutputDeviceReporter,
         didObserveDefaultOutputReach: @escaping DefaultOutputReachReporter = { _ in },
         didObserveRingStalled: @escaping RingStallReporter = { _ in },
+        airPlayMode: AirPlayModeReconciling = AirPlayModeNotApplicable(),
         audioWorld: AudioWorld,
         schedule: DeviceRoutingScheduler? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.now = now
+        self.airPlayMode = airPlayMode
         self.directory = directory
         self.engine = engine
         self.driverLifecycle = driverLifecycle
@@ -193,8 +216,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
             didObserveRingStalled(engine.evaluateRingStalled(token))
         }
         if engine.processingState == .active {
-            consecutiveAutomaticResumeFailures = 0
-            lastAutomaticResumeAttempt = nil
+            automaticResumeThrottle.reset()
         }
         switch deviceRoutingScope(trigger: trigger) {
         case .verifyOutputOnly:
@@ -211,9 +233,8 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
 
     func startObserving(_ token: AudioWorldToken) {
         guard listenerBlock == nil else { return }
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            guard let self else { return }
-            self.scheduleConfigurationChangeReconcile(self.audioWorld.assumingOnQueue())
+        let block = audioWorld.propertyListener { [weak self] token in
+            self?.scheduleConfigurationChangeReconcile(token)
         }
         listenerBlock = block
         var devicesAddress = AudioObjectPropertyAddress(
@@ -221,18 +242,26 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devicesAddress, audioWorld.queue, block)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devicesAddress, audioWorld.listenerQueue, block)
         var defaultOutputAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &defaultOutputAddress, audioWorld.queue, block)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &defaultOutputAddress, audioWorld.listenerQueue, block)
         reconcile(trigger: .configurationChange, token)
+    }
+
+    /// 書き込みを伴う是正を遅延して打つ。
+    func requestReconcile(after delay: TimeInterval) {
+        schedule(delay) { [weak self] scheduledToken in
+            self?.reconcile(trigger: .explicit, scheduledToken)
+        }
     }
 
     /// 構成変更通知からの起動口。合流窓の間に届いた通知は 1 回のパスへ束ねる。
     func scheduleConfigurationChangeReconcile(_ token: AudioWorldToken) {
+        airPlayMode.noteConfigurationNotification(token)
         guard !coalescingPending else { return }
         coalescingPending = true
         schedule(Self.coalescingWindow) { [weak self] scheduledToken in
@@ -244,10 +273,16 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
 
     /// 検算パス。読み出しのみで、実状態があるべき状態と一致していれば何も書き込まない。
     private func stateMatchesIntent(_ token: AudioWorldToken) -> Bool {
+        guard airPlayMode.matchesIntent(adopts: adoptsSystemOutputSelection, token) else { return false }
+        let airPlayEngaged = airPlayMode.isEngaged
         let resolvedDriverDeviceID = directory.resolveHiddenDeviceID(forUID: driverDeviceUID, token)
-        guard driverVisibilityMatchesIntent(resolvedDriverDeviceID: resolvedDriverDeviceID, token) else { return false }
-        guard systemOutputAdoptionTarget(token) == nil else { return false }
+        guard driverVisibilityMatchesIntent(
+            resolvedDriverDeviceID: resolvedDriverDeviceID, airPlayEngaged: airPlayEngaged, token
+        ) else { return false }
+        // AirPlay モードでは引き取り・出力経路・ドライバのリスナーをあるべき状態として問わない。
+        guard airPlayEngaged || systemOutputAdoptionTarget(token) == nil else { return false }
         guard !outputController.restoreObligationNeedsReconcile(token) else { return false }
+        guard !airPlayEngaged else { return true }
         guard driverListenerRegistrationMatchesIntent(resolvedDriverDeviceID: resolvedDriverDeviceID) else { return false }
         switch engine.processingState {
         case .active:
@@ -278,21 +313,67 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         )
     }
 
-    private func driverVisibilityMatchesIntent(resolvedDriverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> Bool {
-        guard driverLifecycle.isVisibilityOwnedBySession,
-              SuspensionPolicy.maintainsDriverVisibility(engine.processingState) else { return true }
+    private func driverVisibilityMatchesIntent(
+        resolvedDriverDeviceID: AudioDeviceID?, airPlayEngaged: Bool, _ token: AudioWorldToken
+    ) -> Bool {
         guard let resolvedDriverDeviceID else { return true }
-        return directory.isHidden(forDeviceID: resolvedDriverDeviceID, token) != true
+        let intent = driverVisibilityIntent(maintains: maintainsDriverVisibility, airPlayEngaged: airPlayEngaged)
+        guard intent != .notMaintained else { return true }
+        return !driverVisibilityWriteNeeded(
+            intent: intent, previousID: resolvedDriverDeviceID, resolvedID: resolvedDriverDeviceID,
+            isHidden: directory.isHidden(forDeviceID: resolvedDriverDeviceID, token)
+        )
+    }
+
+    private var maintainsDriverVisibility: Bool {
+        driverLifecycle.isVisibilityOwnedBySession && SuspensionPolicy.maintainsDriverVisibility(engine.processingState)
     }
 
     private func reconcileAll(_ token: AudioWorldToken) {
-        let driverDeviceID = reconcileDriverDevice(token)
-        adoptSystemOutputSelection(driverDeviceID: driverDeviceID, token)
-        let outputDevice = reconcileOutputDevice(token)
+        let airPlayBranch = airPlayMode.reconcile(adopts: adoptsSystemOutputSelection, token)
+        let driverDeviceID = reconcileDriverDevice(airPlayEngaged: airPlayMode.isEngaged, token)
+        let outputDevice: ReconciledOutputDevice
+        let airPlayEndpointDeviceID: AudioDeviceID?
+        switch airPlayBranch {
+        case .engaged(let endpointDeviceID):
+            // AirPlay モードの間は名前の元となる出力先を持たない。
+            outputDevice = .observedOnly(engine.currentOutputDeviceID(token))
+            airPlayEndpointDeviceID = endpointDeviceID
+        case .departed(let resumeCandidateUID):
+            airPlayEndpointDeviceID = nil
+            if let resumed = resumeAfterAirPlayDeparture(candidateUID: resumeCandidateUID, token) {
+                outputDevice = .nameSource(resumed)
+            } else {
+                outputDevice = reconcileRoutingOutsideAirPlay(driverDeviceID: driverDeviceID, token)
+            }
+        case .notApplicable:
+            airPlayEndpointDeviceID = nil
+            outputDevice = reconcileRoutingOutsideAirPlay(driverDeviceID: driverDeviceID, token)
+        }
         outputController.reconcileRestoreObligation(token)
-        rebindAliveListeners(driverDeviceID: driverDeviceID, outputDeviceID: outputDevice.observedDeviceID)
-        engine.reoccupyOutputVolumeRoute(token)
+        rebindAliveListeners(
+            driverDeviceID: driverDeviceID, outputDeviceID: outputDevice.observedDeviceID,
+            airPlayEndpointDeviceID: airPlayEndpointDeviceID
+        )
+        if !airPlayMode.isEngaged { engine.reoccupyOutputVolumeRoute(token) }
         reconcileDriverDeviceName(driverDeviceID: driverDeviceID, outputDeviceID: outputDevice.nameSourceDeviceID, token)
+    }
+
+    private func reconcileRoutingOutsideAirPlay(driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> ReconciledOutputDevice {
+        adoptSystemOutputSelection(driverDeviceID: driverDeviceID, token)
+        return reconcileOutputDevice(token)
+    }
+
+    /// ユーザー操作・接続断という出来事への応答なので、自動再開の間隔抑制の対象にしない。
+    private func resumeAfterAirPlayDeparture(candidateUID: String?, _ token: AudioWorldToken) -> AudioDeviceID? {
+        guard engine.processingState != .active,
+              let candidateUID,
+              let target = directory.selectableOutputDevice(forUID: candidateUID, driverDeviceUID: driverDeviceUID, token)
+        else { return nil }
+        let outcome = activationCoordinator.resume(outputDevice: target, trigger: .automatic, token)
+        guard outcome.processingState == .active, let active = outcome.activeOutputDevice else { return nil }
+        didAdoptOutputDevice(active, token)
+        return active.deviceID
     }
 
     /// 出力先が確定したあとに呼ぶ (表示名が出力先の名前から決まるため)。
@@ -354,17 +435,18 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         didAdoptOutputDevice(target, token)
     }
 
-    private func reconcileDriverDevice(_ token: AudioWorldToken) -> AudioDeviceID? {
+    private func reconcileDriverDevice(airPlayEngaged: Bool, _ token: AudioWorldToken) -> AudioDeviceID? {
         let resolvedID = directory.resolveHiddenDeviceID(forUID: driverDeviceUID, token)
         let previousID = lastDriverDeviceID
         lastDriverDeviceID = resolvedID
         guard let resolvedID else { return nil }
 
-        if driverLifecycle.isVisibilityOwnedBySession, SuspensionPolicy.maintainsDriverVisibility(engine.processingState) {
-            let isHidden = directory.isHidden(forDeviceID: resolvedID, token)
-            if driverVisibilityReapplyNeeded(previousID: previousID, resolvedID: resolvedID, isHidden: isHidden) {
-                driverLifecycle.reapplyVisibility(deviceID: resolvedID, token)
-            }
+        let intent = driverVisibilityIntent(maintains: maintainsDriverVisibility, airPlayEngaged: airPlayEngaged)
+        if intent != .notMaintained, driverVisibilityWriteNeeded(
+            intent: intent, previousID: previousID, resolvedID: resolvedID,
+            isHidden: directory.isHidden(forDeviceID: resolvedID, token)
+        ) {
+            driverLifecycle.applyVisibility(hidden: intent == .hidden, deviceID: resolvedID, token)
         }
         if driverListenerRebindNeeded(
             previousID: engine.driverDeviceListenerDeviceID, resolvedID: resolvedID
@@ -434,26 +516,19 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         return target.deviceID
     }
 
+    /// 間隔と回数の両方で抑える (失敗が構成変更通知を生んで自分自身を駆動し続けるため)。
     private func attemptAutomaticResume(_ token: AudioWorldToken) -> AudioDeviceID? {
         guard let target = resolveAutomaticResumeTarget(token) else { return nil }
-        guard automaticResumeAttemptAllowed() else { return nil }
-        lastAutomaticResumeAttempt = now()
+        let attemptTime = now().timeIntervalSinceReferenceDate
+        guard automaticResumeThrottle.allowsAttempt(now: attemptTime) else { return nil }
+        automaticResumeThrottle.noteAttempt(now: attemptTime)
         let outcome = activationCoordinator.resume(outputDevice: target, trigger: .automatic, token)
         guard outcome.processingState == .active else {
-            consecutiveAutomaticResumeFailures += 1
+            automaticResumeThrottle.noteFailure()
             return nil
         }
-        consecutiveAutomaticResumeFailures = 0
+        automaticResumeThrottle.noteSuccess()
         return outcome.activeOutputDevice?.deviceID
-    }
-
-    /// 間隔と回数の両方で抑える (失敗が構成変更通知を生んで自分自身を駆動し続けるため)。
-    private func automaticResumeAttemptAllowed() -> Bool {
-        guard consecutiveAutomaticResumeFailures < Self.automaticResumeMaxConsecutiveFailures else {
-            return false
-        }
-        guard let last = lastAutomaticResumeAttempt else { return true }
-        return now().timeIntervalSince(last) >= Self.automaticResumeRetryInterval
     }
 
     /// 停止直前のあるべき出力先 → 復帰対象の順に、厳密解決のみを試みる。
@@ -464,17 +539,19 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         )
     }
 
-    private func rebindAliveListeners(driverDeviceID: AudioDeviceID?, outputDeviceID: AudioDeviceID?) {
+    private func rebindAliveListeners(
+        driverDeviceID: AudioDeviceID?, outputDeviceID: AudioDeviceID?, airPlayEndpointDeviceID: AudioDeviceID?
+    ) {
         guard let block = listenerBlock else { return }
-        let desired = Set([driverDeviceID, outputDeviceID].compactMap { $0 })
+        let desired = Set([driverDeviceID, outputDeviceID, airPlayEndpointDeviceID].compactMap { $0 })
         let actions = aliveListenerRebindActions(registered: aliveListenerDeviceIDs, desired: desired)
         for id in actions.remove {
             var addr = Self.aliveAddress
-            AudioObjectRemovePropertyListenerBlock(id, &addr, audioWorld.queue, block)
+            AudioObjectRemovePropertyListenerBlock(id, &addr, audioWorld.listenerQueue, block)
         }
         for id in actions.add {
             var addr = Self.aliveAddress
-            AudioObjectAddPropertyListenerBlock(id, &addr, audioWorld.queue, block)
+            AudioObjectAddPropertyListenerBlock(id, &addr, audioWorld.listenerQueue, block)
         }
         aliveListenerDeviceIDs = desired
     }

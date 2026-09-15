@@ -27,5 +27,7 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>AirPlay で再生中のシステムの音にイコライザーをかけるため、システムの音を取り込みます。</string>
 </dict>
 </plist>

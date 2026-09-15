@@ -24,6 +24,8 @@ struct MixerSurfaceView: View {
     @ViewBuilder
     private var content: some View {
         switch model.tab {
+        case .appMixer where viewModel.isAirPlayMode, .soundLab(.loudness) where viewModel.isAirPlayMode:
+            AirPlayUnavailableNotice()
         case .appMixer:
             MixerView(model: model, viewModel: viewModel, clock: clock)
         case .soundLab(let feature):

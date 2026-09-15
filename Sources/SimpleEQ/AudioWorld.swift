@@ -1,3 +1,4 @@
+import CoreAudio
 import Darwin
 import Dispatch
 import Foundation
@@ -8,10 +9,12 @@ import Synchronization
 /// 生成できるのは組み立て役だけで、この型は static な共有インスタンスを持たない。
 /// 並行に触れる可変状態は畳み込みの保管庫だけで、os_unfair_lock が守る (下記)。
 final class AudioWorld: @unchecked Sendable {
-    /// submit(coalescingKey:_:)/submitUncoalesced(_:) を経由しない直接ディスパッチは、
-    /// HAL リスナー登録先・合流窓の遅延実行 (asyncAfter) の 2 用途に限る
-    /// (これらは OS 側から直接ディスパッチされるため、通行証は assumingOnQueue() で得る)。
+    /// submit(coalescingKey:_:)/submitUncoalesced(_:) を経由しない直接ディスパッチは、合流窓の遅延実行 (asyncAfter) に限る。
     let queue: DispatchQueue
+
+    /// CoreAudio のプロパティリスナーの登録先。登録・解除とも必ずこのキューを渡す。
+    /// HAL はデバイスの消滅時に登録先へ同期で配送するため、オーディオ世界のキューに登録すると資源の解放と互いに待って固まる。
+    let listenerQueue = DispatchQueue(label: "com.simpleeq.audioworld.listeners", qos: .userInitiated)
 
     /// 未処理の依頼を同じ key の最新の 1 件へ置き換えるための保管庫。
     /// os_unfair_lock で保護する (realtime 経路ではないため軽量ロックで足りる)。
@@ -49,6 +52,11 @@ final class AudioWorld: @unchecked Sendable {
         queue.async { work(AudioWorldToken()) }
     }
 
+    /// listenerQueue に登録するリスナー。受けた通知はオーディオ世界へ積むだけで待たない。
+    func propertyListener(_ work: @escaping @Sendable (AudioWorldToken) -> Void) -> AudioObjectPropertyListenerBlock {
+        { [weak self] _, _ in self?.submitUncoalesced(work) }
+    }
+
     /// 終了シーケンス専用。他のすべての経路は完了を待たない。
     /// timeout はログアウト/システム終了経路の OS 側の待ち時間上限に収まるよう、呼び出し元が有界な値を渡すこと。
     /// 上限に達したら待ちを諦める (work 自体はキュー上で走り続ける)。
@@ -68,9 +76,7 @@ final class AudioWorld: @unchecked Sendable {
         return produced.withLock { $0 }
     }
 
-    /// `queue` を実行キューとして明示的に登録した CoreAudio/DispatchSourceTimer のコールバック内から呼ぶ
-    /// (submit 系を経由せず OS 側から直接このキューへディスパッチされる経路専用)。
-    /// dispatchPrecondition が実行時に検証する。
+    /// `queue` へ直接ディスパッチした遅延実行の中から呼ぶ。dispatchPrecondition が実行時に検証する。
     func assumingOnQueue() -> AudioWorldToken {
         dispatchPrecondition(condition: .onQueue(queue))
         return AudioWorldToken()

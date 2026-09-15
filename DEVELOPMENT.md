@@ -15,6 +15,7 @@ First, let us trace, participant by participant, where the audio passes through 
 4. The output device actually plays the sound.
 
 In other words, system audio travels a single path: dedicated driver (capture point) → shared memory (handoff) → the app's audio engine (processing) → output device (exit).
+Only while the default output is an AirPlay endpoint does the capture point move, to a process tap addressed to that endpoint, and the processed audio then goes back out to the same endpoint (→ AirPlay Mode).
 Turning the EQ off to bypass processing does not change the path itself; only the processing stages are skipped.
 
 To make this path hold together, the app observes several rules.
@@ -52,6 +53,8 @@ All of these states can be inspected as actual numbers from the Diagnostics scre
 - **Normal view / compact view** — Two ways of presenting the contents of the EQ window. The frame stays as one and only the contents are swapped, so the two are not separate windows, and the window position is held separately per view. Which view is shown and whether the surface is shown are two states that do not constrain each other, so either view can be carrying it. What the surface can present differs, though: only the normal view carries the tabs, and the compact view shows the rows alone.
 - **Target** — A shift applied on top of cancelling what is added, in either direction. It is not a ceiling on the peak (→ Deriving the Preamp). Raising it leaves the preamp shallower, which buys level at the cost of the peak indicator lighting more often.
 - **Measurement chain** — An offline EQ chain built solely to measure the composite frequency response used to derive the preamp (→ Deriving the Preamp). It never sits on the audio path, and it is a separate chain from the one actually processing audio. It is one of two instruments the derivation uses; what the other one measures, and why it has to be a different tool, is in the same section.
+- **AirPlay mode** — The state the app is in while it processes the audio headed for an AirPlay endpoint that is the default output, from deciding to enter until it leaves, including the intervals where the capture path is still being built (→ AirPlay Mode).
+- **Capture path** — The input AirPlay mode reads in place of the dedicated driver and shared memory: a process tap on the endpoint, the Aggregate device that carries it, and a ring inside the app that the Aggregate's IO callback writes and the output render callback reads, one writer and one reader as in shared memory.
 
 ---
 
@@ -179,7 +182,9 @@ The first connection discards everything up to the writer's current position rat
 
 The audio-related resources (device queries, audio units, shared memory, and so on) are owned solely by a single serial queue called the audio world.
 These resources may be touched only on this queue, and every operation that mutates a resource is required to take a token as an argument, which enforces the boundary at compile time.
-What the token binds is ownership and mutation; it does not bind references themselves. Individual CoreAudio calls can block when coreaudiod backs up, so no path is created that calls them directly from outside this serial queue.
+What the token binds is ownership and mutation; it does not bind references themselves. Individual CoreAudio calls can block when coreaudiod backs up, so no path is created that calls them directly from outside this serial queue. Building the capture path is an exception (→ AirPlay Mode).
+
+CoreAudio property listeners are not delivered on this queue either. When a device goes away, the HAL delivers to each listener's queue synchronously, and releasing an audio unit waits for deliveries in progress to finish. A listener registered on this queue, delivered at the moment this queue is releasing an audio unit, leaves each side waiting for the other for good. Listeners are therefore registered on a queue of their own that only hands the work off without waiting, and every registration and removal names that queue.
 
 The analyzer does not count as one of these resources. Capture and analysis/display are directly connected as a single producer and a single consumer, so it is treated as being outside the scope of this rule.
 
@@ -187,7 +192,7 @@ The per-application meter values are carved out for the same reason and in the s
 
 The analyzer's internals (the working buffers, the analysis window, the capture ring) are rebuilt whenever the sample rate changes. The rebuild is mutually exclusive with analysis by way of a lock, but capture is a realtime path and therefore takes no lock. That the two never overlap is guaranteed solely by the ordering that **the rebuild is only ever done while the output stage is stopped**. This order is detected neither by the compiler nor by the tests, so when adding places that call the rebuild, always confirm that the output stage is stopped at that point. The fact that the analyzer reference itself never moves is no substitute for this ordering.
 
-This same ordering — swap it in only while the output stage is stopped — governs every resource a realtime path reads, not the analyzer's internals alone. The shared-memory reader the render callback walks is one more instance of it: it is only ever handed a freshly reopened reader while assembly is rebuilding the output stage, never while that stage is running (→ Cross-Session Ownership).
+This same ordering — swap it in only while the output stage is stopped — governs every resource a realtime path reads, not the analyzer's internals alone. The shared-memory reader the render callback walks is one more instance of it: it is only ever handed a freshly reopened reader while assembly is rebuilding the output stage, never while that stage is running (→ Cross-Session Ownership). The capture path's reader is one more: it is put in place while assembly is building the output stage, and is taken away, with the capture path destroyed, only after that stage has stopped.
 
 The measurement chain (→ Deriving the Preamp) is excluded from these resources in the same way, for two reasons: it never sits on the audio path, and a single queue of its own is the only place that creates and uses it; and placing it behind a queue where CoreAudio's synchronous calls can back up would drag the derivation down along with them, the same reasoning that keeps determining the dedicated driver's availability off that queue (→ Determining Driver Liveness and Automatic Restart). What it derives reaches the UI world through the same outbound path as everything else that crosses from the audio world.
 
@@ -242,7 +247,7 @@ A match key that turns out to name the clients of two different applications bel
 
 ## Constraints on the Realtime Path
 
-The output render callback and the paths called from it, and the point where the dedicated driver writes audio into shared memory, all perform no locking, no memory allocation, and no logging.
+The output render callback and the paths called from it, the point where the dedicated driver writes audio into shared memory, and the point where the capture path's IO callback writes into its ring, all perform no locking, no memory allocation, and no logging.
 This applies to the point where audio is written, not to everything called from the same IO thread (the point that responds to time reporting does take a lock).
 They do nothing but pass values between preallocated buffers. The app's own Sound Lab processing runs here too and is bound by the same rules (→ The Sound Lab). Nor does the writing side make any decision about whether to write. As long as the deadline is met, it always writes, even when the presentation time has not advanced from the previous cycle.
 
@@ -368,6 +373,7 @@ Running the counted-in features near their upper bounds can stack up enough that
 The reading side consumes the audio accumulated in the ring and not yet read (the occupancy) while holding it at a fixed target occupancy.
 The target occupancy is derived from the length of the block the writer writes at once, the observed frame count the client (the real output device) requests, and a margin for phase jitter. It is recomputed whenever either observed value changes.
 The "writer's block length" here is not the value the dedicated driver declares but a value the reading side estimates by watching the increments of the write counter over an observation window; it differs from the most recent IO cycle length the driver declares in both who computes it and when (the Diagnostics screen lets you compare the two side by side → Diagnostics).
+The capture path's ring is controlled by the same rules; only where the write counter and the payload are read from differs.
 
 When the target occupancy has grown but the current occupancy has not yet reached it, consumption is halted so as not to break the instantaneous floor, and it resumes only after occupancy reaches the new target.
 
@@ -397,7 +403,7 @@ While occupancy is being stabilized, the route itself — which device the audio
 
 The app defines where the output should be, and the processing that reconciles this against the actual state of the device configuration is consolidated into a single entry point. Reconciliation is idempotent: when the actual state matches the intended state, nothing is written.
 
-There are six targets of reconciliation: the visibility of the dedicated driver's device, the watch registered on that device, the output destination itself, the restore target, taking over a default output that has moved off the dedicated driver, and automatic restart after a stop. None of them holds up if a once-resolved value is cached and then used without verification.
+There are six targets of reconciliation: the visibility of the dedicated driver's device, the watch registered on that device, the output destination itself, the restore target, taking over a default output that has moved off the dedicated driver, and automatic restart after a stop. None of them holds up if a once-resolved value is cached and then used without verification. While in AirPlay mode, the app outputs to the endpoint itself, and what this section says about the output destination, the takeover, automatic restart, the volume route, and the driver's visibility gives way to → AirPlay Mode.
 The identifier assigned to the dedicated driver's device can change on waking from display sleep or on a coreaudiod restart, so just before use it is verified by the UID — the sole key for identification, persistence, and resolution — and re-resolved from the UID if it has gone stale.
 The device actually being pointed at as the output destination can also be re-pointed without the app's involvement, by AUHAL's built-in fallback, so that ID is not cached either: it is read back from the output unit each time and matched against the intended destination by UID.
 
@@ -441,7 +447,7 @@ The dedicated driver is the side that captures system audio by way of shared mem
 AirPlay destinations are excluded as well. An AirPlay device disappears from the HAL's list once the system output selection moves off that endpoint, so one saved anywhere leaves behind a value that can never be resolved again.
 
 Where these exclusions act is not uniform, and the difference matters when reading a saved value. All three are refused wherever a destination the app is to output through is resolved.
-What can reach the saved restore target is a narrower question. The dedicated driver's own device never does. An Aggregate/Multi-Output containing it and an AirPlay device both can, because the record made when the default output moves away on its own takes whatever it moved to as it stands.
+What can reach the saved restore target is a narrower question. The dedicated driver's own device never does, and neither does an AirPlay device: the restore target never records an endpoint that stops resolving once it is no longer selected. An Aggregate/Multi-Output containing the driver can, because the record made when the default output moves away on its own takes whatever else it moved to as it stands.
 Putting the system default output back is a separate path again, and it consults none of this. A saved value that no longer resolves is therefore a state that can actually be met, rather than one to be read as impossible.
 If the output destination does change to one of these dangerous paths while running, it falls back to the restore target (the output destination the user had selected before the switch). If the fallback destination cannot be resolved either, it does not stop at merely showing a warning: audio processing itself is stopped.
 
@@ -461,7 +467,7 @@ A session that has made the dedicated driver claim the default output holds two 
 What sets the obligation is carrying the audio, not having been the one who moved the default output. Deciding it the other way would let an instance that merely inherited the situation decline the obligation, restore nothing on exit, and hand the next launch the same inheritance, with nothing to break the loop (→ Cross-Session Ownership). The restore target keeps being updated to follow reality regardless of whether the obligation exists.
 
 If the user or another app moves the default output away from the dedicated driver during the session, the claim is considered released and the obligation is dropped.
-The default output at that moment, however, is recorded as the next restore target. The obligation returns when the claim does. What the reconciliation asks for before setting it again is that this session either still holds the obligation or moved the default output itself, so an instance that has handed the audio path over does not pick it up again from the reconciliation alone; taking the path up is what puts it back.
+The default output at that moment, however, is recorded as the next restore target, unless it is one the restore target never records (→ Managing the Output Device Route). The obligation returns when the claim does. What the reconciliation asks for before setting it again is that this session either still holds the obligation or moved the default output itself, so an instance that has handed the audio path over does not pick it up again from the reconciliation alone; taking the path up is what puts it back.
 
 The value representing whether the obligation exists is persisted. Because of that, an exit that could not restore properly — a force quit, for instance — can leave the obligation still set at the next launch.
 Restoring unconditionally on the basis of this value alone would overwrite the user's own choice with a past saved value in the case where the user reselected the output destination themselves after the exit.
@@ -497,7 +503,7 @@ That reclaim rests on the memory of having held ownership a moment ago, and the 
 
 A reinstall replaces the file the shared region lives in, and the seat a render path finds in the old one still names this instance, so nothing stops it on its own. The periodic pass therefore stops the output stage when it sees the file underneath replaced, which is what gets the reader rebuilt (→ Crossing Rules Between the Audio World and the UI World). Only the pass that acts consumes that observation; an entry point that merely reads the state leaves it standing.
 
-Giving ownership up hands over three responsibilities together, because dropping one without the others corrupts what the next owner is doing: the visibility of the dedicated driver's device, its display name, and the obligation to restore the default output on exit (→ Restore Target and Restore Obligation). Giving them up means dropping the responsibility itself, never performing what it implies — an instance that keeps running must not touch the device the new owner is using, and one that exits without holding ownership carries out none of the clean-exit sequence. It also means forgetting that this instance was the one that moved the default output, or the ordinary reconciliation puts the obligation straight back and the exit takes the output away from the new owner.
+Giving ownership up hands over three responsibilities together, because dropping one without the others corrupts what the next owner is doing: the visibility of the dedicated driver's device, its display name, and the obligation to restore the default output on exit (→ Restore Target and Restore Obligation). Giving them up means dropping the responsibility itself, never performing what it implies — an instance that keeps running must not touch the device the new owner is using, and one that exits without holding ownership carries out none of the clean-exit sequence. It also means forgetting that this instance was the one that moved the default output, or the ordinary reconciliation puts the obligation straight back and the exit takes the output away from the new owner. A capture path still being built is given up in the same step: one that arrives afterwards is destroyed without being started (→ AirPlay Mode).
 
 An instance on its way out stops taking any interest in ownership before it releases. A release is a change like any other and the releasing instance is subscribed to it; what comes back names an empty seat with this instance as its last holder, which is the entitlement to reclaim. So it takes the seat back on the way through the door and leaves a lease nobody will renew. Stopping the periodic pass is not enough, because the change arrives by its own path.
 
@@ -524,6 +530,36 @@ Writing the device's display name needs its own reading of the state. An instanc
 The per-application gains are gated on ownership as well, since the table is one and pushing while another instance owns the path would replace what that instance laid down. The gate is a refusal to write at all rather than a table left empty: an empty table is itself a write, and it would clear the new owner's rows on the way out. Nothing is left applied by refusing, because the expiry the gains carry lapses on its own and the new owner's own push arrives first (→ The Per-Application Mixer). This is the one gate that reads the ownership this instance still counts as its own — its own seat, or one it held that nobody has taken since — instead of the safe-side reading the surfaces take, because the audio goes on playing through a window where the state cannot be read, and standing down there would let the expiry return every application the user had turned down to neutral while it is still sounding.
 
 Whether this session is on the console is read from the same place the screen's own visibility is, but tracks the raw signals as independent values rather than only their combined one. Change is otherwise detected by comparing the combined value against its previous reading, so a change in one raw signal that the combined value absorbs — console moving underneath a screen that stays locked throughout — would go unnoticed for as long as the lock persists.
+
+---
+
+## AirPlay Mode
+
+An AirPlay endpoint exists only while it is selected as the system default output, so handing the default output to the dedicated driver makes it disappear. AirPlay mode therefore works only by sending the audio back out to the very endpoint it was captured from. The output stage stays the single one it always is; what is swapped is its input, the device it outputs to, and the rate it applies.
+
+The endpoint's identifiers are neither saved nor resolved through. A change of endpoint is detected by comparing UIDs whenever the default output changes. The device ID is never compared, because the same endpoint appears under different IDs in different processes.
+
+The tap is addressed to the endpoint's device and excludes the app's own process. Without the exclusion, the tap would mute the processed audio the app sends back out as well. Addressing the device is what leaves the endpoint playing the unprocessed sound, rather than silence, while a rebuild runs late.
+
+Building the capture path and settling the capture authorization are done outside the audio world, on a serial queue of their own, so that the system calls that check the authorization are never placed on the audio world. A built capture path is handed to the audio world before it is started, and from then on only the audio world starts, stops, or destroys it. A build that the situation has moved past by the time it arrives is destroyed by the receiving side.
+
+Whether to enter is decided, beyond the default output being an AirPlay endpoint, by the processing state and by the setting that takes over the system's output selection. Ownership is not a condition of its own; it takes effect through the processing state, so an instance that does not hold ownership never places a tap (→ Cross-Session Ownership).
+
+While in AirPlay mode, the dedicated driver's device is hidden. A disconnect drops the default output onto some other device, and a switch from one endpoint to another passes it through one on the way; with the driver hidden, that device is a general one rather than the driver. The visibility, the display name and the restore obligation stay this session's responsibilities; hiding the device is maintaining its visibility, not letting go of it.
+
+When the default output moves off the endpoint, having observed that while the endpoint was still alive marks it as the user's choice, and the mode is left at once. Otherwise a grace is held before deciding, since a switch between endpoints passes through a general device on the way; an endpoint that becomes the default output within the grace gets a capture path built for it again. Observing the change late only lands on the grace side, so that misreading costs delay rather than taking over a device the switch is merely passing through.
+
+Where the default output lands on leaving is taken over by the same rule as any general device the system selects (→ Managing the Output Device Route). No record of the destination in use before AirPlay mode is kept to return to.
+
+A capture path found unhealthy on the same endpoint is rebuilt at once, but a further rebuild for the same reason waits as long as an automatic restart would. Building one produces configuration change notifications, and those wake the very reconciliation that checks it, so an environment where the check keeps failing would otherwise rebuild in a loop (→ Determining Driver Liveness and Automatic Restart). The capture path's writer is not read as stopped until its first write has arrived or a startup allowance has passed: an AirPlay aggregate takes longer to start its IO than the threshold derived from its IO cycle, and reading that interval as a stop rebuilds every capture path right after it is assembled, which lengthens how long the endpoint takes to start playing several times over.
+
+The endpoint carries volume and mute. The app's gain stage is made neutral by releasing the volume route as one the device carries, rather than by writing the gain, so the route puts the right gain back when the mode ends. The loudness stage is handed neutral settings, leaving the held settings as they are. The per-application gains go on being pushed, so that they apply from the moment the audio comes back through the driver.
+
+In AirPlay mode, the default output not reaching the dedicated driver and the shared memory's writer having stopped are the ordinary state, so neither is used for the warning or for whether the controls act.
+
+The capture authorization is settled before a tap is placed. Where it is undetermined, the app requests it itself and places no tap until the result arrives, and builds again once it has; waiting for the result blocks no queue. A prompt raised by using a tap, and a change made in System Settings, do not reach what the process reads, but the result of the app's own request does, so what the process reads is its authorization. Only where that still reads as undetermined after the request is the request's result used. The request is made once per process. A denial still gets the path built, and is made known by silence and a warning.
+
+The calls that read and request the authorization are not part of the published interface, so they are looked up at run time, for the same reason as in → The Per-Application Mixer. Where the authorization cannot be read — a symbol is missing, or the value is not one of those expected — or reads as undetermined with no way to request it, it is treated as granted and surfaced in the Diagnostics screen as a degradation in which a denial cannot be reported. Where it reads as granted or denied, that is what is acted on, whether or not requesting is possible.
 
 ---
 
@@ -629,7 +665,7 @@ The gap between fired and applied is redrawing that changed nothing. It widens o
 
 **The Mixer meter's clock (effective, measured)**
 A clock of its own, and only two values are laid out for it. The effective rate is the ceiling the visualizer reads, held down again by a ceiling this meter carries for itself, so on the faster settings it reads lower than the setting shown on the row above. It is derived rather than recorded, because this clock has nothing else that moves it — it never drops to an idle step. There is no applied rate because nothing records whether a firing changed anything: a firing that finds the same segment count and the same clip state writes nothing, so this rate says how often the rows were looked at rather than how often they moved.
-It runs on a narrower condition than the visualizer's: the screen visible, the window visible, the surface shown and showing the rows rather than one of the Sound Lab tabs, the normal view, and not in editing. Reading it as stopped is therefore the ordinary state whenever the rows are not the thing on screen.
+It runs on a narrower condition than the visualizer's: the screen visible, the window visible, the surface shown and showing the rows rather than one of the Sound Lab tabs, the normal view, not in editing, and not in AirPlay mode. Reading it as stopped is therefore the ordinary state whenever the rows are not the thing on screen.
 
 **Occupancy (current, target, ceiling)**
 The current occupancy uses the median over the recent observation window (described below), to avoid the noise of a single observation.
@@ -643,7 +679,7 @@ Conversely, if the current occupancy frequently sits near the ceiling, drift tri
 **Occupancy window statistics (min, median, max)**
 The distribution of the occupancy recorded over the recent observation window.
 The window is a fixed-length ring that records one entry each time the output callback is invoked, and its size is defined by `AudioRuntimeMetrics.availableWindowCapacity`.
-Separately from this there is also a window for determining the writer's block length (`SharedRingReader.writerBlockObservationWindowCalls`).
+Separately from this there is also a window for determining the writer's block length (`OccupancyCursor.writerBlockObservationWindowCalls`).
 What they record differs, so do not confuse the two. A large gap between min and max means occupancy is swinging widely over a short time. It needs to be read together with the target and the ceiling.
 
 **Running maximum of the target occupancy**
@@ -692,10 +728,10 @@ Ideally all four are 0, but in terms of the weight of actual harm it is reasonab
 **The driver's running state and the block length estimate**
 The driver's IO running state and the block length actually processed in the most recent IO cycle are values the dedicated driver itself declares.
 The block length that Occupancy Control uses, on the other hand, is a value the app side estimates by watching the increments of the write counter over an observation window; both who computes it and when it updates differ (→ Occupancy Control).
-In a healthy state the two should be close in value, but there is no mechanism that automatically reconciles them and warns, so a large or sustained divergence has to be noticed by eye.
+While the output stage reads the dedicated driver, in a healthy state the two should be close in value, but there is no mechanism that automatically reconciles them and warns, so a large or sustained divergence has to be noticed by eye.
 
 **The driver's actual rate and the output device's actual rate**
-The rate the app uses for EQ processing is the rate declared by the dedicated driver.
+The rate the app uses for EQ processing is the rate declared by the dedicated driver, or the capture path's while the output stage reads from it.
 Separately from that, the nominal rate of the output device that actually plays the audio is displayed alongside it. The two are treated as separate clock domains, and the design assumes they can disagree.
 The reason the two values are shown side by side is to make it possible to confirm by eye whether these two clock domains currently agree.
 
@@ -705,7 +741,11 @@ The real output device carrying it out is the ordinary case for a device that ha
 A marking of having been downgraded means the device advertised a control that accepts writes but did not follow through — the write itself failed, or the value could not be read at all.
 Whether the value read back matches the value written is not part of that judgement for volume: the device and the dedicated driver hold it on grids of their own, so a write that comes back sitting where it started is a legitimate result of the device's grid rather than evidence of a control that does nothing, and what comes back is taken as that device's own value. Mute has no grid, so there a value that comes back differing from the one written does mean the write did not take.
 The marking clears when the route is bound again to a different output destination, or when the dedicated driver's identifier is re-resolved; a rebinding that lands on the same output destination leaves it as it stands. An increase in how often it appears is a sign to suspect the device itself.
-While nothing is bound — audio processing stopped, or the interval right after launch — neither the side nor the value is shown as what the binding before it held.
+While nothing is bound — audio processing stopped, the interval right after launch, or the output stage reading the capture path, where the endpoint carries both — neither the side nor the value is shown as what the binding before it held.
+
+**The audio input and the capture authorization**
+The audio input says which input the output stage is reading, the dedicated driver or AirPlay, and reads as unavailable while audio processing is stopped. While it reads AirPlay, the occupancy rows describe the capture path's ring.
+The capture authorization is what the most recent build of the capture path acted on, and reads as not yet confirmed until a build has gone through. Unreadable is the degradation in which a denial cannot be reported (→ AirPlay Mode), which makes this the row to check when an AirPlay endpoint goes silent with no warning.
 
 **Gauge**
 It is attached only to the occupancy row, and uses its horizontal width as the range from 0 to the ceiling occupancy.
@@ -761,7 +801,7 @@ Periodic work whose only purpose is to drive a window's contents is gated on whe
 
 What is read for this is whether the window is visible, not its occlusion state, which has been observed not to update at all in some runtime environments.
 Where one surface inside the EQ window stands in the visualizer's place, the gates for the two are derived at a single place from the same inputs rather than written from each side that shows or hides something, because a gate assembled from more than one input is where one of them gets left behind.
-A meter that is redrawn every frame discards what it was left holding — the values that piled up while its clock was stopped, and the height it is still drawn at — at the moment it becomes visible again, whether or not the clock itself starts on that occasion. What the smoothing is holding counts as held as well: emptying the input alone leaves it to decay from the height it had, since the next displayed value is built from the previous one. A peak that is cleared on retrieval keeps growing while nothing retrieves it, and a counter read as a difference has no baseline for the interval nobody watched, so the first frame after resuming would otherwise show the whole stopped period at once. Totals that accumulate from a reset are not among them.
+A meter that is redrawn every frame discards what it was left holding — the values that piled up while its clock was stopped, and the height it is still drawn at — at the moment it becomes visible again, whether or not the clock itself starts on that occasion. What the smoothing is holding counts as held as well: emptying the input alone leaves it to decay from the height it had, since the next displayed value is built from the previous one. A peak that is cleared on retrieval keeps growing while nothing retrieves it, and a counter read as a difference has no baseline for the interval nobody watched, so the first frame after resuming would otherwise show the whole stopped period at once. Totals that accumulate from a reset are not among them. Nor is the delay line that holds the visualizer back to what the AirPlay endpoint is playing, since what it holds has not been heard yet; it advances on the render path whatever the drawing gates say.
 
 Whether the screen is visible is decided by reading the actual state — whether the session is locked, whether the main display is asleep, whether the session holds the console — rather than by remembering what the last notification said. Notifications only say when to read again. The three do not move together and their order is not fixed.
 

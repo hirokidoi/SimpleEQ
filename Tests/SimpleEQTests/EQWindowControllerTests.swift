@@ -46,6 +46,13 @@ final class EQWindowControllerTests: XCTestCase {
         XCTAssertFalse(PresetHoverPreview.showsHandles(hoveringGroup: false, previewing: true))
     }
 
+    func testMixerButtonLongPressDoesNotBeginEditingInAirPlayMode() {
+        XCTAssertEqual(MixerButtonLongPress.action(editing: false, shown: true, airPlayMode: false), .beginEditing)
+        XCTAssertEqual(MixerButtonLongPress.action(editing: false, shown: true, airPlayMode: true), .none)
+        XCTAssertEqual(MixerButtonLongPress.action(editing: false, shown: false, airPlayMode: true), .show, "面を出すことはできる")
+        XCTAssertEqual(MixerButtonLongPress.action(editing: true, shown: true, airPlayMode: true), .endEditing, "編集中なら降りられる")
+    }
+
     func testContentSizeFollowsTheViewMode() {
         XCTAssertEqual(EQWindowController.contentSize(for: .normal), EQLayout.windowDefaultSize)
         XCTAssertEqual(EQWindowController.contentSize(for: .compact), EQLayout.compactWindowDefaultSize)
@@ -89,16 +96,19 @@ final class EQWindowControllerTests: XCTestCase {
 
     func testOutputDeviceMenuOmitsSectionWhenUnselectable() {
         let options = [OutputDeviceOption(uid: "a", name: "スピーカー")]
-        XCTAssertTrue(
-            OutputDeviceMenuEntries.visibleOptions(
-                canSelect: false, selection: "a", options: options, fallbackLabel: "解決済み"
-            ).isEmpty,
+        XCTAssertEqual(
+            OutputDeviceMenuEntries.entries(
+                isOwner: true, fixedLabel: nil, canSelect: false, selection: "a", options: options,
+                fallbackLabel: "解決済み"
+            ),
+            .devices([]),
             "選び直せない間は候補があっても空になること (呼び出し側が見出しごと省く根拠になる)"
         )
-        XCTAssertTrue(
-            OutputDeviceMenuEntries.visibleOptions(
-                canSelect: true, selection: nil, options: [], fallbackLabel: "未設定"
-            ).isEmpty,
+        XCTAssertEqual(
+            OutputDeviceMenuEntries.entries(
+                isOwner: true, fixedLabel: nil, canSelect: true, selection: nil, options: [], fallbackLabel: "未設定"
+            ),
+            .devices([]),
             "候補も選択も無ければ空になること"
         )
     }
@@ -106,18 +116,43 @@ final class EQWindowControllerTests: XCTestCase {
     func testOutputDeviceMenuMatchesPickerOptions() {
         let options = [OutputDeviceOption(uid: "a", name: "スピーカー"), OutputDeviceOption(uid: "b", name: "ヘッドホン")]
         XCTAssertEqual(
-            OutputDeviceMenuEntries.visibleOptions(
-                canSelect: true, selection: "b", options: options, fallbackLabel: "解決済み"
+            OutputDeviceMenuEntries.entries(
+                isOwner: true, fixedLabel: nil, canSelect: true, selection: "b", options: options,
+                fallbackLabel: "解決済み"
             ),
-            resolvedOutputDevicePickerOptions(selection: "b", options: options, fallbackLabel: "解決済み"),
+            .devices(resolvedOutputDevicePickerOptions(selection: "b", options: options, fallbackLabel: "解決済み")),
             "上部バーのピッカーと同じ並びになること"
         )
         XCTAssertEqual(
-            OutputDeviceMenuEntries.visibleOptions(
-                canSelect: true, selection: "missing", options: options, fallbackLabel: "解決済み"
-            ).first,
-            OutputDeviceOption(uid: "missing", name: "解決済み"),
+            OutputDeviceMenuEntries.entries(
+                isOwner: true, fixedLabel: nil, canSelect: true, selection: "missing", options: options,
+                fallbackLabel: "解決済み"
+            ),
+            .devices([OutputDeviceOption(uid: "missing", name: "解決済み")] + options),
             "候補に無い選択中の出力先は表示用の行として先頭に出ること"
+        )
+    }
+
+    // 選べる出力先は並べず、今の出力先を示す 1 項目だけを出す。選び直せない間も見出しごと省かない。
+    func testOutputDeviceMenuShowsOnlyTheFixedEntryWhileOwning() {
+        let options = [OutputDeviceOption(uid: "a", name: "スピーカー")]
+        for canSelect in [true, false] {
+            XCTAssertEqual(
+                OutputDeviceMenuEntries.entries(
+                    isOwner: true, fixedLabel: "固定", canSelect: canSelect, selection: "a", options: options,
+                    fallbackLabel: "解決済み"
+                ),
+                .fixed(title: "固定"),
+                "canSelect=\(canSelect)"
+            )
+        }
+        XCTAssertEqual(
+            OutputDeviceMenuEntries.entries(
+                isOwner: false, fixedLabel: "固定", canSelect: false, selection: "a", options: options,
+                fallbackLabel: "解決済み"
+            ),
+            .devices([]),
+            "所有していない間は出さない"
         )
     }
 
@@ -204,9 +239,9 @@ final class EQWindowControllerTests: XCTestCase {
         }
     }
 
-    // MARK: - drivenWork(windowIsVisible:viewMode:mixerShown:mixerTab:editing:screenIsVisible:)
+    // MARK: - drivenWork(windowIsVisible:viewMode:mixerShown:mixerTab:editing:airPlayMode:screenIsVisible:)
 
-    // 6 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
+    // 7 つの入力の全組み合わせを網羅する。AppKit 配線自体の検証は対象外。
     func testDrivenWorkFollowsVisibilityAndTheMixerState() {
         for windowIsVisible in [true, false] {
             for screenIsVisible in [true, false] {
@@ -214,25 +249,27 @@ final class EQWindowControllerTests: XCTestCase {
                     for mixerShown in [true, false] {
                         for mixerTab in MixerSurfaceTab.allCases {
                             for editing in [true, false] {
-                                let wants = EQWindowController.drivenWork(
-                                    windowIsVisible: windowIsVisible, viewMode: viewMode,
-                                    mixerShown: mixerShown, mixerTab: mixerTab, editing: editing,
-                                    screenIsVisible: screenIsVisible
-                                )
-                                let shows = windowIsVisible && screenIsVisible
-                                let label =
-                                    "visible=\(windowIsVisible) screen=\(screenIsVisible) mode=\(viewMode) "
-                                    + "shown=\(mixerShown) tab=\(mixerTab) editing=\(editing)"
-                                XCTAssertEqual(wants.visualizer, shows && !mixerShown, "ビジュアライザ \(label)")
-                                XCTAssertEqual(
-                                    wants.mixerMeters,
-                                    shows && mixerShown && mixerTab == .appMixer && !editing
-                                        && viewMode == .normal,
-                                    "行のメーター \(label)"
-                                )
-                                XCTAssertFalse(
-                                    wants.visualizer && wants.mixerMeters, "両方が同時に回ることはない \(label)"
-                                )
+                                for airPlayMode in [true, false] {
+                                    let wants = EQWindowController.drivenWork(
+                                        windowIsVisible: windowIsVisible, viewMode: viewMode,
+                                        mixerShown: mixerShown, mixerTab: mixerTab, editing: editing,
+                                        airPlayMode: airPlayMode, screenIsVisible: screenIsVisible
+                                    )
+                                    let shows = windowIsVisible && screenIsVisible
+                                    let label =
+                                        "visible=\(windowIsVisible) screen=\(screenIsVisible) mode=\(viewMode) "
+                                        + "shown=\(mixerShown) tab=\(mixerTab) editing=\(editing) airPlay=\(airPlayMode)"
+                                    XCTAssertEqual(wants.visualizer, shows && !mixerShown, "ビジュアライザ \(label)")
+                                    XCTAssertEqual(
+                                        wants.mixerMeters,
+                                        shows && mixerShown && mixerTab == .appMixer && !editing
+                                            && viewMode == .normal && !airPlayMode,
+                                        "行のメーター \(label)"
+                                    )
+                                    XCTAssertFalse(
+                                        wants.visualizer && wants.mixerMeters, "両方が同時に回ることはない \(label)"
+                                    )
+                                }
                             }
                         }
                     }
@@ -245,14 +282,14 @@ final class EQWindowControllerTests: XCTestCase {
     func testCompactMixerDrivesNeitherTheVisualizerNorTheRowMeters() {
         let compact = EQWindowController.drivenWork(
             windowIsVisible: true, viewMode: .compact, mixerShown: true, mixerTab: .appMixer,
-            editing: false, screenIsVisible: true
+            editing: false, airPlayMode: false, screenIsVisible: true
         )
         XCTAssertFalse(compact.mixerMeters, "コンパクトの面では行のメーターを回さない")
         XCTAssertFalse(compact.visualizer, "面が出ている間はビジュアライザも回さない")
 
         let normal = EQWindowController.drivenWork(
             windowIsVisible: true, viewMode: .normal, mixerShown: true, mixerTab: .appMixer,
-            editing: false, screenIsVisible: true
+            editing: false, airPlayMode: false, screenIsVisible: true
         )
         XCTAssertTrue(normal.mixerMeters, "ノーマルの面では回す")
     }
@@ -262,11 +299,21 @@ final class EQWindowControllerTests: XCTestCase {
         for feature in SoundLabFeature.allCases {
             let soundLab = EQWindowController.drivenWork(
                 windowIsVisible: true, viewMode: .normal, mixerShown: true, mixerTab: .soundLab(feature),
-                editing: false, screenIsVisible: true
+                editing: false, airPlayMode: false, screenIsVisible: true
             )
             XCTAssertFalse(soundLab.mixerMeters, "Sound Lab のタブでは行のメーターを回さない \(feature)")
             XCTAssertFalse(soundLab.visualizer, "面が出ている間はビジュアライザも回さない \(feature)")
         }
+    }
+
+    // AirPlay 中の App Mixer は行の代わりに案内を出すため、行のメーターを駆動しない。
+    func testAirPlayModeDrivesNeitherTheVisualizerNorTheRowMeters() {
+        let airPlay = EQWindowController.drivenWork(
+            windowIsVisible: true, viewMode: .normal, mixerShown: true, mixerTab: .appMixer,
+            editing: false, airPlayMode: true, screenIsVisible: true
+        )
+        XCTAssertFalse(airPlay.mixerMeters, "AirPlay 中は行のメーターを回さない")
+        XCTAssertFalse(airPlay.visualizer, "面が出ている間はビジュアライザも回さない")
     }
 
     // MARK: - ScreenVisibility.isVisible(locked:mainDisplayAsleep:onConsole:ownsAudioPath:)

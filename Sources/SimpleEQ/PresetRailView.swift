@@ -7,6 +7,17 @@ enum PresetHoverPreview {
     }
 }
 
+enum MixerButtonLongPress: Equatable {
+    case endEditing, beginEditing, show, none
+
+    /// AirPlay 中は面に行を出さず右クリックの「Edit」も無いので、長押しでも編集に入らない。
+    static func action(editing: Bool, shown: Bool, airPlayMode: Bool) -> MixerButtonLongPress {
+        if editing { return .endEditing }
+        guard shown else { return .show }
+        return airPlayMode ? .none : .beginEditing
+    }
+}
+
 /// プリセットレール: プリセットボタン・Mixer ボタン・Settings ボタン。
 /// プリセットボタンは長押しで保存ダイアログを開く。
 struct PresetRailView: View {
@@ -191,12 +202,13 @@ struct PresetRailView: View {
             LongPressGesture(minimumDuration: EQLayout.longPressDuration)
                 .onEnded { _ in
                     swallowMixerClick = true
-                    if mixer.editing {
-                        mixer.endEditing()
-                    } else if mixer.shown {
-                        mixer.beginEditing()
-                    } else {
-                        mixer.setShown(true)
+                    switch MixerButtonLongPress.action(
+                        editing: mixer.editing, shown: mixer.shown, airPlayMode: viewModel.isAirPlayMode
+                    ) {
+                    case .endEditing: mixer.endEditing()
+                    case .beginEditing: mixer.beginEditing()
+                    case .show: mixer.setShown(true)
+                    case .none: break
                     }
                 }
         )

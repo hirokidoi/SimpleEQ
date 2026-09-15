@@ -81,6 +81,8 @@ final class EQViewModel: ObservableObject {
     /// 出力先を選び直せるか。
     var canSelectOutputDevice: Bool {
         guard isOwner else { return false }
+        // AirPlay の端末はシステム側の UI でしか選べない。
+        guard !isAirPlayMode else { return false }
         guard !audioWorldUnresponsive else { return false }
         guard driverAvailability == .ok else { return false }
         switch processingState {
@@ -311,12 +313,19 @@ final class EQViewModel: ObservableObject {
     @Published private(set) var audioWorldUnresponsive: Bool = false
     /// 起動の最初の組み立てを終えたか。
     @Published private(set) var startupActivationSettled: Bool = false
+    @Published private(set) var airPlayMode: AirPlayModePhase = .inactive
+    var isAirPlayMode: Bool { Self.isAirPlayMode(airPlayMode) }
+    nonisolated static func isAirPlayMode(_ phase: AirPlayModePhase) -> Bool { phase != .inactive }
+    /// 出力先を選ばせず固定の文言で示す間の表示名。選べる出力先を並べる間は nil。
+    var fixedOutputDeviceLabel: String? { isAirPlayMode ? Self.airPlayOutputDeviceLabel : nil }
+    private static let airPlayOutputDeviceLabel = "AirPlay"
     /// 上部バーの警告チップの表示内容 (文言と誘導先)。該当なしは nil。
     var topBarWarning: TopBarWarningContent? {
         topBarWarningIdentifier(
             driverAvailability: driverAvailability, processingState: processingState,
             ringStalled: ringStalled, defaultOutputReachesDriver: defaultOutputReachesDriver,
-            audioWorldUnresponsive: audioWorldUnresponsive, startupActivationSettled: startupActivationSettled
+            audioWorldUnresponsive: audioWorldUnresponsive, startupActivationSettled: startupActivationSettled,
+            airPlayMode: airPlayMode
         ).map(TopBarWarningPolicy.content(for:))
     }
     @Published var visualizerActive: Bool = false {
@@ -581,7 +590,7 @@ final class EQViewModel: ObservableObject {
                 self?.refreshAvailableOutputDeviceOptions(token)
             }
         }
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, audioWorld.queue, block)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, audioWorld.listenerQueue, block)
     }
 
     // MARK: - ドラッグ操作
@@ -880,6 +889,11 @@ final class EQViewModel: ObservableObject {
     func noteStartupActivationSettled() {
         guard !startupActivationSettled else { return }
         startupActivationSettled = true
+    }
+
+    func updateAirPlayMode(_ phase: AirPlayModePhase) {
+        guard airPlayMode != phase else { return }
+        airPlayMode = phase
     }
 
     /// ハートビートの判定結果をそのまま反映する。

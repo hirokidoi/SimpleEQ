@@ -1305,6 +1305,179 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertTrue(engine.levelMeter === original, "rebuild は内部を組み直すだけで参照を差し替えない")
         XCTAssertEqual(engine.levelMeter.appliedSampleRate, 48000)
     }
+
+    // MARK: - 取り込み経路 (実クラス経由)
+
+    /// 実デバイスをエンドポイントに見立てた取り込み経路。リングへは誰も書かないので出力は無音のまま。
+    private func makeCapturePathFixture() throws -> (engine: AudioEngine, capture: FakeCaptureSource, reader: SharedRingReader, url: URL, device: (deviceID: AudioDeviceID, uid: String)) {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        restoringBaseSampleRateAfterTest()
+        let url = makeMinimalSharedRingReaderFixture(sampleRate: 48000)
+        tempURLs.update { $0.append(url) }
+        let reader = try SharedRingReader.open(path: url.path).get()
+        let capture = FakeCaptureSource(endpointUID: device.uid, endpointDeviceID: device.deviceID, sampleRate: 44100)
+        return (makeSilencedEngine(), capture, reader, url, device)
+    }
+
+    func testTheCapturePathHandsTheLoudnessStageNeutralSettingsWhileKeepingTheHeldOnes() throws {
+        let f = try makeCapturePathFixture()
+        var settings = SoundLabSettings()
+        settings.loudness.enabled = true
+        settings.stereoExpander.enabled = true
+        f.engine.applySoundLab(settings, testToken)
+
+        XCTAssertTrue(f.engine.assembleAirPlay(capture: f.capture, ringReader: f.reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
+        XCTAssertEqual(f.engine.soundLabSettingsInEffect.loudness, LoudnessSettings())
+        XCTAssertEqual(f.engine.soundLabSettingsInEffect.stereoExpander, settings.stereoExpander, "他の段は保持している操作値のまま")
+        XCTAssertEqual(f.engine.airPlayRoute, f.device.uid)
+        XCTAssertEqual(f.engine.runtimeMetrics.audioInput, .airPlay)
+
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+        XCTAssertEqual(f.engine.runtimeMetrics.audioInput, .none)
+        XCTAssertTrue(f.engine.assemble(outputDevice: ResolvedOutputDevice(uid: f.device.uid, deviceID: f.device.deviceID), ringReader: f.reader, testToken))
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+
+        XCTAssertEqual(f.engine.soundLabSettingsInEffect.loudness, settings.loudness, "戻れば保持していた値で効く")
+        XCTAssertNil(f.engine.airPlayRoute)
+        XCTAssertEqual(f.engine.runtimeMetrics.audioInput, .dedicatedDriver)
+    }
+
+    func testTheCapturePathStillTranscribesTheDriverObservationsIntoTheEngineMetrics() throws {
+        let f = try makeCapturePathFixture()
+        XCTAssertTrue(f.engine.assembleAirPlay(capture: f.capture, ringReader: f.reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+        XCTAssertNotEqual(f.reader.driverReportedLayoutVersion, 0, "前提: ヘッダに版が書かれていること")
+
+        f.engine.refreshDriverObservations(testToken)
+
+        XCTAssertEqual(f.engine.runtimeMetrics.driverLayoutVersion, f.reader.driverReportedLayoutVersion)
+    }
+
+    func testTheCapturePathInstallsTheDelayTheEndpointDeclares() throws {
+        let f = try makeCapturePathFixture()
+        let delayFrames = 1234
+        f.engine.readPresentationDelayFrames = { _, _, _ in delayFrames }
+
+        XCTAssertTrue(f.engine.assembleAirPlay(capture: f.capture, ringReader: f.reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
+        XCTAssertEqual(f.engine.presentationDelay?.delayFrames, delayFrames)
+
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+        XCTAssertNil(f.engine.presentationDelay, "停止で手放す")
+    }
+
+    func testTheAnalyzerSeesTheDelayedSignalWhileTheReturnedPeakIsNotDelayed() {
+        let engine = AudioEngine()
+        let channels = Int(AudioConfig.channels)
+        let fftSize = LevelMeter.deriveFFTSize(sampleRate: engine.levelMeter.appliedSampleRate)
+        let frameCount = LevelMeter.deriveHopSize(fftSize: fftSize)
+        let delay = PresentationDelayLine(delayFrames: frameCount, channels: channels)
+
+        var loud = [Float](repeating: 1.5, count: frameCount * channels)
+        let peak = loud.withUnsafeMutableBufferPointer {
+            engine.captureLevelsAndApplyOutputGain($0.baseAddress!, frameCount: frameCount, channels: channels, gain: 1, presentationDelay: delay)
+        }
+        XCTAssertEqual(peak, 1.5, "返すピークは遅らせない")
+        XCTAssertFalse(engine.levelMeter.analyzeAvailableHops().left, "解析へはまだ届いていない")
+
+        var quiet = [Float](repeating: 0, count: frameCount * channels)
+        _ = quiet.withUnsafeMutableBufferPointer {
+            engine.captureLevelsAndApplyOutputGain($0.baseAddress!, frameCount: frameCount, channels: channels, gain: 1, presentationDelay: delay)
+        }
+        XCTAssertTrue(engine.levelMeter.analyzeAvailableHops().left, "遅延ぶん後に解析へ届く")
+    }
+
+    // ドライバのレートで取り込み経路を組み直すと、エンドポイントのレートと食い違う。
+    func testADriverRateChangeDoesNotRebuildTheCapturePath() throws {
+        let f = try makeCapturePathFixture()
+        XCTAssertTrue(f.engine.assembleAirPlay(capture: f.capture, ringReader: f.reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+        XCTAssertEqual(AudioConfig.appliedSampleRate, f.capture.sampleRate, "前提: 取り込み経路のレートを適用している")
+        let notifiedRates = Recorded<[Double]>([])
+        f.engine.appliedSampleRateDidChange = { rate in notifiedRates.update { $0.append(rate) } }
+
+        setHeaderSampleRate(f.url, 96000)
+        f.engine.applyDriverSampleRateIfChanged(testToken)
+
+        XCTAssertEqual(AudioConfig.appliedSampleRate, f.capture.sampleRate)
+        XCTAssertTrue(notifiedRates.value.isEmpty)
+    }
+
+    // 出力段が止まっている間にだけ入口の資源を手放す。
+    func testStoppingTheCapturePathDestroysItOnlyAfterTheOutputUnitIsGone() throws {
+        let f = try makeCapturePathFixture()
+        let outputUnitGoneAtDestroy = Recorded<Bool?>(nil)
+        f.capture.onDestroy = { [engine = f.engine] in
+            outputUnitGoneAtDestroy.update { $0 = engine.currentOutputDeviceID(testToken) == nil }
+        }
+        XCTAssertTrue(f.engine.assembleAirPlay(capture: f.capture, ringReader: f.reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
+        XCTAssertEqual(f.capture.startCount, 1)
+        XCTAssertNotNil(f.engine.currentOutputDeviceID(testToken), "前提: 出力段が動いている")
+
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+
+        XCTAssertEqual(f.capture.destroyCount, 1)
+        XCTAssertEqual(outputUnitGoneAtDestroy.value, true)
+    }
+
+    func testACapturePathThatCannotStartIsDestroyedAndStopsTheEngine() throws {
+        let f = try makeCapturePathFixture()
+        f.capture.startShouldSucceed = false
+
+        XCTAssertFalse(f.engine.assembleAirPlay(capture: f.capture, ringReader: f.reader, testToken))
+
+        XCTAssertEqual(f.capture.destroyCount, 1)
+        XCTAssertEqual(f.engine.processingState, .suspended(.routeUnavailable))
+        XCTAssertNil(f.engine.airPlayRoute)
+    }
+
+    func testTheCapturePathIsHealthyOnlyWhileTheRingIsFedAtTheAppliedRateToTheEndpoint() throws {
+        let f = try makeCapturePathFixture()
+        let capture = FakeCaptureSource(
+            endpointUID: f.capture.endpointUID, endpointDeviceID: f.capture.endpointDeviceID, sampleRate: 44100, ioBufferFrames: 64
+        )
+        XCTAssertTrue(f.engine.evaluateAirPlayCaptureStalled(testToken), "取り込み経路が無い間は止まっているとみなす")
+        XCTAssertTrue(f.engine.assembleAirPlay(capture: capture, ringReader: f.reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+        let silence = [Float](repeating: 0, count: 64 * Int(AudioConfig.channels))
+        let cycleThreshold = SharedRingReader.writerStallThreshold(ioCycleFrames: 64, sampleRate: capture.sampleRate)
+
+        Thread.sleep(forTimeInterval: cycleThreshold * 4)
+        XCTAssertFalse(f.engine.evaluateAirPlayCaptureStalled(testToken), "組み立て直後は最初の書き込みまで周期しきい値で読まない")
+
+        silence.withUnsafeBufferPointer { capture.ring.write($0.baseAddress!, frames: 64) }
+        XCTAssertFalse(f.engine.evaluateAirPlayCaptureStalled(testToken))
+        XCTAssertTrue(f.engine.airPlayRouteHealthy(testToken))
+
+        capture.sampleRateReading = 48000
+        XCTAssertFalse(f.engine.airPlayRouteHealthy(testToken), "Aggregate のレートが適用中のレートと違う")
+        capture.sampleRateReading = capture.sampleRate
+
+        Thread.sleep(forTimeInterval: SharedRingReader.writerStallThreshold(ioCycleFrames: 64, sampleRate: capture.sampleRate) * 4)
+        XCTAssertTrue(f.engine.evaluateAirPlayCaptureStalled(testToken))
+        XCTAssertFalse(f.engine.airPlayRouteHealthy(testToken))
+    }
+
+    func testSilenceObservationsGoToTheCaptureRingWhileItIsTheInput() throws {
+        let engine = AudioEngine()
+        let url = makeMinimalSharedRingReaderFixture()
+        tempURLs.update { $0.append(url) }
+        let reader = try SharedRingReader.open(path: url.path).get()
+        let ring = CaptureRing(sampleRate: 44100)
+        let frameCount = 128
+        let buffer = [Float](repeating: 0, count: frameCount * Int(AudioConfig.channels))
+
+        buffer.withUnsafeBufferPointer {
+            engine.recordOutputLevel(
+                $0.baseAddress!, frameCount: frameCount, channels: Int(AudioConfig.channels),
+                peakBeforeVolume: 0, effectiveOutputGain: 1, reader: reader, captureRing: ring
+            )
+        }
+
+        XCTAssertEqual(ring.silentOutputFrameCount, frameCount)
+        XCTAssertEqual(reader.silentOutputFrameCount, 0)
+    }
 }
 
 // MARK: - AudioActivationCoordinator (起動・再開の共通手順)
@@ -1314,12 +1487,24 @@ final class MockActivatableAudioEngine: ActivatableAudioEngine, @unchecked Senda
     var processingState: ProcessingState = .suspended(.routeUnavailable)
     var assembleShouldSucceed = true
     private(set) var assembleCalls: [(outputDevice: ResolvedOutputDevice, driverDeviceID: AudioDeviceID?)] = []
+    private(set) var assembleAirPlayCalls: [(capture: AirPlayCaptureSource, driverDeviceID: AudioDeviceID?)] = []
 
     @discardableResult
     func assemble(outputDevice: ResolvedOutputDevice, ringReader: SharedRingReader, driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> Bool {
         assembleCalls.append((outputDevice, driverDeviceID))
         processingState = assembleShouldSucceed ? .active : .suspended(.routeUnavailable)
         return assembleShouldSucceed
+    }
+
+    @discardableResult
+    func assembleAirPlay(capture: AirPlayCaptureSource, ringReader: SharedRingReader, driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> Bool {
+        assembleAirPlayCalls.append((capture, driverDeviceID))
+        processingState = assembleShouldSucceed ? .active : .suspended(.routeUnavailable)
+        return assembleShouldSucceed
+    }
+
+    func suspend(cause: SuspensionCause, _ token: AudioWorldToken) {
+        processingState = .suspended(cause)
     }
 }
 
@@ -1418,6 +1603,26 @@ final class AudioActivationCoordinatorTests: XCTestCase {
         XCTAssertTrue(engine.assembleCalls.isEmpty)
     }
 
+    // 起動は所有権の停止のまま所有を確定させてから呼ぶ。出力先を解決できなければ経路の停止へ移し、他の停止種別は変えない。
+    func testActivateMovesOwnershipSuspensionToRouteUnavailableWhenOutputDeviceUnresolved() {
+        for (initial, expected) in [
+            (ProcessingState.suspended(.ownershipUnavailable), ProcessingState.suspended(.routeUnavailable)),
+            (.suspended(.driverOperation), .suspended(.driverOperation)),
+        ] {
+            let directory = makeDirectory()
+            let engine = MockActivatableAudioEngine()
+            engine.processingState = initial
+            let (coordinator, _) = makeCoordinator(
+                directory: directory, engine: engine, openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+            )
+
+            let result = coordinator.activate(resolveOutputDevice: { _ in nil }, attempt: .launch, testToken)
+
+            XCTAssertEqual(result.processingState, expected, "\(initial)")
+            XCTAssertTrue(result.outputRouteNotEstablished)
+        }
+    }
+
     // 占有していない状態からの再開は占有を確立する / 占有済みなら切替を打ち直さない。
     func testActivateSwitchesOnlyWhenNotAlreadyOccupying() {
         let directory = makeDirectory()
@@ -1470,7 +1675,7 @@ final class AudioActivationCoordinatorTests: XCTestCase {
         let (coordinator, lifecycle) = makeCoordinator(
             directory: directory, engine: engine, openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
         )
-        lifecycle.reapplyVisibility(deviceID: driverDeviceID, testToken)
+        lifecycle.applyVisibility(hidden: false, deviceID: driverDeviceID, testToken)
         directory.resetCallRecords()
 
         let target = ResolvedOutputDevice(uid: speakerUID, deviceID: speakerID)
@@ -1478,6 +1683,68 @@ final class AudioActivationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(directory.setHiddenCalls.isEmpty, "掌握済みなら可視化を打ち直さない")
         XCTAssertTrue(directory.resolveHiddenDeviceIDCalls.isEmpty)
+    }
+
+    // MARK: - 取り込み経路の組み立て
+
+    private let airPlayID: AudioDeviceID = 150
+
+    // デフォルト出力が AirPlay でもドライバでも書かず、ドライバを表示せず、戻す義務も引き受けない。
+    func testActivatingTheCapturePathLeavesTheDefaultOutputVisibilityAndObligationAlone() {
+        for defaultOutput in [airPlayID, driverDeviceID] {
+            let directory = makeDirectory()
+            directory.uidsByDeviceID[airPlayID] = "airplay-uid"
+            directory.airPlayDeviceIDs = [airPlayID]
+            directory.currentDefaultOutputID = defaultOutput
+            let engine = MockActivatableAudioEngine()
+            let settings = SettingsStore(defaults: defaults)
+            settings.savedDefaultOutputUID = speakerUID
+            let lifecycle = DriverLifecycleController(directory: directory, targetDeviceUID: driverUID)
+            let outputController = OutputDeviceController(directory: directory, settings: settings, targetDeviceUID: driverUID)
+            let coordinator = AudioActivationCoordinator(
+                engine: engine, driverLifecycle: lifecycle, outputController: outputController,
+                openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+            )
+            let stateBefore = outputController.currentRestoreState(testToken)
+
+            XCTAssertTrue(coordinator.activateAirPlay(capture: FakeCaptureSource(), testToken))
+
+            XCTAssertTrue(directory.setDefaultOutputCalls.isEmpty, "default=\(defaultOutput)")
+            XCTAssertTrue(directory.setHiddenCalls.isEmpty, "default=\(defaultOutput)")
+            XCTAssertNil(lifecycle.resolvedDeviceID, "可視性の責務を新たに負わない (default=\(defaultOutput))")
+            XCTAssertEqual(outputController.currentRestoreState(testToken).pending, stateBefore.pending)
+            XCTAssertEqual(outputController.currentRestoreState(testToken).uid, stateBefore.uid)
+            XCTAssertEqual(engine.assembleAirPlayCalls.count, 1)
+            XCTAssertEqual(engine.assembleAirPlayCalls.first?.driverDeviceID, driverDeviceID, "表示せずに解決した ID を渡す")
+        }
+    }
+
+    func testActivatingTheCapturePathPrefersTheDriverIDTheSessionAlreadyHolds() {
+        let directory = makeDirectory()
+        let engine = MockActivatableAudioEngine()
+        let (coordinator, lifecycle) = makeCoordinator(
+            directory: directory, engine: engine, openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+        )
+        let heldID: AudioDeviceID = 41
+        lifecycle.applyVisibility(hidden: true, deviceID: heldID, testToken)
+        directory.resetCallRecords()
+
+        coordinator.activateAirPlay(capture: FakeCaptureSource(), testToken)
+
+        XCTAssertEqual(engine.assembleAirPlayCalls.first?.driverDeviceID, heldID)
+        XCTAssertTrue(directory.resolveHiddenDeviceIDCalls.isEmpty)
+    }
+
+    func testActivatingTheCapturePathWithoutSharedMemoryAssemblesNothing() {
+        let directory = makeDirectory()
+        let engine = MockActivatableAudioEngine()
+        engine.processingState = .suspended(.routeUnavailable)
+        let (coordinator, _) = makeCoordinator(directory: directory, engine: engine, openSharedMemory: { .failure(.fileNotFound) })
+
+        XCTAssertFalse(coordinator.activateAirPlay(capture: FakeCaptureSource(), testToken))
+
+        XCTAssertTrue(engine.assembleAirPlayCalls.isEmpty)
+        XCTAssertEqual(engine.processingState, .suspended(.routeUnavailable))
     }
 
     // 再開が許されない停止種別では、組み立てを一切試みない。
@@ -2234,6 +2501,27 @@ final class OutputVolumeBridgeTests: XCTestCase {
 
         bridge.rebind(outputUID: "device-b", outputDeviceID: 2, driverVolume: 0.6, driverMuted: false, testToken)
         XCTAssertEqual(bridge.appVolume, 0.25, "device-b の記憶も別に保たれている")
+    }
+
+    // MARK: 機器が音量を担う経路
+
+    // エンジンのゲインを直接単位にすると同値判定の記憶が残り、同じ機器へ戻ったときにゲインの押し出しが省かれる。
+    func testReleasingForADeviceCarriedRouteGoesNeutralAndTheSameDeviceGetsItsGainBack() {
+        let deviceIO = MockDeviceVolumeIO() // 能力を登録しない = アプリのゲイン段が担う。
+        let bridge = OutputVolumeBridge(audioWorld: makeTestAudioWorld(), deviceIO: deviceIO)
+        let gains = Recorded<[Float]>([])
+        bridge.appGainDidChange = { gain in gains.update { $0.append(gain) } }
+        bridge.rebind(outputUID: "device-a", outputDeviceID: 1, driverVolume: 0.5, driverMuted: false, testToken)
+        let appGain = effectiveOutputGain(volume: 0.5, muted: false)
+        XCTAssertEqual(gains.value, [appGain], "前提: アプリのゲイン段が音量を担っている")
+
+        bridge.releaseForDeviceCarriedRoute(testToken)
+        XCTAssertEqual(gains.value.last, effectiveOutputGain(volume: 1, muted: false), "単位ゲインを押し出す")
+        XCTAssertNil(bridge.routeObservation(testToken), "束ねは無い")
+
+        bridge.rebind(outputUID: "device-a", outputDeviceID: 1, driverVolume: 0.5, driverMuted: false, testToken)
+        XCTAssertEqual(gains.value.last, appGain, "戻ると元のゲインを押し出す")
+        XCTAssertEqual(gains.value.count, 3)
     }
 
     // MARK: 解除
