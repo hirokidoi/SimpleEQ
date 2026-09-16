@@ -68,6 +68,12 @@ final class SoundLabAUStageTests: XCTestCase {
     /// 応答が出るまで整定が要るため、インパルスはウォームアップの後ろへ置く (実測で選定)。
     private static let warmupBlocks = 16
     private static let block = 1024
+    /// 尾が十分に立ち上がった後で量を動かす位置 (インパルスのブロックを 0 とする)。
+    private static let mixMoveBlock = 20
+    /// 量を範囲の半ばまで動かしたときの尾の比は実測 0.707 で、動かした直後のブロックから一定。
+    /// 届かなければ 1.0、断たれれば 0 に落ちるため、その両側をこの 2 つの外で見る。
+    private static let mixMoveArrivedRatio = 0.85
+    private static let mixMoveTailRatio = 0.5
 
     private final class ImpulseSource {
         var position = 0
@@ -90,9 +96,10 @@ final class SoundLabAUStageTests: XCTestCase {
     }
 
     /// インパルスを通し、ブロックごとのピークを並べて返す (ウォームアップぶんは落とす)。
+    /// perBlock はインパルスのブロックを 0 とした番号を受け、そのブロックの頭で配る操作値を返す。
     private func impulseResponse(
         _ settings: LiveSimulationSettings, seconds: Double,
-        reapplyingEachBlock: Bool = false,
+        perBlock: ((Int) -> LiveSimulationSettings)? = nil,
         file: StaticString = #filePath, line: UInt = #line
     ) -> [Double] {
         let rate = TestSampleRates.all[0]
@@ -128,7 +135,7 @@ final class SoundLabAUStageTests: XCTestCase {
         timestamp.mFlags = .sampleTimeValid
         let total = Self.warmupBlocks + Int(rate * seconds) / Self.block
         for index in 0..<total {
-            if reapplyingEachBlock { chain.applyLiveSimulation(settings) }
+            if let perBlock { chain.applyLiveSimulation(perBlock(index - Self.warmupBlocks)) }
             for c in 0..<channels {
                 list[c] = AudioBuffer(
                     mNumberChannels: 1, mDataByteSize: UInt32(Self.block) * 4,
@@ -219,8 +226,43 @@ final class SoundLabAUStageTests: XCTestCase {
         settings.mix = LiveSimulationSettings.mixRange.bounds.upperBound
 
         let undisturbed = impulseResponse(settings, seconds: 2.5)
-        let reapplied = impulseResponse(settings, seconds: 2.5, reapplyingEachBlock: true)
+        let reapplied = impulseResponse(settings, seconds: 2.5, perBlock: { _ in settings })
         XCTAssertEqual(undisturbed, reapplied, "配り直しても響きが変わらない")
+    }
+
+    /// 響きの量はユニットの構成ではないため、動かしても鳴っている尾は続く。
+    /// 空間の書き換えを巻き添えで書けば尾が断たれ、控えが書き込みを抑えれば量が届かない。
+    func testMovingOnlyTheMixLeavesTheTailSounding() {
+        let bounds = LiveSimulationSettings.mixRange.bounds
+        var settings = LiveSimulationSettings()
+        settings.enabled = true
+        settings.room = .dome
+        settings.mix = bounds.upperBound
+        var moved = settings
+        moved.mix = (bounds.lowerBound + bounds.upperBound) / 2
+
+        let held = impulseResponse(settings, seconds: 2.5)
+        let shifted = impulseResponse(settings, seconds: 2.5, perBlock: { block in
+            block < Self.mixMoveBlock ? settings : moved
+        })
+
+        guard let top = held.max(), top > 0 else {
+            XCTFail("尾が出ていない")
+            return
+        }
+        let floor = top * pow(10, -40 / 20.0)
+        let last = min(held.count, shifted.count)
+        guard last > Self.mixMoveBlock else {
+            XCTFail("量を動かした後のブロックが無い")
+            return
+        }
+        var compared = 0
+        for i in Self.mixMoveBlock..<last where held[i] > floor {
+            XCTAssertGreaterThan(shifted[i], held[i] * Self.mixMoveTailRatio, "動かした後も尾が続く (block \(i))")
+            XCTAssertLessThan(shifted[i], held[i] * Self.mixMoveArrivedRatio, "動かした量が音へ届く (block \(i))")
+            compared += 1
+        }
+        XCTAssertGreaterThan(compared, 0, "比べたブロックが無い")
     }
 
     private static func makeReverbUnit() -> AudioUnit? {

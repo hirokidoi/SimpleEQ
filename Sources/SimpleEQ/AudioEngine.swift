@@ -351,9 +351,7 @@ final class AudioEngine: @unchecked Sendable {
         var st = AudioUnitSetProperty(outUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &asbd, asbdSize)
         guard st == noErr else {
             print("[ERROR] set output format: \(st)")
-            eqUnit?.dispose(); eqUnit = nil
-            soundLabStereo = nil
-            soundLabLoudness = nil
+            discardEQChain()
             return false
         }
         AudioUnitSetProperty(outUnit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, 4)
@@ -365,28 +363,29 @@ final class AudioEngine: @unchecked Sendable {
         st = AudioUnitSetProperty(outUnit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &outCb, UInt32(MemoryLayout<AURenderCallbackStruct>.size))
         guard st == noErr else {
             print("[ERROR] set output callback: \(st)")
-            eqUnit?.dispose(); eqUnit = nil
-            soundLabStereo = nil
-            soundLabLoudness = nil
+            discardEQChain()
             return false
         }
         st = AudioUnitInitialize(outUnit)
         guard st == noErr else {
             print("[ERROR] init output unit: \(st)")
-            eqUnit?.dispose(); eqUnit = nil
-            soundLabStereo = nil
-            soundLabLoudness = nil
+            discardEQChain()
             return false
         }
         guard AudioOutputUnitStart(outUnit) == noErr else {
             print("[ERROR] start output unit")
             AudioUnitUninitialize(outUnit)
-            eqUnit?.dispose(); eqUnit = nil
-            soundLabStereo = nil
-            soundLabLoudness = nil
+            discardEQChain()
             return false
         }
         return true
+    }
+
+    /// EQ チェーンの資源を畳む。
+    private func discardEQChain() {
+        eqUnit?.dispose(); eqUnit = nil
+        soundLabStereo = nil
+        soundLabLoudness = nil
     }
 
     /// I/O バッファ長は出力デバイスの実サンプルレートから導出する (ドライバの実レートとは別のクロック領域)。
@@ -425,13 +424,7 @@ final class AudioEngine: @unchecked Sendable {
         guard let outUnit = outputUnit, captureSource == nil else { return false }
         let previousID = currentOutputDeviceID(token)
         if case .notNeeded = outputSwitchDecision(intendedUID: device.uid, currentUID: previousID.flatMap({ deviceUID($0, token) })) {
-            intendedOutputDeviceUID = device.uid
-            let driver = refreshDriverVolumeAndMute(token)
-            outputVolumeBridge.rebind(
-                outputUID: device.uid, outputDeviceID: device.deviceID,
-                driverVolume: driver.volume, driverMuted: driver.muted, token
-            )
-            outputDeviceDidConfirm?(device.uid)
+            confirmOutputDevice(device, token)
             return true
         }
         AudioOutputUnitStop(outUnit)
@@ -439,18 +432,23 @@ final class AudioEngine: @unchecked Sendable {
         let restarted = AudioOutputUnitStart(outUnit) == noErr
         ringReader?.requestOccupancyReset()
         if switched && restarted {
-            intendedOutputDeviceUID = device.uid
-            let driver = refreshDriverVolumeAndMute(token)
-            outputVolumeBridge.rebind(
-                outputUID: device.uid, outputDeviceID: device.deviceID,
-                driverVolume: driver.volume, driverMuted: driver.muted, token
-            )
-            outputDeviceDidConfirm?(device.uid)
+            confirmOutputDevice(device, token)
             return true
         }
         if let previousID { _ = AudioEngine.applyOutputDevice(previousID, on: outUnit, metrics: runtimeMetrics, token) }
         AudioOutputUnitStart(outUnit)
         return false
+    }
+
+    /// 出力先が確定したときの後処理。
+    private func confirmOutputDevice(_ device: ResolvedOutputDevice, _ token: AudioWorldToken) {
+        intendedOutputDeviceUID = device.uid
+        let driver = refreshDriverVolumeAndMute(token)
+        outputVolumeBridge.rebind(
+            outputUID: device.uid, outputDeviceID: device.deviceID,
+            driverVolume: driver.volume, driverMuted: driver.muted, token
+        )
+        outputDeviceDidConfirm?(device.uid)
     }
 
     /// サンプル領域は allocate(capacity:) 由来のため deallocate()、
@@ -501,10 +499,7 @@ final class AudioEngine: @unchecked Sendable {
         presentationDelay = nil
         runtimeMetrics.recordAudioInput(.none)
         intendedOutputDeviceUID = nil
-        eqUnit?.dispose()
-        eqUnit = nil
-        soundLabStereo = nil
-        soundLabLoudness = nil
+        discardEQChain()
         ringReader = nil
         runtimeMetrics.recordOutputDeviceSampleRate(0)
         for buf in eqPlanarOutputBufs { buf.deallocate() }
@@ -719,10 +714,7 @@ final class AudioEngine: @unchecked Sendable {
         AudioOutputUnitStop(outUnit)
         AudioUnitUninitialize(outUnit)
         outputFadeFramesRemaining.store(0)
-        eqUnit?.dispose()
-        eqUnit = nil
-        soundLabStereo = nil
-        soundLabLoudness = nil
+        discardEQChain()
         for buf in eqPlanarOutputBufs { buf.deallocate() }
         eqPlanarOutputBufs.removeAll()
         if let abl = eqPlanarOutputABL { free(UnsafeMutableRawPointer(abl)) }

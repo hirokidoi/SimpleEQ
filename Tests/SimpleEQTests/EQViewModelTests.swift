@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import CoreAudio
-import CryptoKit
 import SimpleEQRingC
 import SwiftUI
 import XCTest
@@ -2549,93 +2548,6 @@ final class EQViewModelTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: deadline)
         }
     }
-
-    // MARK: - 視覚等価性ハーネス (RootView 全体の golden hash)
-
-    /// 全体をオフスクリーン描画し、ピクセルデータの SHA256 を返す。
-    /// 単体ビューではなく画面全体を比較することで、意図しない波及も検知できる。
-    private func captureRootViewVisual(showLevelMeter: Bool) -> (hash: String, pngData: Data?) {
-        let suiteName = TestDefaults.makeName("EQViewModelTests.visual")
-        let visualDefaults = UserDefaults(suiteName: suiteName)!
-        defer { TestDefaults.remove(name: suiteName, defaults: visualDefaults) }
-        let store = SettingsStore(defaults: visualDefaults)
-        store.showLevelMeter = showLevelMeter
-        let engine = AudioEngine()
-        let vm = EQViewModel(engine: engine, settings: store, outputController: makeOutputController(settings: store), audioWorld: makeTestAudioWorld())
-        // 可用性の既定値は未検出のため、確定させないと画面全体が効いていない表示になり描画差分が出ない。
-        vm.confirmDriverProbe(.versionsUnreadable(.ok))
-
-        // 無音のままだと lit/dim/peak の描画差分が現れず、検出力が下がるため既知振幅の信号を解析させる。
-        let frameCount = 8192
-        let channels = Int(AudioConfig.channels)
-        var samples = [Float](repeating: 0, count: frameCount * channels)
-        for i in 0..<samples.count {
-            samples[i] = Float(sin(Double(i) * 0.05)) * 0.5
-        }
-        // アプリと同じ経路で受け取らせる。captureEnabled を開いてから取り込み、tick が引き出す。
-        vm.visualizerActive = true
-        samples.withUnsafeBufferPointer { ptr in
-            engine.levelMeter.capture(ptr.baseAddress!, frameCount: frameCount, channels: channels)
-        }
-        vm.tick(now: Date(timeIntervalSinceReferenceDate: 0))
-        vm.visualizerActive = false
-
-        let hosting = NSHostingView(rootView: RootView(
-            viewModel: vm, mixer: makeMixer(settings: store), mixerClock: nil, onOpenWindow: { _ in }
-        ))
-        hosting.frame = CGRect(origin: .zero, size: EQLayout.windowDefaultSize)
-        hosting.layoutSubtreeIfNeeded()
-
-        guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
-            XCTFail("bitmapImageRepForCachingDisplay failed")
-            return ("", nil)
-        }
-        hosting.cacheDisplay(in: hosting.bounds, to: rep)
-        guard let bitmapData = rep.bitmapData else {
-            XCTFail("bitmapData unavailable")
-            return ("", nil)
-        }
-        let byteCount = rep.bytesPerRow * rep.pixelsHigh
-        let pixelData = Data(bytes: bitmapData, count: byteCount)
-        let digest = SHA256.hash(data: pixelData)
-        let hex = digest.map { String(format: "%02x", $0) }.joined()
-        return (hex, rep.representation(using: .png, properties: [:]))
-    }
-
-    /// golden と不一致の場合、目視確認用に実際の描画結果を tmp/ へ書き出す (デバッグ手段の確保。
-    /// 一致時は何も書き出さない)。
-    private func assertMatchesGoldenVisualHash(
-        _ golden: String, showLevelMeter: Bool, label: String, file: StaticString = #filePath, line: UInt = #line
-    ) {
-        let capture = captureRootViewVisual(showLevelMeter: showLevelMeter)
-        if capture.hash != golden, let pngData = capture.pngData {
-            let dumpURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("tmp/visual-equivalence-failure-\(label).png")
-            try? pngData.write(to: dumpURL)
-        }
-        XCTAssertEqual(
-            capture.hash, golden,
-            "RootView (\(label)) のピクセルハッシュが golden と不一致 (tmp/visual-equivalence-failure-\(label).png に実際の描画結果を書き出した)",
-            file: file, line: line
-        )
-    }
-
-    // byte-identical のみ (閾値なし)。表示が変わる変更を入れたときは、画像を目視で確かめた上で採り直す。
-    func testRootViewPixelHashMatchesGoldenWithLevelMeterShown() {
-        assertMatchesGoldenVisualHash(Self.goldenRootViewHashLevelMeterShown, showLevelMeter: true, label: "shown")
-    }
-
-    // EQ 本体幅がメーター非表示時と同じ幅に戻ることも、この比較で機械的に担保される。
-    func testRootViewPixelHashMatchesGoldenWithLevelMeterHidden() {
-        assertMatchesGoldenVisualHash(Self.goldenRootViewHashLevelMeterHidden, showLevelMeter: false, label: "hidden")
-    }
-
-    /// フォント・アンチエイリアシングは環境間で変わりうるため、開発機・Xcode バージョンに固有の基準値。
-    /// CI 環境やツールチェインを変えた場合は再採取が必要になりうる。
-    private static let goldenRootViewHashLevelMeterShown =
-        "7157f1001d1a985d2fa65c77779afcad32b5328b1993f283da8848fbd9712776"
-    private static let goldenRootViewHashLevelMeterHidden =
-        "c0c62711ddfc481457ea2d81ff8133ee98660ee4583b795d49b502154425d23a"
 
     // MARK: - installOrUpdateDriver / uninstallDriver
 

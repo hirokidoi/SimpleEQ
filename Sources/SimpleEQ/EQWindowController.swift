@@ -291,13 +291,28 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         max(currentHeight + scrollOverflow, minHeight)
     }
 
+    /// 補助ウィンドウ 1 つ分。最前面追従と一斉非表示は、どちらもこの一覧を読む。
+    private struct AuxiliaryWindow {
+        let controller: NSWindowController?
+        /// 隠した直後に行うこと。orderOut は delegate 通知を出さない。
+        let didHide: (() -> Void)?
+    }
+
+    private var auxiliaryWindows: [AuxiliaryWindow] {
+        [
+            AuxiliaryWindow(controller: settingsWindowController, didHide: nil),
+            AuxiliaryWindow(controller: diagnosticsWindowController, didHide: { [weak self] in
+                self?.updateDiagnosticsActive(isVisible: false, isMiniaturized: false)
+            }),
+            AuxiliaryWindow(controller: aboutWindowController, didHide: nil),
+        ]
+    }
+
     /// 現在存在する自ウィンドウすべてへ適用する。
     private func applyAlwaysOnTop(_ on: Bool) {
         let level: NSWindow.Level = on ? .floating : .normal
         window?.level = level
-        settingsWindowController?.window?.level = level
-        diagnosticsWindowController?.window?.level = level
-        aboutWindowController?.window?.level = level
+        for aux in auxiliaryWindows { aux.controller?.window?.level = level }
     }
 
     /// メニューバーからの開閉トグル。可視状態を viewModel へ反映する。
@@ -336,31 +351,17 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         windowIsVisible = false
         // 次に開いたときはビジュアライザから始める。
         mixer.setShown(false)
-        hideSettingsIfOpen()
-        hideDiagnosticsIfOpen()
-        hideAboutIfOpen()
+        hideAuxiliaryWindows()
         persistWindowOrigin()
     }
 
-    /// Settings ウィンドウが表示中であれば隠す。
-    /// 破棄せず隠すだけの流儀に合わせ、close ではなく orderOut を使う。
-    private func hideSettingsIfOpen() {
-        guard let settingsWindow = settingsWindowController?.window, settingsWindow.isVisible else { return }
-        settingsWindow.orderOut(nil)
-    }
-
-    /// Diagnostics ウィンドウが表示中であれば隠す (Settings と同じ扱い)。
-    private func hideDiagnosticsIfOpen() {
-        guard let diagnosticsWindow = diagnosticsWindowController?.window, diagnosticsWindow.isVisible else { return }
-        diagnosticsWindow.orderOut(nil)
-        // orderOut は delegate 通知を出さないため、可視状態の反映をここで直接行う。
-        updateDiagnosticsActive(isVisible: false, isMiniaturized: false)
-    }
-
-    /// About ウィンドウが表示中であれば隠す (Settings と同じ扱い)。
-    private func hideAboutIfOpen() {
-        guard let aboutWindow = aboutWindowController?.window, aboutWindow.isVisible else { return }
-        aboutWindow.orderOut(nil)
+    /// 表示中の補助ウィンドウを隠す。破棄せず隠すだけの流儀に合わせ、close ではなく orderOut を使う。
+    private func hideAuxiliaryWindows() {
+        for aux in auxiliaryWindows {
+            guard let window = aux.controller?.window, window.isVisible else { continue }
+            window.orderOut(nil)
+            aux.didHide?()
+        }
     }
 
     /// 現在の EQ ウィンドウ位置を保存する。

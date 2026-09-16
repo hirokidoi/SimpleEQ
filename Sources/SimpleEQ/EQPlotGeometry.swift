@@ -58,7 +58,7 @@ struct EQPlotGeometry {
 
     func levelDbToY(_ db: Double) -> CGFloat {
         let r = plotRect
-        let f = (db - floorDb) / (0 - floorDb)
+        let f = EQLayout.levelFraction(db: db, floorDb: floorDb)
         return r.maxY - CGFloat(f) * r.height
     }
 

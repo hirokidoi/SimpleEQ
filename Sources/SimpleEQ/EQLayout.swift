@@ -347,6 +347,11 @@ enum EQLayout {
         }
     }
 
+    /// dBFS を 0 (下限) ... 1 (0dB) の比へ移す。クランプはしない。
+    static func levelFraction(db: Double, floorDb: Double) -> Double {
+        (db - floorDb) / (0 - floorDb)
+    }
+
     /// LED セグメントの縦方向グリッド。
     /// 段数・各段の縦範囲・点灯段数/キャップ段の判定を持ち、EQ 本体とレベルメーターの双方が使う。
     struct SegmentGrid {

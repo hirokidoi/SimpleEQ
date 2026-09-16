@@ -505,7 +505,7 @@ final class VisualizerHostView: NSView {
 
         // バンドごとの点灯上端。ローカル y 下方向座標 (0=コンテナ上端、plotHeight=下端) で表す。
         func fillTop(_ level: Double) -> CGFloat {
-            let frac = (level - floorDb) / (0 - floorDb)
+            let frac = EQLayout.levelFraction(db: level, floorDb: floorDb)
             return plotHeight - CGFloat(frac) * plotHeight
         }
 

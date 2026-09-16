@@ -297,8 +297,9 @@ final class OwnershipCoordinator: @unchecked Sendable {
             let claimed = self.performWrite(.claim, token)
             // 掴めなかった回も所有していない側であり、抱えている責務を降ろす条件は上の経路と同じ。
             if !claimed {
-                self.driverLifecycle.abandonVisibilityOwnership(token)
-                self.outputController.abandonRestoreObligation(token)
+                OwnershipCoordinator.abandonOwnerResponsibilities(
+                    driverLifecycle: self.driverLifecycle, outputController: self.outputController, token
+                )
             }
             self.queue.async { [self] in
                 self.wasSelfOwner = claimed
@@ -397,9 +398,18 @@ final class OwnershipCoordinator: @unchecked Sendable {
 
     private func abandonOwnerResponsibilities() {
         audioWorld.submitUncoalesced { [driverLifecycle, outputController] token in
-            driverLifecycle.abandonVisibilityOwnership(token)
-            outputController.abandonRestoreObligation(token)
+            OwnershipCoordinator.abandonOwnerResponsibilities(
+                driverLifecycle: driverLifecycle, outputController: outputController, token
+            )
         }
+    }
+
+    /// 所有していない側が降ろす責務。self を捕まえないよう、依存は引数で受け取る。
+    private static func abandonOwnerResponsibilities(
+        driverLifecycle: DriverLifecycleController, outputController: OutputDeviceController, _ token: AudioWorldToken
+    ) {
+        driverLifecycle.abandonVisibilityOwnership(token)
+        outputController.abandonRestoreObligation(token)
     }
 
     /// 一度もアクティブになっていないセッションへ所有権が渡ってくるため、

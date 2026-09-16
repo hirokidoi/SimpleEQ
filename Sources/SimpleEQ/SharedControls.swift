@@ -48,9 +48,10 @@ func sharedOutputDevicePicker(
     // 無効化は「選択可能な候補が1つも無いか」のみで決める。
     // 自動選択の疑似項目を出す呼び出し元はその疑似項目自体が常に選択可能な候補のため、実候補の有無に関わらず常に有効。
     .disabled(autoLabel == nil && allOptions.isEmpty)
-    // Picker はネイティブ (AppKit 由来) コントロールで .foregroundColor を無視しシステムのカラースキームに従うため、
-    // 常時ダーク固定のこのアプリでは明示的に指定する。
+    // 常時ダーク固定のアプリなので配色を明示する。
+    // 文字色も明示しなければ、周りから降りてくる色かシステムの既定のどちらかになる。
     .colorScheme(.dark)
+    .foregroundColor(EQLayout.Palette.text)
     .frame(maxWidth: .infinity, alignment: .leading)
 }
 

@@ -554,8 +554,13 @@ final class EQViewModel: ObservableObject {
 
     /// 選択の巻き戻し。戻す先は直近に確定した値 (confirmedOutputDeviceUID)。
     private func revertOutputDeviceSelection() {
+        placeSessionOutputDeviceUID(confirmedOutputDeviceUID)
+    }
+
+    /// didSet がユーザの選び直しとして扱わないように挟んで書く。
+    private func placeSessionOutputDeviceUID(_ uid: String?) {
         isApplyingOutputDeviceSelection = true
-        sessionOutputDeviceUID = confirmedOutputDeviceUID
+        sessionOutputDeviceUID = uid
         isApplyingOutputDeviceSelection = false
     }
 
@@ -856,9 +861,7 @@ final class EQViewModel: ObservableObject {
 
     /// 停止状態への遷移時に、出力先の選択と表示名をプレースホルダーへ戻す。
     private func clearOutputDeviceSelection() {
-        isApplyingOutputDeviceSelection = true
-        sessionOutputDeviceUID = nil
-        isApplyingOutputDeviceSelection = false
+        placeSessionOutputDeviceUID(nil)
         confirmedOutputDeviceUID = nil
         resolvedOutputDeviceName = Self.unresolvedOutputDeviceName
     }
@@ -868,9 +871,7 @@ final class EQViewModel: ObservableObject {
         guard sessionOutputDeviceUID != device.uid
             || confirmedOutputDeviceUID != device.uid
             || resolvedOutputDeviceName != name else { return }
-        isApplyingOutputDeviceSelection = true
-        sessionOutputDeviceUID = device.uid
-        isApplyingOutputDeviceSelection = false
+        placeSessionOutputDeviceUID(device.uid)
         confirmedOutputDeviceUID = device.uid
         resolvedOutputDeviceName = name
     }

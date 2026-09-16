@@ -5,8 +5,10 @@ import CoreAudio
 final class SoundLabAUStage {
     /// 書式を拒否されて落ちた場合は nil になり、その機能は効かない。
     private var reverb: AudioUnit?
-    /// 最後に書いた操作値。ユニットが今どう構成されているかの控え。
-    private var applied: LiveSimulationSettings?
+    /// ユニットへ実際に書いた値。まだ書いていないものは nil。
+    private var appliedBypass: Bool?
+    private var appliedRoom: LiveSimulationRoom?
+    private var appliedMix: Double?
 
     var outputUnit: AudioUnit? { reverb }
 
@@ -46,7 +48,7 @@ final class SoundLabAUStage {
             return false
         }
 
-        // 控えの起点。以降の apply はここからの差分だけを書く。
+        // ユニット自身は切りの状態で始まらないため、ここで置く。
         apply(LiveSimulationSettings())
         return true
     }
@@ -66,22 +68,34 @@ final class SoundLabAUStage {
         return true
     }
 
-    /// 空間の書き換えはユニットの構成に触れて響きを断つ。同じ操作値なら何も書かない。
+    /// 空間の書き換えはユニットの構成に触れて響きを断つ。動いた値だけを書く。
     func apply(_ settings: LiveSimulationSettings) {
-        guard let u = reverb, applied != settings else { return }
-        applied = settings
-        setBypass(u, !settings.enabled)
+        guard let u = reverb else { return }
+        let bypass = !settings.enabled
+        if appliedBypass != bypass {
+            appliedBypass = bypass
+            setBypass(u, bypass)
+        }
         guard settings.enabled else { return }
-        var roomType = settings.room.reverbRoomType.rawValue
-        let st = AudioUnitSetProperty(
-            u, kAudioUnitProperty_ReverbRoomType, kAudioUnitScope_Global, 0,
-            &roomType, UInt32(MemoryLayout<UInt32>.size)
-        )
-        if st != noErr { print("[ERROR] SoundLabAUStage reverb room type: \(st)") }
-        AudioUnitSetParameter(
-            u, kReverbParam_DryWetMix, kAudioUnitScope_Global, 0,
-            AudioUnitParameterValue(settings.mix), 0
-        )
+        if appliedRoom != settings.room {
+            var roomType = settings.room.reverbRoomType.rawValue
+            let st = AudioUnitSetProperty(
+                u, kAudioUnitProperty_ReverbRoomType, kAudioUnitScope_Global, 0,
+                &roomType, UInt32(MemoryLayout<UInt32>.size)
+            )
+            if st == noErr {
+                appliedRoom = settings.room
+            } else {
+                print("[ERROR] SoundLabAUStage reverb room type: \(st)")
+            }
+        }
+        if appliedMix != settings.mix {
+            appliedMix = settings.mix
+            AudioUnitSetParameter(
+                u, kReverbParam_DryWetMix, kAudioUnitScope_Global, 0,
+                AudioUnitParameterValue(settings.mix), 0
+            )
+        }
     }
 
     private func setBypass(_ u: AudioUnit, _ bypass: Bool) {
@@ -103,7 +117,9 @@ final class SoundLabAUStage {
         AudioUnitUninitialize(u)
         AudioComponentInstanceDispose(u)
         reverb = nil
-        applied = nil
+        appliedBypass = nil
+        appliedRoom = nil
+        appliedMix = nil
     }
 
     private static func makeReverbUnit() -> AudioUnit? {

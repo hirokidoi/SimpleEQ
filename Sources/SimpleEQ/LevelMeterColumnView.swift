@@ -55,6 +55,6 @@ enum LevelMeterRenderer {
     static func levelRatio(_ db: Double, viewModel: EQViewModel) -> Double {
         let floor = viewModel.floorDb
         guard db > floor else { return 0 }
-        return min(1, max(0, (db - floor) / -floor))
+        return min(1, max(0, EQLayout.levelFraction(db: db, floorDb: floor)))
     }
 }
