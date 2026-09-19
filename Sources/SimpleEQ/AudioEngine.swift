@@ -52,13 +52,14 @@ final class AudioEngine: @unchecked Sendable {
         }
         return eq
     }
-    /// 取り込み経路の出力先が申告する遅延 (フレーム)。既定は実装本体で、差し替え可能な境界として持つ。
+    /// 既定は実装本体で、差し替え可能な境界として持つ。
     var readPresentationDelayFrames: (AudioDeviceID, Double, AudioWorldToken) -> Int = { deviceID, sampleRate, token in
-        PresentationDelayLine.presentationDelayFrames(
+        let deviceRate = nominalSampleRate(deviceID, token).flatMap { $0 > 0 ? $0 : nil } ?? sampleRate
+        return PresentationDelayLine.presentationDelayFrames(
             deviceLatency: outputDeviceLatencyFrames(deviceID, token) ?? 0,
             streamLatency: firstOutputStreamLatencyFrames(deviceID, token) ?? 0,
             safetyOffset: outputSafetyOffsetFrames(deviceID, token) ?? 0,
-            sampleRate: sampleRate
+            deviceSampleRate: deviceRate, appliedSampleRate: sampleRate
         )
     }
     /// 出力ユニットの生成と出力デバイスの適用 (失敗時は生成済みの資源を後始末してから nil を返す)。
@@ -257,6 +258,7 @@ final class AudioEngine: @unchecked Sendable {
             driverDeviceID: driverDeviceID,
             prepareRoute: { [self] in
                 intendedOutputDeviceUID = outputDevice.uid
+                rebuildPresentationDelay(for: outputDevice.deviceID, token)
                 let driverAtAssemble = refreshDriverVolumeAndMute(token)
                 outputVolumeBridge.rebind(
                     outputUID: outputDevice.uid, outputDeviceID: outputDevice.deviceID,
@@ -286,10 +288,7 @@ final class AudioEngine: @unchecked Sendable {
             inputSampleRate: capture.sampleRate, driverDeviceID: driverDeviceID,
             prepareRoute: { [self] in
                 outputVolumeBridge.releaseForDeviceCarriedRoute(token)
-                let delayFrames = readPresentationDelayFrames(capture.endpointDeviceID, AudioConfig.appliedSampleRate, token)
-                presentationDelay = delayFrames > 0
-                    ? PresentationDelayLine(delayFrames: delayFrames, channels: Int(AudioConfig.channels))
-                    : nil
+                rebuildPresentationDelay(for: capture.endpointDeviceID, token)
                 capture.ring.markWriterStarting()
                 return capture.start(token)
             },
@@ -429,15 +428,27 @@ final class AudioEngine: @unchecked Sendable {
         }
         AudioOutputUnitStop(outUnit)
         let switched = AudioEngine.applyOutputDevice(device.deviceID, on: outUnit, metrics: runtimeMetrics, token)
+        if switched { rebuildPresentationDelay(for: device.deviceID, token) }
         let restarted = AudioOutputUnitStart(outUnit) == noErr
         ringReader?.requestOccupancyReset()
         if switched && restarted {
             confirmOutputDevice(device, token)
             return true
         }
-        if let previousID { _ = AudioEngine.applyOutputDevice(previousID, on: outUnit, metrics: runtimeMetrics, token) }
+        AudioOutputUnitStop(outUnit)
+        if let previousID, AudioEngine.applyOutputDevice(previousID, on: outUnit, metrics: runtimeMetrics, token), switched {
+            rebuildPresentationDelay(for: previousID, token)
+        }
         AudioOutputUnitStart(outUnit)
         return false
+    }
+
+    /// 出力段が止まっている間に限って呼ぶ。
+    private func rebuildPresentationDelay(for deviceID: AudioDeviceID, _ token: AudioWorldToken) {
+        let delayFrames = readPresentationDelayFrames(deviceID, AudioConfig.appliedSampleRate, token)
+        presentationDelay = delayFrames > 0
+            ? PresentationDelayLine(delayFrames: delayFrames, channels: Int(AudioConfig.channels))
+            : nil
     }
 
     /// 出力先が確定したときの後処理。
@@ -724,6 +735,11 @@ final class AudioEngine: @unchecked Sendable {
         applySampleRate(newSampleRate, token)
 
         levelMeter.rebuild(appliedSampleRate: newSampleRate)
+        if let deviceID = currentOutputDeviceID(token) {
+            rebuildPresentationDelay(for: deviceID, token)
+        } else {
+            presentationDelay = nil
+        }
         guard buildEQUnitAndStartOutput(on: outUnit, token) else {
             suspend(cause: .routeUnavailable, token)
             return

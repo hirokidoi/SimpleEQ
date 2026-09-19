@@ -79,6 +79,18 @@ private func usableOutputDevice() -> (deviceID: AudioDeviceID, uid: String)? {
     return nil
 }
 
+private final class PresentationDelayStub {
+    private(set) var calls: [(deviceID: AudioDeviceID, sampleRate: Double)] = []
+    private var nextValues: [Int]
+
+    init(_ nextValues: [Int]) { self.nextValues = nextValues }
+
+    func next(_ deviceID: AudioDeviceID, _ sampleRate: Double, _ token: AudioWorldToken) -> Int {
+        calls.append((deviceID, sampleRate))
+        return nextValues.isEmpty ? 0 : nextValues.removeFirst()
+    }
+}
+
 @MainActor
 final class AudioEngineTests: XCTestCase {
     nonisolated private let tempURLs = Recorded<[URL]>([])
@@ -1015,6 +1027,121 @@ final class AudioEngineTests: XCTestCase {
             "切替に失敗して元のデバイスへ戻す経路でも、出力ユニットは実際に停止・再開されているため同じ IO 空白が"
                 + "生じる。成否によらずリセットを要求する (AudioEngine.switchOutputDevice の why コメント参照)"
         )
+
+        engine.suspend(cause: .applicationTermination, testToken)
+    }
+
+    // MARK: - 遅延線の作り直し (assemble / switchOutputDevice / performRateChange、実クラス経由)
+
+    func testAssembleInstallsTheDelayTheStubDeclaresAndSuspendReleasesIt() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        let stub = PresentationDelayStub([4321])
+        engine.readPresentationDelayFrames = stub.next
+        let url = makeMinimalSharedRingReaderFixture()
+        tempURLs.update { $0.append(url) }
+        let ringReader = try SharedRingReader.open(path: url.path).get()
+
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 4321)
+        XCTAssertEqual(stub.calls.map(\.deviceID), [device.deviceID])
+        XCTAssertEqual(stub.calls.map(\.sampleRate), [AudioConfig.appliedSampleRate])
+
+        engine.suspend(cause: .applicationTermination, testToken)
+        XCTAssertNil(engine.presentationDelay, "停止で手放す")
+    }
+
+    func testAssembleLeavesTheDelayNilWhenTheStubDeclaresZero() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        engine.readPresentationDelayFrames = PresentationDelayStub([0]).next
+        let url = makeMinimalSharedRingReaderFixture()
+        tempURLs.update { $0.append(url) }
+        let ringReader = try SharedRingReader.open(path: url.path).get()
+
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
+        XCTAssertNil(engine.presentationDelay)
+
+        engine.suspend(cause: .applicationTermination, testToken)
+    }
+
+    func testSwitchOutputDeviceRebuildsTheDelayForTheNewDeviceOnSuccess() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        let stub = PresentationDelayStub([100, 200])
+        engine.readPresentationDelayFrames = stub.next
+        let url = makeMinimalSharedRingReaderFixture()
+        tempURLs.update { $0.append(url) }
+        let ringReader = try SharedRingReader.open(path: url.path).get()
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 100)
+
+        // UID だけ変えて .notNeeded を避け、実際の切替経路 (switched && restarted) を通す。
+        let forcedSwitchDevice = ResolvedOutputDevice(uid: "forced-different-uid-for-delay-rebuild", deviceID: device.deviceID)
+        XCTAssertTrue(engine.switchOutputDevice(to: forcedSwitchDevice, testToken))
+
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 200, "切替成功で新しい値へ作り直される")
+        XCTAssertEqual(stub.calls.map(\.deviceID), [device.deviceID, device.deviceID], "同じ device ID で作り直しが呼ばれる")
+
+        engine.suspend(cause: .applicationTermination, testToken)
+    }
+
+    func testSwitchOutputDeviceKeepsThePreviousDelayWhenTheSwitchFails() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        let stub = PresentationDelayStub([100])
+        engine.readPresentationDelayFrames = stub.next
+        let url = makeMinimalSharedRingReaderFixture()
+        tempURLs.update { $0.append(url) }
+        let ringReader = try SharedRingReader.open(path: url.path).get()
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 100)
+
+        // 存在しないデバイス ID を渡し、「切替に失敗して元のデバイスへ戻す」経路を強制する。
+        let invalidDevice = ResolvedOutputDevice(uid: "invalid-device-for-delay-revert-test", deviceID: 999_999)
+        XCTAssertFalse(engine.switchOutputDevice(to: invalidDevice, testToken))
+
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 100, "新デバイスへの適用が失敗した回は遅延線を作り直していないため元の値のまま")
+        XCTAssertEqual(stub.calls.count, 1, "適用が失敗した回では作り直しを呼ばない")
+
+        engine.suspend(cause: .applicationTermination, testToken)
+    }
+
+    func testPerformRateChangeRebuildsTheDelayForTheNewRate() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        restoringBaseSampleRateAfterTest()
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        let stub = PresentationDelayStub([100, 200])
+        engine.readPresentationDelayFrames = stub.next
+        let url = makeMinimalSharedRingReaderFixture(sampleRate: 48000)
+        tempURLs.update { $0.append(url) }
+        let ringReader = try SharedRingReader.open(path: url.path).get()
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 100)
+        XCTAssertEqual(stub.calls.map(\.sampleRate), [48000])
+
+        setHeaderSampleRate(url, 44100)
+        engine.applyDriverSampleRateIfChanged(testToken)
+
+        XCTAssertEqual(AudioConfig.appliedSampleRate, 44100, "前提: レート変更が適用されている")
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 200, "レート変更で新しい処理レートに合わせて作り直される")
+        XCTAssertEqual(stub.calls.map(\.sampleRate), [48000, 44100], "作り直しに渡る処理レートが新しいレートに変わる")
+        XCTAssertEqual(stub.calls.map(\.deviceID), [device.deviceID, device.deviceID], "現在の出力デバイスで作り直す")
 
         engine.suspend(cause: .applicationTermination, testToken)
     }

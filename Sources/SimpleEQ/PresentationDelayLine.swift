@@ -4,12 +4,19 @@ import Foundation
 final class PresentationDelayLine {
     /// 申告値が壊れていても確保量を抑えるための上限 (設計値)。
     static let maxPresentationDelaySeconds: TimeInterval = 4
+    /// 表示が音に遅れる側のずれは気づかれやすいため、申告値からこの分だけ手前で止める (設計値)。
+    static let perceptualLeadSeconds: TimeInterval = 0.085
 
     static func presentationDelayFrames(
-        deviceLatency: UInt32, streamLatency: UInt32, safetyOffset: UInt32, sampleRate: Double
+        deviceLatency: UInt32, streamLatency: UInt32, safetyOffset: UInt32,
+        deviceSampleRate: Double, appliedSampleRate: Double
     ) -> Int {
-        let declared = Int(deviceLatency) + Int(streamLatency) + Int(safetyOffset)
-        return min(declared, Int((maxPresentationDelaySeconds * sampleRate).rounded(.down)))
+        let declaredDeviceFrames = Int(deviceLatency) + Int(streamLatency) + Int(safetyOffset)
+        let declaredAppliedFrames = (Double(declaredDeviceFrames) * appliedSampleRate / deviceSampleRate).rounded()
+        let leadFrames = (perceptualLeadSeconds * appliedSampleRate).rounded()
+        let afterLead = max(0, declaredAppliedFrames - leadFrames)
+        let cap = (maxPresentationDelaySeconds * appliedSampleRate).rounded(.down)
+        return Int(min(afterLead, cap))
     }
 
     let delayFrames: Int

@@ -49,15 +49,69 @@ final class PresentationDelayLineTests: XCTestCase {
         XCTAssertEqual(output, input)
     }
 
-    func testTheDeclaredDelaysAddUpAndAreCappedAtTheDesignBound() {
-        let rate: Double = 44100
+    func testResultIsZeroAtOrBelowThePerceptualLead() {
+        let rate = AudioConfig.baseSampleRate
+        let lead = UInt32((PresentationDelayLine.perceptualLeadSeconds * rate).rounded())
         XCTAssertEqual(
-            PresentationDelayLine.presentationDelayFrames(deviceLatency: 88, streamLatency: 88_200, safetyOffset: 320, sampleRate: rate),
-            88 + 88_200 + 320
+            PresentationDelayLine.presentationDelayFrames(
+                deviceLatency: lead, streamLatency: 0, safetyOffset: 0, deviceSampleRate: rate, appliedSampleRate: rate
+            ),
+            0, "申告値が前倒し量ちょうどなら 0"
         )
+        XCTAssertEqual(
+            PresentationDelayLine.presentationDelayFrames(
+                deviceLatency: lead / 2, streamLatency: 0, safetyOffset: 0, deviceSampleRate: rate, appliedSampleRate: rate
+            ),
+            0, "申告値が前倒し量未満でも 0"
+        )
+    }
+
+    func testResultIsTheAmountByWhichTheDeclaredTotalExceedsTheLead() {
+        let rate = AudioConfig.baseSampleRate
+        let lead = Int((PresentationDelayLine.perceptualLeadSeconds * rate).rounded())
+        let k = 1000
+        let total = UInt32(lead + k)
+
+        XCTAssertEqual(
+            PresentationDelayLine.presentationDelayFrames(
+                deviceLatency: total, streamLatency: 0, safetyOffset: 0, deviceSampleRate: rate, appliedSampleRate: rate
+            ),
+            k
+        )
+        XCTAssertEqual(
+            PresentationDelayLine.presentationDelayFrames(
+                deviceLatency: total - 300, streamLatency: 200, safetyOffset: 100, deviceSampleRate: rate, appliedSampleRate: rate
+            ),
+            k, "3 項の内訳によらず合計だけで結果が決まる"
+        )
+    }
+
+    func testEqualRealLatencyProducesTheSameResultRegardlessOfDeviceSampleRate() {
+        let appliedRate = AudioConfig.baseSampleRate
+        let otherRate: Double = appliedRate == 44100 ? 48000 : 44100
+        // 整数秒にしてどちらのレートでも割り切れるようにする。
+        let seconds = PresentationDelayLine.perceptualLeadSeconds.rounded(.up) + 1
+        let atOtherRate = PresentationDelayLine.presentationDelayFrames(
+            deviceLatency: UInt32(seconds * otherRate), streamLatency: 0, safetyOffset: 0,
+            deviceSampleRate: otherRate, appliedSampleRate: appliedRate
+        )
+        let atAppliedRateItself = PresentationDelayLine.presentationDelayFrames(
+            deviceLatency: UInt32(seconds * appliedRate), streamLatency: 0, safetyOffset: 0,
+            deviceSampleRate: appliedRate, appliedSampleRate: appliedRate
+        )
+        let cap = Int((PresentationDelayLine.maxPresentationDelaySeconds * appliedRate).rounded(.down))
+        XCTAssertGreaterThan(atAppliedRateItself, 0, "前提: 前倒しで 0 に潰れていない")
+        XCTAssertLessThan(atAppliedRateItself, cap, "前提: 上限で頭打ちになっていない")
+        XCTAssertEqual(atOtherRate, atAppliedRateItself, "同じ実時間の申告値は出力先のレートによらず同じ結果になる")
+    }
+
+    func testResultIsCappedAtTheDesignBound() {
+        let rate = AudioConfig.baseSampleRate
         let cap = Int((PresentationDelayLine.maxPresentationDelaySeconds * rate).rounded(.down))
         XCTAssertEqual(
-            PresentationDelayLine.presentationDelayFrames(deviceLatency: 0, streamLatency: UInt32(cap + 1), safetyOffset: 0, sampleRate: rate),
+            PresentationDelayLine.presentationDelayFrames(
+                deviceLatency: 0, streamLatency: UInt32(cap * 2), safetyOffset: 0, deviceSampleRate: rate, appliedSampleRate: rate
+            ),
             cap
         )
     }
