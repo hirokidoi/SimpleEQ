@@ -7,21 +7,21 @@ enum LoginItem {
         SMAppService.mainApp.status == .enabled
     }
 
-    /// 失敗時は false を返すのみで例外は投げない。
-    @discardableResult
-    static func setEnabled(_ enabled: Bool) -> Bool {
+    static func setEnabled(_ enabled: Bool) {
+        let service = SMAppService.mainApp
         do {
             if enabled {
-                if SMAppService.mainApp.status != .enabled {
-                    try SMAppService.mainApp.register()
+                if service.status != .enabled {
+                    try service.register()
                 }
-            } else if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
+            } else if service.status == .enabled || service.status == .requiresApproval {
+                try service.unregister()
             }
-            return true
         } catch {
             print("[warn] LoginItem.setEnabled(\(enabled)) failed: \(error)")
-            return false
+        }
+        if enabled && service.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
         }
     }
 }

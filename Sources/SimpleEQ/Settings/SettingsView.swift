@@ -116,9 +116,14 @@ struct SettingsView: View {
                 SettingsToggle(isOn: Binding(
                     get: { loginItemEnabled },
                     set: { newValue in
-                        if LoginItem.setEnabled(newValue) { loginItemEnabled = newValue }
+                        LoginItem.setEnabled(newValue)
+                        loginItemEnabled = LoginItem.isEnabled
                     }
                 ))
+                // システム設定側での承認・取り消しを、戻ってきた時点で拾う。
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+                    loginItemEnabled = LoginItem.isEnabled
+                }
             }
         }
     }

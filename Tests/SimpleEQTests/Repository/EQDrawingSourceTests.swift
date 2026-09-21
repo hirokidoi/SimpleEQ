@@ -4,9 +4,8 @@ import XCTest
 
 /// EQ 本体の描画は CALayer に閉じる。SwiftUI Canvas は使わない (計測済みの却下判断)。
 final class EQDrawingSourceTests: XCTestCase {
-    func testAppSourcesDoNotUseSwiftUICanvas() {
-        let files = Self.swiftSourceFiles()
-        XCTAssertFalse(files.isEmpty, "前提: ソースを 1 件以上辿れていること")
+    func testAppSourcesDoNotUseSwiftUICanvas() throws {
+        let files = try RepositoryFiles.swiftSourceFiles()
 
         var offenders: [String] = []
         for url in files {
@@ -22,11 +21,5 @@ final class EQDrawingSourceTests: XCTestCase {
             offenders, [],
             "EQ の描画はレイヤで行う。Canvas を置くと、操作中だけ毎フレームのラスタライズが戻る"
         )
-    }
-
-    private static func swiftSourceFiles() -> [URL] {
-        let root = RepositoryFiles.appSourceDirectory
-        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return [] }
-        return walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
     }
 }

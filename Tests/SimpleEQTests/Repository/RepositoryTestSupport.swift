@@ -1,4 +1,4 @@
-import Foundation
+import XCTest
 
 enum RepositoryFiles {
     static var license: URL { root.appendingPathComponent("LICENSE") }
@@ -27,11 +27,28 @@ enum RepositoryFiles {
 
     private static var driverDirectory: URL { root.appendingPathComponent("Driver/SimpleEQAudio") }
 
+    static func swiftSourceFiles() throws -> [URL] {
+        let walker = try XCTUnwrap(
+            FileManager.default.enumerator(at: appSourceDirectory, includingPropertiesForKeys: nil),
+            "ソースを列挙できない: \(appSourceDirectory.path)"
+        )
+        let files = walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        return try XCTUnwrap(files.isEmpty ? nil : files, "ソースが見つからない: \(appSourceDirectory.path)")
+    }
+
     private static var root: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let marker = "Package.swift"
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while true {
+            if FileManager.default.fileExists(atPath: directory.appendingPathComponent(marker).path) {
+                return directory
+            }
+            let parent = directory.deletingLastPathComponent()
+            guard parent != directory else {
+                fatalError("\(marker) が見つからない: \(#filePath) から上へたどれなかった")
+            }
+            directory = parent
+        }
     }
 }
 

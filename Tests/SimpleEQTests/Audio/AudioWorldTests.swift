@@ -184,9 +184,7 @@ final class PropertyListenerQueueSourceTests: XCTestCase {
     private static let expectedCallCount = 11
 
     func testEveryListenerRegistrationAndRemovalPassesTheListenerQueue() throws {
-        let files = try FileManager.default.contentsOfDirectory(
-            at: RepositoryFiles.appSourceDirectory, includingPropertiesForKeys: nil
-        ).filter { $0.pathExtension == "swift" }
+        let files = try RepositoryFiles.swiftSourceFiles()
 
         var calls: [(file: String, line: String)] = []
         for file in files {
