@@ -1,9 +1,21 @@
 # Thin CLI wrapper over the Xcode project (source of truth: project.yml).
 # `make install` builds and copies the app into /Applications.
-.PHONY: project build install test clean-test-prefs icon clean driver install-driver uninstall-driver
+.PHONY: project build install uninstall uninstall-all test clean-test-prefs icon clean driver install-driver uninstall-driver
 
-APP := build/Build/Products/Release/SimpleEQ.app
-DEST := /Applications/SimpleEQ.app
+APP_NAME := SimpleEQ
+BUNDLE_ID := com.hirokidoi.simpleeq
+APP := build/Build/Products/Release/$(APP_NAME).app
+DEST := /Applications/$(APP_NAME).app
+SAVED_STATE := $(HOME)/Library/Saved Application State/$(BUNDLE_ID).savedState
+LOGS_DIR := $(HOME)/Library/Logs/$(APP_NAME)
+INSTALLED_DRIVER := $(shell sed -n 's/^INSTALLED_DRIVER="\(.*\)"$$/\1/p' Driver/uninstall-driver.sh)
+
+DRIVER_NOTICE = @if [ -z "$(INSTALLED_DRIVER)" ]; then \
+	    echo "Driver/uninstall-driver.sh からドライバの配置先を読み取れませんでした。"; exit 1; \
+	elif [ -e "$(INSTALLED_DRIVER)" ]; then \
+	    echo "専用ドライバ ($(INSTALLED_DRIVER)) は残っています。"; \
+	    $(MAKE) --no-print-directory uninstall-driver; \
+	fi
 
 # driver / install-driver / uninstall-driver は、アプリを経由せずドライバを入れ替えるための経路。
 # identifiers はソース (SimpleEQAudio.c) / project.pbxproj に直書きしてあるので、ここではビルド引数を渡さない。
@@ -28,6 +40,36 @@ install: build
 	mkdir -p "$(dir $(DEST))"
 	cp -R "$(APP)" "$(DEST)"
 	@echo "$(DEST) にインストールしました。"
+
+uninstall:
+	@if [ -e "$(DEST)" ]; then \
+	    rm -rf "$(DEST)" && echo "$(DEST) を削除しました。"; \
+	else \
+	    echo "$(DEST) はインストールされていません。"; \
+	fi
+	$(DRIVER_NOTICE)
+
+# 設定は cfprefsd が持っているため、plist を直接消さず defaults で消す。
+uninstall-all:
+	@if pgrep -x "$(APP_NAME)" >/dev/null; then \
+	    echo "$(APP_NAME) が動いています。終了してからやり直してください。"; exit 1; \
+	fi; \
+	targets=""; \
+	for path in "$(DEST)" "$(SAVED_STATE)" "$(LOGS_DIR)"; do \
+	    if [ -e "$$path" ]; then targets="$$targets  $$path\n"; fi; \
+	done; \
+	has_defaults=0; \
+	if defaults read "$(BUNDLE_ID)" >/dev/null 2>&1; then \
+	    has_defaults=1; targets="$$targets  設定 (defaults のドメイン $(BUNDLE_ID))\n"; \
+	fi; \
+	if [ -z "$$targets" ]; then echo "削除するものはありません。"; exit 0; fi; \
+	echo "次のものを削除します:"; printf "%b" "$$targets"; \
+	printf "よろしいですか？ [y/N] "; read -r answer; \
+	if [ "$$answer" != y ]; then echo "中止しました。"; exit 0; fi; \
+	rm -rf "$(DEST)" "$(SAVED_STATE)" "$(LOGS_DIR)"; \
+	if [ $$has_defaults -eq 1 ]; then defaults delete "$(BUNDLE_ID)"; fi; \
+	echo "削除しました。"
+	$(DRIVER_NOTICE)
 
 # 検証は使い捨ての保存領域を作る。macOS はその名前ごとに設定のファイルを作り、中身を消してもファイル自体は残る。
 # しかも設定を司る常駐が、検証の処理を終えた後に書き戻すため、消す前に書き戻しが済むのを待つ。

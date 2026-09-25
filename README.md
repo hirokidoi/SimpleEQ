@@ -110,6 +110,7 @@ macOS でシステム全体の出力音声を加工するグラフィックイ�
   sudo xcodebuild -runFirstLaunch
   ```
 - インストール後、`git clone` あるいは ZIP を展開したディレクトリ（プロジェクト）は削除してよい。
+- アンインストールは `make uninstall`。設定もまとめて消すときは `make uninstall-all`（消す対象を表示して確認する）。専用ドライバはこれらでは消えないため、先に Settings 画面からアンインストールしておく。
 
 ### コード署名（Codesign）
 
