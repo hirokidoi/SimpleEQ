@@ -34,6 +34,8 @@ protocol AudioDeviceDirectory: Sendable {
     func isDeviceAlive(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool?
 
     func selfProcessObjectID(_ token: AudioWorldToken) -> AudioObjectID?
+
+    func outputDeviceListSnapshot(_ token: AudioWorldToken) -> OutputDeviceListSnapshot
 }
 
 extension AudioDeviceDirectory {
@@ -109,6 +111,17 @@ final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
 
     func selfProcessObjectID(_ token: AudioWorldToken) -> AudioObjectID? {
         processObjectID(forPID: getpid(), token)
+    }
+
+    func outputDeviceListSnapshot(_ token: AudioWorldToken) -> OutputDeviceListSnapshot {
+        var outputUIDs = Set<String>()
+        var followableUIDs = Set<String>()
+        for id in allDeviceIDs(token) where deviceHasStreams(id, needsOutput: true, token) {
+            guard let uid = deviceUID(id, token) else { continue }
+            outputUIDs.insert(uid)
+            if isFollowableOutputTransport(transportType(id, token)) { followableUIDs.insert(uid) }
+        }
+        return OutputDeviceListSnapshot(outputUIDs: outputUIDs, followableUIDs: followableUIDs)
     }
 
     private func setCustomProperty(

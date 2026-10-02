@@ -71,6 +71,13 @@ final class EQViewModel: ObservableObject {
             applySystemOutputAdoptionSetting()
         }
     }
+    @Published var followsNewOutputDevices: Bool {
+        didSet {
+            guard oldValue != followsNewOutputDevices else { return }
+            settings.followsNewOutputDevices = followsNewOutputDevices
+            applyNewOutputDeviceFollowingSetting()
+        }
+    }
     /// セッション限定 (非永続) の出力デバイス UID。
     @Published var sessionOutputDeviceUID: String? {
         didSet {
@@ -477,6 +484,7 @@ final class EQViewModel: ObservableObject {
 
         persistedDefaultOutputDeviceUID = settings.outputDeviceUID
         adoptsSystemOutputSelection = settings.adoptsSystemOutputSelection
+        followsNewOutputDevices = settings.followsNewOutputDevices
         sessionOutputDeviceUID = resolvedOutputDeviceUID
         confirmedOutputDeviceUID = resolvedOutputDeviceUID
         preampDb = settings.preampDb
@@ -536,6 +544,7 @@ final class EQViewModel: ObservableObject {
                 return DispatchQueue.main.async { self?.revertOutputDeviceSelection() }
             }
             let name = deviceName(target.deviceID, token)
+            deviceRoutingReconciler?.noteOutputDeviceChosenByUser(token)
             deviceRoutingReconciler?.reconcile(trigger: .explicit, token)
             DispatchQueue.main.async { self?.adoptOutputDevice(target, name: name ?? Self.unresolvedOutputDeviceName) }
         }
@@ -549,6 +558,15 @@ final class EQViewModel: ObservableObject {
         ) { [deviceRoutingReconciler] token in
             deviceRoutingReconciler?.setAdoptsSystemOutputSelection(adopts, token)
             deviceRoutingReconciler?.reconcile(trigger: .explicit, token)
+        }
+    }
+
+    private func applyNewOutputDeviceFollowingSetting() {
+        let follows = followsNewOutputDevices
+        audioWorld.submit(
+            coalescingKey: AudioRequestKey.newOutputDeviceFollowing
+        ) { [deviceRoutingReconciler] token in
+            deviceRoutingReconciler?.setFollowsNewOutputDevices(follows, token)
         }
     }
 

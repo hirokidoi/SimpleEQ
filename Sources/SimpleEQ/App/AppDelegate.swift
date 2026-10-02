@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activationCoordinator: activationCoordinator,
         driverDeviceUID: DriverConfig.deviceUID,
         adoptsSystemOutputSelection: settings.adoptsSystemOutputSelection,
+        followsNewOutputDevices: settings.followsNewOutputDevices,
         didAdoptOutputDevice: { [weak self] device, token in
             let name = deviceName(device.deviceID, token)
             DispatchQueue.main.async { self?.viewModel.adoptOutputDevice(device, name: name ?? "未設定") }
@@ -278,6 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 },
                 attempt: .launch, token
             )
+            deviceRoutingReconciler.noteLaunchOutputDevice(uid: outcome.activeOutputDevice?.uid, token)
             // 決着を知らせる前に是正を回し、AirPlay モードの相を先に確定させる。
             deviceRoutingReconciler.reconcile(trigger: .explicit, token)
             DispatchQueue.main.async { self?.viewModel.noteStartupActivationSettled() }

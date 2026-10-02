@@ -226,6 +226,7 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
         initialDriverDeviceID: AudioDeviceID? = nil,
         driverOwnedBySession: Bool = true,
         adoptsSystemOutputSelection: Bool = true,
+        followsNewOutputDevices: Bool = true,
         processingState: ProcessingState? = nil,
         openSharedMemory: @escaping @Sendable () -> Result<SharedRingReader, SharedRingReader.OpenFailure> = { .failure(.fileNotFound) },
         airPlayMode: AirPlayModeReconciling = AirPlayModeNotApplicable(),
@@ -278,6 +279,7 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
             outputController: outputController, activationCoordinator: activationCoordinator,
             driverDeviceUID: driverUID, initialDriverDeviceID: initialDriverDeviceID,
             adoptsSystemOutputSelection: adoptsSystemOutputSelection,
+            followsNewOutputDevices: followsNewOutputDevices,
             didAdoptOutputDevice: { device, _ in adopted.append(device) },
             didObserveDefaultOutputReach: { observedDefaultOutputReach.append($0) },
             didObserveRingStalled: { observedRingStalled.append($0) },
@@ -1048,6 +1050,337 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
 
         XCTAssertEqual(f.switchTargets.last, ResolvedOutputDevice(uid: hdmiUID, deviceID: hdmiID))
         XCTAssertEqual(f.directory.currentDefaultOutputID, driverDeviceID)
+    }
+
+    // MARK: - 新しく現れた出力デバイスへの追従
+
+    private let headphoneUID = "headphone-uid"
+    private let headphoneID: AudioDeviceID = 13
+    private let bluetoothUID = "bluetooth-uid"
+    private let bluetoothID: AudioDeviceID = 14
+
+    private func speaker() -> ResolvedOutputDevice { ResolvedOutputDevice(uid: speakerUID, deviceID: speakerID) }
+    private func hdmi() -> ResolvedOutputDevice { ResolvedOutputDevice(uid: hdmiUID, deviceID: hdmiID) }
+    private func headphone() -> ResolvedOutputDevice { ResolvedOutputDevice(uid: headphoneUID, deviceID: headphoneID) }
+    private func bluetooth() -> ResolvedOutputDevice { ResolvedOutputDevice(uid: bluetoothUID, deviceID: bluetoothID) }
+
+    /// 一覧の基準を取るパスを済ませた状態から始める。
+    private func makeFollowingFixture(followsNewOutputDevices: Bool = true) -> Fixture {
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, followsNewOutputDevices: followsNewOutputDevices)
+        f.directory.followableOutputUIDs = [speakerUID, headphoneUID, bluetoothUID]
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        return f
+    }
+
+    private func connect(_ device: ResolvedOutputDevice, to f: Fixture) {
+        f.directory.deviceIDsByUID[device.uid] = device.deviceID
+        f.directory.uidsByDeviceID[device.deviceID] = device.uid
+    }
+
+    /// 出力先だったデバイスが消えると、AUHAL の読み返しも解決できなくなる。
+    private func disconnect(_ device: ResolvedOutputDevice, from f: Fixture) {
+        f.directory.deviceIDsByUID[device.uid] = nil
+        f.directory.uidsByDeviceID[device.deviceID] = nil
+        if f.engine.actualOutputDeviceID == device.deviceID { f.engine.actualOutputDeviceID = nil }
+    }
+
+    func testFollowTargetIsTheSingleFollowableDeviceThatAppeared() {
+        let previous = OutputDeviceListSnapshot(outputUIDs: ["speaker", "hdmi"], followableUIDs: ["speaker"])
+        let current = OutputDeviceListSnapshot(
+            outputUIDs: ["speaker", "hdmi", "headphone"], followableUIDs: ["speaker", "headphone"]
+        )
+        XCTAssertEqual(outputDeviceToFollow(previous: previous, current: current, intendedUID: "speaker"), "headphone")
+    }
+
+    func testFollowTargetIgnoresDevicesOfOtherTransports() {
+        let previous = OutputDeviceListSnapshot(outputUIDs: ["speaker"], followableUIDs: ["speaker"])
+        let current = OutputDeviceListSnapshot(outputUIDs: ["speaker", "hdmi"], followableUIDs: ["speaker"])
+        XCTAssertNil(outputDeviceToFollow(previous: previous, current: current, intendedUID: "speaker"))
+    }
+
+    // どれを選ぶか決められないため追わない。
+    func testFollowTargetIsNoneWhenSeveralFollowableDevicesAppearAtOnce() {
+        let previous = OutputDeviceListSnapshot(outputUIDs: ["hdmi"], followableUIDs: [])
+        let current = OutputDeviceListSnapshot(
+            outputUIDs: ["hdmi", "headphone", "usb"], followableUIDs: ["headphone", "usb"]
+        )
+        XCTAssertNil(outputDeviceToFollow(previous: previous, current: current, intendedUID: "hdmi"))
+    }
+
+    // coreaudiod の再起動などで一覧ごと入れ替わると、出力先自身も前の一覧に無い。
+    func testFollowTargetIsNoneWhenTheOutputWasMissingFromThePreviousList() {
+        let current = OutputDeviceListSnapshot(outputUIDs: ["speaker", "headphone"], followableUIDs: ["speaker", "headphone"])
+        XCTAssertNil(outputDeviceToFollow(
+            previous: OutputDeviceListSnapshot(outputUIDs: [], followableUIDs: []), current: current, intendedUID: "speaker"
+        ))
+        XCTAssertNil(outputDeviceToFollow(previous: nil, current: current, intendedUID: "speaker"), "基準が無い起動直後")
+        XCTAssertNil(outputDeviceToFollow(
+            previous: OutputDeviceListSnapshot(outputUIDs: ["speaker"], followableUIDs: ["speaker"]),
+            current: current, intendedUID: nil
+        ), "出力先が無い間")
+    }
+
+    func testFollowableTransportsAreBuiltInBluetoothAndUSB() {
+        for transport in [
+            kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeBluetooth,
+            kAudioDeviceTransportTypeBluetoothLE, kAudioDeviceTransportTypeUSB,
+        ] {
+            XCTAssertTrue(isFollowableOutputTransport(transport))
+        }
+        for transport: UInt32? in [
+            kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort, kAudioDeviceTransportTypeVirtual,
+            kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAirPlay, nil,
+        ] {
+            XCTAssertFalse(isFollowableOutputTransport(transport))
+        }
+    }
+
+    func testConnectedDeviceBecomesTheOutputWithoutTouchingTheDefaultOutput() {
+        let f = makeFollowingFixture()
+        f.directory.currentDefaultOutputID = driverDeviceID
+        connect(headphone(), to: f)
+
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.last, headphone())
+        XCTAssertEqual(f.adoptedDevices.last, headphone(), "表示へ伝える")
+        XCTAssertEqual(f.directory.currentDefaultOutputID, driverDeviceID, "既定出力はドライバのまま")
+        XCTAssertEqual(f.outputController.restoreTargetUID, restoreTargetUID, "復帰対象は動かない")
+    }
+
+    func testConnectedDeviceIsNotFollowedWhileTheSettingIsOff() {
+        let f = makeFollowingFixture(followsNewOutputDevices: false)
+        connect(headphone(), to: f)
+
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertFalse(f.switchTargets.contains(headphone()))
+    }
+
+    // 停止中に現れたデバイスは、再開した後にも「新しく現れた」とは読まない。
+    func testDeviceConnectedWhileSuspendedIsNotFollowedAfterResuming() {
+        let f = makeFollowingFixture()
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.engine.processingState = .active
+        f.engine.intendedOutputDeviceUID = speakerUID
+        f.engine.actualOutputDeviceID = speakerID
+
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertFalse(f.switchTargets.contains(headphone()))
+    }
+
+    // 通知を取りこぼしても、定期の検算が書き込みを伴うパスへ昇格させる。
+    func testPeriodicVerificationFollowsAConnectionWhoseNotificationWasMissed() {
+        let f = makeFollowingFixture()
+        connect(headphone(), to: f)
+
+        f.reconciler.reconcile(trigger: .periodicVerification, testToken)
+
+        XCTAssertEqual(f.switchTargets.last, headphone())
+    }
+
+    func testRemovingTheFollowedDeviceReturnsToThePreviousOutput() {
+        let f = makeFollowingFixture()
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.last, speaker())
+        XCTAssertEqual(f.adoptedDevices.last, speaker(), "表示へ伝える")
+    }
+
+    func testReturnFallsBackToTheLaunchOutputWhenThePreviousOutputIsGone() {
+        let f = makeFollowingFixture()
+        f.reconciler.noteLaunchOutputDevice(uid: hdmiUID, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        disconnect(speaker(), from: f)
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.last, hdmi())
+    }
+
+    // 戻り先は 1 段分だけ持つ。戻った先がさらに消えたら起動時点の出力先へ戻る。
+    func testChainedFollowsReturnOneStepThenToTheLaunchOutput() {
+        let f = makeFollowingFixture()
+        f.reconciler.noteLaunchOutputDevice(uid: hdmiUID, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        connect(bluetooth(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.switchTargets.last, bluetooth())
+
+        disconnect(bluetooth(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.switchTargets.last, headphone())
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.switchTargets.last, hdmi())
+    }
+
+    // 追従で選んでいない出力先へ戻った後は、それが外れても起動時点の出力先へ飛ばない。
+    func testReturningToAnOutputNotReachedByFollowingEndsTheReturn() {
+        let f = makeFollowingFixture()
+        f.reconciler.noteLaunchOutputDevice(uid: hdmiUID, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.switchTargets.last, speaker())
+
+        disconnect(speaker(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertFalse(f.switchTargets.contains(hdmi()))
+    }
+
+    // 選び直した後に外れても、選び直す前の出力先へは戻さない。
+    func testChoosingAnOutputClearsTheReturn() {
+        let f = makeFollowingFixture()
+        f.reconciler.noteLaunchOutputDevice(uid: hdmiUID, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.reconciler.noteOutputDeviceChosenByUser(testToken)
+        let switchCount = f.switchTargets.count
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.count, switchCount)
+    }
+
+    func testTurningFollowingOffClearsTheReturn() {
+        let f = makeFollowingFixture()
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.reconciler.setFollowsNewOutputDevices(false, testToken)
+        let switchCount = f.switchTargets.count
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.count, switchCount)
+    }
+
+    // OS 側の切替を引き取った先は利用者の選択として扱う。
+    func testAdoptingTheSystemSelectionClearsTheReturn() {
+        let f = makeFollowingFixture()
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.directory.currentDefaultOutputID = hdmiID
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.switchTargets.last, hdmi())
+        let switchCount = f.switchTargets.count
+
+        disconnect(hdmi(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertFalse(f.switchTargets.dropFirst(switchCount).contains(speaker()))
+    }
+
+    // 追従したデバイスを OS 側で選び直して引き取っても、利用者の選択として扱う。
+    func testAdoptingTheFollowedDeviceItselfEndsTheReturn() {
+        let f = makeFollowingFixture()
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.directory.currentDefaultOutputID = headphoneID
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.directory.currentDefaultOutputID, driverDeviceID, "引き取りが成立している")
+        let switchCount = f.switchTargets.count
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.count, switchCount)
+    }
+
+    // AirPlay モードを抜けた先は、追従する前の出力先とは無関係。
+    func testEngagingAirPlayClearsTheReturn() {
+        let airPlay = airPlayMode(.notApplicable)
+        let f = makeFixture(initialDriverDeviceID: driverDeviceID, airPlayMode: airPlay)
+        f.directory.followableOutputUIDs = [headphoneUID]
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        airPlay.branch = .engaged(endpointDeviceID: airPlayEndpointID)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        airPlay.branch = .notApplicable
+        let switchCount = f.switchTargets.count
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.count, switchCount)
+    }
+
+    // 出力段が止まってから外れた場合も、自動再開は追従の戻り先を復帰対象より先に試す。
+    func testAutomaticResumePrefersTheFollowReturnOverTheRestoreTarget() {
+        let f = makeFixture(
+            initialDriverDeviceID: driverDeviceID,
+            openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+        )
+        f.directory.followableOutputUIDs = [headphoneUID]
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.engine.assembleCalls.last, speaker())
+    }
+
+    // 追従先がつながったまま止まって同じ先で再開しても、外せば追従前の出力先へ戻る。
+    func testAutomaticResumeOntoTheFollowedDeviceItselfKeepsTheReturn() {
+        let f = makeFixture(
+            initialDriverDeviceID: driverDeviceID,
+            openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+        )
+        f.directory.followableOutputUIDs = [headphoneUID]
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.engine.assembleCalls.last, headphone())
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.last, speaker())
+    }
+
+    // 自動再開で戻った先も、追従で選ばれていた先なら次に消えたとき起動時点の出力先へ戻る。
+    func testAutomaticResumeOntoAFollowedDeviceCarriesTheFollowOn() {
+        let f = makeFixture(
+            initialDriverDeviceID: driverDeviceID,
+            openSharedMemory: { [tempURLs] in Self.openValidSharedRingReader(registeringInto: tempURLs) }
+        )
+        f.directory.followableOutputUIDs = [headphoneUID, bluetoothUID]
+        f.reconciler.noteLaunchOutputDevice(uid: hdmiUID, testToken)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        connect(headphone(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        connect(bluetooth(), to: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+        disconnect(bluetooth(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+        XCTAssertEqual(f.engine.assembleCalls.last, headphone())
+
+        disconnect(headphone(), from: f)
+        f.reconciler.reconcile(trigger: .configurationChange, testToken)
+
+        XCTAssertEqual(f.switchTargets.last, hdmi())
     }
 
     // MARK: - (e) 冪等性

@@ -40,6 +40,8 @@ final class SettingsStore {
         /// ユーザが手動固定した UID。nil は起動時の自動選択を意味する。
         var deviceUID: String?
         var adoptsSystemSelection = true
+        /// nil は既定を意味する。
+        var followsNewDevices: Bool?
     }
 
     private struct WindowState: Codable {
@@ -260,6 +262,14 @@ final class SettingsStore {
     var adoptsSystemOutputSelection: Bool {
         get { readState { $0.output.adoptsSystemSelection } }
         set { writeState { $0.output.adoptsSystemSelection = newValue } }
+    }
+
+    static let followsNewOutputDevicesDefault = true
+
+    /// 新しく現れた出力デバイスへ SimpleEQ の出力先を切り替え、そのデバイスが消えたら戻すか。
+    var followsNewOutputDevices: Bool {
+        get { readState { $0.output.followsNewDevices } ?? Self.followsNewOutputDevicesDefault }
+        set { writeState { $0.output.followsNewDevices = newValue } }
     }
 
     /// ビジュアライザの再描画上限フレームレート (fps)。

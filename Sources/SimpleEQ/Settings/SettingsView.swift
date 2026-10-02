@@ -171,10 +171,16 @@ struct SettingsView: View {
                 ResetDotButton { viewModel.persistedDefaultOutputDeviceUID = nil }
             }
             settingsRow(
-                title: "出力デバイスの自動追従",
+                title: "出力デバイス切り替えの自動追従",
                 subtitle: "OS 側で出力先デバイスを切り替えたときにも自動的に追従する"
             ) {
                 SettingsToggle(isOn: $viewModel.adoptsSystemOutputSelection)
+            }
+            settingsRow(
+                title: "接続したデバイスへの自動切り替え",
+                subtitle: "ヘッドフォンなどを接続すると出力先をそのデバイスへ切り替え、外すと元の出力先へ戻す"
+            ) {
+                SettingsToggle(isOn: $viewModel.followsNewOutputDevices)
             }
             settingsRow(title: "取り込み専用ドライバ", subtitle: "検出されない時は専用ドライバをインストール（管理者権限が必要）してアプリの再起動が必要") {
                 DriverStatusRow(viewModel: viewModel)

@@ -523,6 +523,26 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(SettingsStore(defaults: defaults).adoptsSystemOutputSelection)
     }
 
+    func testFollowsNewOutputDevicesDefaultsToTrueAndPersists() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertTrue(store.followsNewOutputDevices)
+        store.followsNewOutputDevices = false
+        XCTAssertFalse(SettingsStore(defaults: defaults).followsNewOutputDevices)
+    }
+
+    // 項目を持たない保存値を読んでも、ほかの設定は捨てない。
+    func testSavedSettingsWithoutTheFollowingItemKeepOtherSettings() throws {
+        SettingsStore(defaults: defaults).alwaysOnTop = true
+        let data = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let output = try XCTUnwrap(json["output"] as? [String: Any])
+        XCTAssertNil(output["followsNewDevices"], "未設定の間は保存値に現れない")
+
+        let reloaded = SettingsStore(defaults: defaults)
+        XCTAssertTrue(reloaded.alwaysOnTop)
+        XCTAssertTrue(reloaded.followsNewOutputDevices)
+    }
+
     func testLoadingSchemaFromBeforeOutputAdoptionToggleResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
             "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,

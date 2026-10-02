@@ -121,6 +121,16 @@ final class MockAudioDeviceDirectory: AudioDeviceDirectory, @unchecked Sendable 
     }
 
     func selfProcessObjectID(_ token: AudioWorldToken) -> AudioObjectID? { selfProcessObject }
+
+    /// 出力を持つデバイスは deviceIDsByUID に載っているものとして読む。
+    var followableOutputUIDs: Set<String> = []
+
+    func outputDeviceListSnapshot(_ token: AudioWorldToken) -> OutputDeviceListSnapshot {
+        let outputUIDs = Set(deviceIDsByUID.keys)
+        return OutputDeviceListSnapshot(
+            outputUIDs: outputUIDs, followableUIDs: followableOutputUIDs.intersection(outputUIDs)
+        )
+    }
 }
 
 /// 所有権調停役の押し出しは専用キューから届くため、記録を跨スレッドで安全にする。

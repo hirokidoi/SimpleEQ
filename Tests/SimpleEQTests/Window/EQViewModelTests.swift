@@ -1696,6 +1696,7 @@ final class EQViewModelTests: XCTestCase {
             ),
             driverDeviceUID: driverUID,
             adoptsSystemOutputSelection: store.adoptsSystemOutputSelection,
+            followsNewOutputDevices: store.followsNewOutputDevices,
             didAdoptOutputDevice: { _, _ in },
             audioWorld: audioWorld
         )
@@ -1714,6 +1715,80 @@ final class EQViewModelTests: XCTestCase {
 
         XCTAssertEqual(routingEngine.switchCalls.last?.uid, "hdmi-uid", "切替が是正へ届く")
         XCTAssertEqual(directory.currentDefaultOutputID, driverID, "デフォルト出力を掴み直す")
+    }
+
+    func testFollowsNewOutputDevicesPersistsAcrossLaunch() {
+        let store = SettingsStore(defaults: defaults)
+        let audioWorld = makeTestAudioWorld()
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store),
+            audioWorld: audioWorld
+        )
+        XCTAssertTrue(vm.followsNewOutputDevices, "既定は追従する")
+
+        vm.followsNewOutputDevices = false
+        audioWorld.queue.sync {}
+
+        XCTAssertFalse(store.followsNewOutputDevices)
+        let reloadedStore = SettingsStore(defaults: defaults)
+        let relaunched = EQViewModel(
+            engine: AudioEngine(), settings: reloadedStore, outputController: makeOutputController(settings: reloadedStore),
+            audioWorld: makeTestAudioWorld()
+        )
+        XCTAssertFalse(relaunched.followsNewOutputDevices)
+    }
+
+    // 配線が抜けると、設定が次の起動まで効かない。
+    func testFollowsNewOutputDevicesToggleReachesRouting() {
+        let store = SettingsStore(defaults: defaults)
+        let audioWorld = makeTestAudioWorld()
+        let driverUID = DriverConfig.deviceUID
+        let driverID: AudioDeviceID = 40
+        let speakerID: AudioDeviceID = 10
+        let directory = MockAudioDeviceDirectory()
+        directory.hiddenDeviceIDsByUID[driverUID] = driverID
+        directory.uidsByDeviceID[driverID] = driverUID
+        directory.deviceIDsByUID["speaker-uid"] = speakerID
+        directory.uidsByDeviceID[speakerID] = "speaker-uid"
+        directory.followableOutputUIDs = ["headphone-uid", "bluetooth-uid"]
+
+        let routingEngine = MockAudioRoutingEngine()
+        routingEngine.processingState = .active
+        routingEngine.intendedOutputDeviceUID = "speaker-uid"
+        routingEngine.actualOutputDeviceID = speakerID
+        let lifecycle = DriverLifecycleController(directory: directory, targetDeviceUID: driverUID)
+        let outputController = OutputDeviceController(directory: directory, settings: store, targetDeviceUID: driverUID)
+        let reconciler = DeviceRoutingReconciler(
+            directory: directory, engine: routingEngine, driverLifecycle: lifecycle,
+            outputController: outputController,
+            activationCoordinator: AudioActivationCoordinator(
+                engine: routingEngine, driverLifecycle: lifecycle, outputController: outputController
+            ),
+            driverDeviceUID: driverUID,
+            adoptsSystemOutputSelection: store.adoptsSystemOutputSelection,
+            followsNewOutputDevices: store.followsNewOutputDevices,
+            didAdoptOutputDevice: { _, _ in },
+            audioWorld: audioWorld
+        )
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: outputController,
+            audioWorld: audioWorld, deviceRoutingReconciler: reconciler
+        )
+        audioWorld.queue.sync { reconciler.reconcile(trigger: .configurationChange, audioWorld.assumingOnQueue()) }
+
+        vm.followsNewOutputDevices = false
+        directory.deviceIDsByUID["headphone-uid"] = 13
+        directory.uidsByDeviceID[13] = "headphone-uid"
+        audioWorld.queue.sync { reconciler.reconcile(trigger: .configurationChange, audioWorld.assumingOnQueue()) }
+
+        XCTAssertTrue(routingEngine.switchCalls.isEmpty, "切っている間は追わない")
+
+        vm.followsNewOutputDevices = true
+        directory.deviceIDsByUID["bluetooth-uid"] = 14
+        directory.uidsByDeviceID[14] = "bluetooth-uid"
+        audioWorld.queue.sync { reconciler.reconcile(trigger: .configurationChange, audioWorld.assumingOnQueue()) }
+
+        XCTAssertEqual(routingEngine.switchCalls.last?.uid, "bluetooth-uid", "入れ直すと追う")
     }
 
     // 次回起動時の既定値の永続化と、現在のセッションの出力先選択は独立している。

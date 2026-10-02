@@ -98,6 +98,7 @@ enum AudioRequestKey: Hashable {
     case processingSettings
     case outputDeviceSelection
     case systemOutputAdoption
+    case newOutputDeviceFollowing
     /// 意味があるのは最新の1件だけであり、リセットはこの鍵を使わず submitUncoalesced で投入する。
     case diagnosticsSnapshot
     /// デバイス 1 台あたり複数回の問い合わせを伴うため、

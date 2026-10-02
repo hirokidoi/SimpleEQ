@@ -155,6 +155,9 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     private let now: @Sendable () -> Date
 
     private var adoptsSystemOutputSelection: Bool
+    private var followsNewOutputDevices: Bool
+    private var lastOutputDeviceList: OutputDeviceListSnapshot?
+    private var followReturn = OutputDeviceFollowReturn()
     private var lastDriverDeviceID: AudioDeviceID?
     private var coalescingPending = false
     private var listenerBlock: AudioObjectPropertyListenerBlock?
@@ -179,6 +182,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         driverDeviceUID: String,
         initialDriverDeviceID: AudioDeviceID? = nil,
         adoptsSystemOutputSelection: Bool,
+        followsNewOutputDevices: Bool,
         didAdoptOutputDevice: @escaping AdoptedOutputDeviceReporter,
         didObserveDefaultOutputReach: @escaping DefaultOutputReachReporter = { _ in },
         didObserveRingStalled: @escaping RingStallReporter = { _ in },
@@ -197,6 +201,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         self.driverDeviceUID = driverDeviceUID
         self.lastDriverDeviceID = initialDriverDeviceID
         self.adoptsSystemOutputSelection = adoptsSystemOutputSelection
+        self.followsNewOutputDevices = followsNewOutputDevices
         self.didAdoptOutputDevice = didAdoptOutputDevice
         self.didObserveDefaultOutputReach = didObserveDefaultOutputReach
         self.didObserveRingStalled = didObserveRingStalled
@@ -229,6 +234,19 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
 
     func setAdoptsSystemOutputSelection(_ adopts: Bool, _ token: AudioWorldToken) {
         adoptsSystemOutputSelection = adopts
+    }
+
+    func setFollowsNewOutputDevices(_ follows: Bool, _ token: AudioWorldToken) {
+        followsNewOutputDevices = follows
+        if !follows { followReturn.disarm() }
+    }
+
+    func noteLaunchOutputDevice(uid: String?, _ token: AudioWorldToken) {
+        followReturn.launchUID = uid
+    }
+
+    func noteOutputDeviceChosenByUser(_ token: AudioWorldToken) {
+        followReturn.disarm()
     }
 
     func startObserving(_ token: AudioWorldToken) {
@@ -283,6 +301,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         guard airPlayEngaged || systemOutputAdoptionTarget(token) == nil else { return false }
         guard !outputController.restoreObligationNeedsReconcile(token) else { return false }
         guard !airPlayEngaged else { return true }
+        guard newOutputDeviceFollowTarget(directory.outputDeviceListSnapshot(token), token) == nil else { return false }
         guard driverListenerRegistrationMatchesIntent(resolvedDriverDeviceID: resolvedDriverDeviceID) else { return false }
         switch engine.processingState {
         case .active:
@@ -332,6 +351,8 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     private func reconcileAll(_ token: AudioWorldToken) {
         let airPlayBranch = airPlayMode.reconcile(adopts: adoptsSystemOutputSelection, token)
         let driverDeviceID = reconcileDriverDevice(airPlayEngaged: airPlayMode.isEngaged, token)
+        let outputDeviceList = directory.outputDeviceListSnapshot(token)
+        defer { lastOutputDeviceList = outputDeviceList }
         let outputDevice: ReconciledOutputDevice
         let airPlayEndpointDeviceID: AudioDeviceID?
         switch airPlayBranch {
@@ -339,16 +360,21 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
             // AirPlay モードの間は名前の元となる出力先を持たない。
             outputDevice = .observedOnly(engine.currentOutputDeviceID(token))
             airPlayEndpointDeviceID = endpointDeviceID
+            followReturn.disarm()
         case .departed(let resumeCandidateUID):
             airPlayEndpointDeviceID = nil
             if let resumed = resumeAfterAirPlayDeparture(candidateUID: resumeCandidateUID, token) {
                 outputDevice = .nameSource(resumed)
             } else {
-                outputDevice = reconcileRoutingOutsideAirPlay(driverDeviceID: driverDeviceID, token)
+                outputDevice = reconcileRoutingOutsideAirPlay(
+                    driverDeviceID: driverDeviceID, outputDeviceList: outputDeviceList, token
+                )
             }
         case .notApplicable:
             airPlayEndpointDeviceID = nil
-            outputDevice = reconcileRoutingOutsideAirPlay(driverDeviceID: driverDeviceID, token)
+            outputDevice = reconcileRoutingOutsideAirPlay(
+                driverDeviceID: driverDeviceID, outputDeviceList: outputDeviceList, token
+            )
         }
         outputController.reconcileRestoreObligation(token)
         rebindAliveListeners(
@@ -359,9 +385,47 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         reconcileDriverDeviceName(driverDeviceID: driverDeviceID, outputDeviceID: outputDevice.nameSourceDeviceID, token)
     }
 
-    private func reconcileRoutingOutsideAirPlay(driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) -> ReconciledOutputDevice {
+    private func reconcileRoutingOutsideAirPlay(
+        driverDeviceID: AudioDeviceID?, outputDeviceList: OutputDeviceListSnapshot, _ token: AudioWorldToken
+    ) -> ReconciledOutputDevice {
         adoptSystemOutputSelection(driverDeviceID: driverDeviceID, token)
+        followNewOutputDevice(outputDeviceList, token)
         return reconcileOutputDevice(token)
+    }
+
+    // MARK: - 新しく現れた出力デバイスへの追従
+
+    private func newOutputDeviceFollowTarget(
+        _ outputDeviceList: OutputDeviceListSnapshot, _ token: AudioWorldToken
+    ) -> ResolvedOutputDevice? {
+        guard followsNewOutputDevices, engine.processingState == .active else { return nil }
+        guard let uid = outputDeviceToFollow(
+            previous: lastOutputDeviceList, current: outputDeviceList, intendedUID: engine.intendedOutputDeviceUID
+        ) else { return nil }
+        return directory.selectableOutputDevice(forUID: uid, driverDeviceUID: driverDeviceUID, token)
+    }
+
+    private func followNewOutputDevice(_ outputDeviceList: OutputDeviceListSnapshot, _ token: AudioWorldToken) {
+        guard let target = newOutputDeviceFollowTarget(outputDeviceList, token) else { return }
+        let previousUID = engine.intendedOutputDeviceUID
+        guard engine.switchOutputDevice(to: target, token) else { return }
+        followReturn.noteFollowed(to: target.uid, from: previousUID)
+        didAdoptOutputDevice(target, token)
+    }
+
+    private func followReturnTarget(_ token: AudioWorldToken) -> ResolvedOutputDevice? {
+        let candidates = followReturn.candidates(forVanished: engine.intendedOutputDeviceUID)
+        guard !candidates.isEmpty, let intendedUID = engine.intendedOutputDeviceUID,
+              directory.selectableOutputDevice(forUID: intendedUID, driverDeviceUID: driverDeviceUID, token) == nil
+        else { return nil }
+        return directory.firstSelectableOutputDevice(preferring: candidates, driverDeviceUID: driverDeviceUID, token)
+    }
+
+    private func returnFromVanishedFollowedDevice(_ token: AudioWorldToken) -> AudioDeviceID? {
+        guard let target = followReturnTarget(token), engine.switchOutputDevice(to: target, token) else { return nil }
+        followReturn.noteReturned(to: target.uid)
+        didAdoptOutputDevice(target, token)
+        return target.deviceID
     }
 
     /// ユーザー操作・接続断という出来事への応答なので、自動再開の間隔抑制の対象にしない。
@@ -432,6 +496,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
             applyDriverDeviceName(driverDeviceID: driverDeviceID, outputDeviceID: target.deviceID, token)
         }
         outputController.occupyDefaultOutputForDriver(driverDeviceID: driverDeviceID, token)
+        followReturn.disarm()
         didAdoptOutputDevice(target, token)
     }
 
@@ -470,6 +535,9 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     private func reconcileActiveOutputDevice(_ token: AudioWorldToken) -> ReconciledOutputDevice {
         guard let intendedUID = engine.intendedOutputDeviceUID else {
             return .observedOnly(engine.currentOutputDeviceID(token))
+        }
+        if let returned = returnFromVanishedFollowedDevice(token) {
+            return .nameSource(returned)
         }
         guard let currentID = engine.currentOutputDeviceID(token), let currentUID = directory.uid(forDeviceID: currentID, token) else {
             return .nameSource(correctOutputDevice(intendedUID: intendedUID, token))
@@ -528,13 +596,18 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
             return nil
         }
         automaticResumeThrottle.noteSuccess()
+        if let resumedUID = outcome.activeOutputDevice?.uid, resumedUID != followReturn.followedUID {
+            followReturn.noteReturned(to: resumedUID)
+        }
         return outcome.activeOutputDevice?.deviceID
     }
 
-    /// 停止直前のあるべき出力先 → 復帰対象の順に、厳密解決のみを試みる。
+    /// 停止直前のあるべき出力先 → 追従の戻り先 → 復帰対象の順に、厳密解決のみを試みる。
     private func resolveAutomaticResumeTarget(_ token: AudioWorldToken) -> ResolvedOutputDevice? {
         directory.firstSelectableOutputDevice(
-            preferring: [engine.intendedOutputDeviceUIDAtSuspension, outputController.restoreTargetUID],
+            preferring: [engine.intendedOutputDeviceUIDAtSuspension]
+                + followReturn.candidates(forVanished: engine.intendedOutputDeviceUIDAtSuspension)
+                + [outputController.restoreTargetUID],
             driverDeviceUID: driverDeviceUID, token
         )
     }

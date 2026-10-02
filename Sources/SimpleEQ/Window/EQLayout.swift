@@ -39,7 +39,7 @@ enum EQLayout {
     /// Settings ウィンドウの高さの下限。
     static let settingsWindowMinHeight: CGFloat = 460
     /// Settings ウィンドウを開いたときの高さ。
-    static let settingsWindowDefaultHeight: CGFloat = 830
+    static let settingsWindowDefaultHeight: CGFloat = 920
 
     /// Diagnostics ウィンドウの幅 (固定)。値の桁が揃って読めるよう Settings と同じ幅に合わせる。
     static let diagnosticsWindowWidth: CGFloat = settingsWindowWidth
