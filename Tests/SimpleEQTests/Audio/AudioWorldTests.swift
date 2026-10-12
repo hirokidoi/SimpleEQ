@@ -178,10 +178,14 @@ final class PropertyListenerQueueSourceTests: XCTestCase {
     private static let callMarkers = [
         "AudioObjectAddPropertyListenerBlock(", "AudioObjectRemovePropertyListenerBlock(",
         ".addVolumeMuteListener(", ".removeVolumeMuteListener(",
+        ".addDefaultSystemOutputListener(", ".removeDefaultSystemOutputListener(",
     ]
-    // 音量・消音の読み書き口が受け取ったキューを中継するだけの実装。
-    private static let passThroughFunctions = ["func addVolumeMuteListener(", "func removeVolumeMuteListener("]
-    private static let expectedCallCount = 11
+    // デバイスの読み書き口が受け取ったキューを中継するだけの実装。
+    private static let passThroughFunctions = [
+        "func addVolumeMuteListener(", "func removeVolumeMuteListener(",
+        "func addDefaultSystemOutputListener(", "func removeDefaultSystemOutputListener(",
+    ]
+    private static let expectedCallCount = 13
 
     func testEveryListenerRegistrationAndRemovalPassesTheListenerQueue() throws {
         let files = try RepositoryFiles.swiftSourceFiles()

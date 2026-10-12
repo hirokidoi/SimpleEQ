@@ -12,7 +12,7 @@
 #define kSimpleEQRingLayoutVersion ((uint32_t)3)
 
 #define kSimpleEQDriverVersionMajor ((uint16_t)2)
-#define kSimpleEQDriverVersionMinor ((uint16_t)1)
+#define kSimpleEQDriverVersionMinor ((uint16_t)2)
 
 #define kSimpleEQRingMagic ((uint32_t)0x53455152u)
 
@@ -34,6 +34,8 @@
 
 /// UTF-16 コードユニット数。
 #define kSimpleEQNameOverrideMaxLength ((uint32_t)64)
+
+#define kSimpleEQHeadphoneRouteSelector ((uint32_t)'seqH')
 
 #define kSimpleEQDriftCompositionSelector ((uint32_t)'seqD')
 

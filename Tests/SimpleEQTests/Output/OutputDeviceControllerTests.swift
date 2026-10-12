@@ -27,6 +27,21 @@ final class MockAudioDeviceDirectory: AudioDeviceDirectory, @unchecked Sendable 
     /// 表示名の判定へ到達したことを検証側から観測するための記録。
     private(set) var nameByDeviceIDCalls: [AudioDeviceID] = []
     var setNameShouldSucceed = true
+
+    /// 出力先がヘッドホンとみなされるデバイス。
+    var headphoneOutputDeviceIDs: Set<AudioDeviceID> = []
+    /// 記録の無いデバイスは読めないものとして扱う (この名乗りを持たないドライバ)。
+    var headphoneRouteByDeviceID: [AudioDeviceID: Bool] = [:]
+    private(set) var headphoneRouteReadCalls: [AudioDeviceID] = []
+    private(set) var setHeadphoneRouteCalls: [(enabled: Bool, id: AudioDeviceID)] = []
+
+    /// 見え方の書き込み順を検証するための、複数の書き込み先をまたぐ記録。
+    enum PresentationWrite: Equatable {
+        case headphoneRoute(Bool)
+        case name(String)
+        case defaultOutput(AudioDeviceID)
+    }
+    private(set) var presentationWrites: [PresentationWrite] = []
     /// HAL 相当の問い合わせ回数を契機ごとに検証するための呼び出し記録。
     private(set) var deviceIDByUIDCalls: [String] = []
     private(set) var uidByDeviceIDCalls: [AudioDeviceID] = []
@@ -38,11 +53,52 @@ final class MockAudioDeviceDirectory: AudioDeviceDirectory, @unchecked Sendable 
     func setDefaultOutputDeviceID(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
         willSetDefaultOutput?(id)
         setDefaultOutputCalls.append(id)
+        presentationWrites.append(.defaultOutput(id))
         // 失敗を返す回はデフォルト出力を動かさない (実機で結果コードが失敗を返したとき、
         // デフォルト出力は元のままであるため)。
         guard !setDefaultOutputFailingDeviceIDs.contains(id) else { return false }
         currentDefaultOutputID = id
         return true
+    }
+
+    /// サウンドエフェクトの再生装置。nil は読めないものとして扱う。
+    var currentDefaultSystemOutputID: AudioDeviceID?
+    private(set) var setDefaultSystemOutputCalls: [AudioDeviceID] = []
+    private(set) var defaultSystemOutputReadCount = 0
+    private(set) var defaultSystemOutputListeners: [AudioObjectPropertyListenerBlock] = []
+    private(set) var addedDefaultSystemOutputListenerCount = 0
+    private(set) var removedDefaultSystemOutputListenerCount = 0
+
+    func defaultSystemOutputDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
+        defaultSystemOutputReadCount += 1
+        return currentDefaultSystemOutputID
+    }
+
+    @discardableResult
+    func setDefaultSystemOutputDeviceID(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        setDefaultSystemOutputCalls.append(id)
+        currentDefaultSystemOutputID = id
+        return true
+    }
+
+    func addDefaultSystemOutputListener(queue: DispatchQueue, _ block: @escaping AudioObjectPropertyListenerBlock) {
+        addedDefaultSystemOutputListenerCount += 1
+        defaultSystemOutputListeners.append(block)
+    }
+
+    func removeDefaultSystemOutputListener(queue: DispatchQueue, _ block: @escaping AudioObjectPropertyListenerBlock) {
+        removedDefaultSystemOutputListenerCount += 1
+        if !defaultSystemOutputListeners.isEmpty { defaultSystemOutputListeners.removeFirst() }
+    }
+
+    /// OS からの通知を模す。登録中のブロックをすべて呼ぶ。
+    func fireDefaultSystemOutputListeners() {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        for block in defaultSystemOutputListeners { block(1, &address) }
     }
 
     func uid(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> String? {
@@ -76,8 +132,26 @@ final class MockAudioDeviceDirectory: AudioDeviceDirectory, @unchecked Sendable 
     @discardableResult
     func setName(_ name: String, forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
         setNameCalls.append((name: name, id: id))
+        presentationWrites.append(.name(name))
         guard setNameShouldSucceed else { return false }
         namesByDeviceID[id] = name
+        return true
+    }
+
+    func isHeadphoneOutput(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        headphoneOutputDeviceIDs.contains(id)
+    }
+
+    func headphoneRoute(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool? {
+        headphoneRouteReadCalls.append(id)
+        return headphoneRouteByDeviceID[id]
+    }
+
+    @discardableResult
+    func setHeadphoneRoute(_ enabled: Bool, forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        setHeadphoneRouteCalls.append((enabled: enabled, id: id))
+        presentationWrites.append(.headphoneRoute(enabled))
+        headphoneRouteByDeviceID[id] = enabled
         return true
     }
 
@@ -88,9 +162,16 @@ final class MockAudioDeviceDirectory: AudioDeviceDirectory, @unchecked Sendable 
         setHiddenCalls = []
         setNameCalls = []
         nameByDeviceIDCalls = []
+        headphoneRouteReadCalls = []
+        setHeadphoneRouteCalls = []
+        presentationWrites = []
         deviceIDByUIDCalls = []
         uidByDeviceIDCalls = []
         selectableOutputDeviceCalls = []
+        setDefaultSystemOutputCalls = []
+        defaultSystemOutputReadCount = 0
+        addedDefaultSystemOutputListenerCount = 0
+        removedDefaultSystemOutputListenerCount = 0
     }
 
     func resolveHiddenDeviceID(forUID uid: String, _ token: AudioWorldToken) -> AudioDeviceID? {
@@ -1115,6 +1196,20 @@ final class OutputDeviceControllerTests: XCTestCase {
         lifecycle.restoreDisplayNameForCleanExit(testToken)
 
         XCTAssertTrue(mock.setNameCalls.isEmpty)
+        XCTAssertTrue(mock.setHeadphoneRouteCalls.isEmpty)
+    }
+
+    // ヘッドホンの名乗りを先に外してから、表示名を固定名へ戻す。
+    func testRestoreDisplayNameForCleanExitClearsTheHeadphoneRouteBeforeTheFixedName() {
+        let mock = MockAudioDeviceDirectory()
+        mock.deviceIDsByUID[testDriverDeviceUID] = loopbackDeviceID
+        let lifecycle = DriverLifecycleController(directory: mock, targetDeviceUID: testDriverDeviceUID)
+        lifecycle.applyVisibility(hidden: false, deviceID: loopbackDeviceID, testToken)
+        mock.resetCallRecords()
+
+        lifecycle.restoreDisplayNameForCleanExit(testToken)
+
+        XCTAssertEqual(mock.presentationWrites, [.headphoneRoute(false), .name(DriverConfig.deviceName)])
     }
 
     // 復帰に失敗した場合、非表示化を行ってはならない。

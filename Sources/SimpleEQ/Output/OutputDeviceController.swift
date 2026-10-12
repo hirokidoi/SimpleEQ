@@ -1,10 +1,19 @@
 import AudioToolbox
 import CoreAudio
+import Dispatch
 
 protocol AudioDeviceDirectory: Sendable {
     func defaultOutputDeviceID(_ token: AudioWorldToken) -> AudioDeviceID?
     @discardableResult
     func setDefaultOutputDeviceID(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool
+
+    /// サウンドエフェクトの再生装置。
+    func defaultSystemOutputDeviceID(_ token: AudioWorldToken) -> AudioDeviceID?
+    @discardableResult
+    func setDefaultSystemOutputDeviceID(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool
+    func addDefaultSystemOutputListener(queue: DispatchQueue, _ block: @escaping AudioObjectPropertyListenerBlock)
+    func removeDefaultSystemOutputListener(queue: DispatchQueue, _ block: @escaping AudioObjectPropertyListenerBlock)
+
     func uid(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> String?
     func deviceID(forUID uid: String, _ token: AudioWorldToken) -> AudioDeviceID?
 
@@ -26,6 +35,14 @@ protocol AudioDeviceDirectory: Sendable {
     /// ドライバが申告するカスタムプロパティ経由でのみ書き換える。
     @discardableResult
     func setName(_ name: String, forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool
+
+    func isHeadphoneOutput(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool
+
+    /// ドライバが申告するカスタムプロパティ経由で読み書きする。読めなければ nil。
+    func headphoneRoute(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool?
+
+    @discardableResult
+    func setHeadphoneRoute(_ enabled: Bool, forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool
 
     func containsDriverDevice(_ id: AudioDeviceID, driverDeviceUID: String, _ token: AudioWorldToken) -> Bool
 
@@ -55,11 +72,45 @@ extension AudioDeviceDirectory {
 }
 
 final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
+    private static let defaultSystemOutputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+
     func defaultOutputDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
+        systemDeviceID(kAudioHardwarePropertyDefaultOutputDevice)
+    }
+
+    @discardableResult
+    func setDefaultOutputDeviceID(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        setSystemDeviceID(id, kAudioHardwarePropertyDefaultOutputDevice)
+    }
+
+    func defaultSystemOutputDeviceID(_ token: AudioWorldToken) -> AudioDeviceID? {
+        systemDeviceID(kAudioHardwarePropertyDefaultSystemOutputDevice)
+    }
+
+    @discardableResult
+    func setDefaultSystemOutputDeviceID(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        setSystemDeviceID(id, kAudioHardwarePropertyDefaultSystemOutputDevice)
+    }
+
+    func addDefaultSystemOutputListener(queue: DispatchQueue, _ block: @escaping AudioObjectPropertyListenerBlock) {
+        var addr = Self.defaultSystemOutputAddress
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, queue, block)
+    }
+
+    func removeDefaultSystemOutputListener(queue: DispatchQueue, _ block: @escaping AudioObjectPropertyListenerBlock) {
+        var addr = Self.defaultSystemOutputAddress
+        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, queue, block)
+    }
+
+    private func systemDeviceID(_ selector: AudioObjectPropertySelector) -> AudioDeviceID? {
         var id: AudioDeviceID = 0
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
@@ -67,11 +118,10 @@ final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
         return st == noErr ? id : nil
     }
 
-    @discardableResult
-    func setDefaultOutputDeviceID(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+    private func setSystemDeviceID(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> Bool {
         var v = id
         var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
@@ -154,6 +204,23 @@ final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
         setCustomProperty(DriverConfig.nameOverrideSelector, name as CFString, forDeviceID: id, token)
     }
 
+    func isHeadphoneOutput(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        SimpleEQ.isHeadphoneOutput(id, token)
+    }
+
+    func headphoneRoute(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool? {
+        guard let value = deviceCustomProperty(DriverConfig.headphoneRouteSelector, forDeviceID: id, token),
+              CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+        return CFBooleanGetValue((value as! CFBoolean))
+    }
+
+    @discardableResult
+    func setHeadphoneRoute(_ enabled: Bool, forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        setCustomProperty(
+            DriverConfig.headphoneRouteSelector, enabled ? kCFBooleanTrue : kCFBooleanFalse, forDeviceID: id, token
+        )
+    }
+
     func isHidden(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> Bool? {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyIsHidden,
@@ -195,6 +262,7 @@ final class DriverLifecycleController: @unchecked Sendable {
     /// 可視性を所有していないセッションは何もしない (無条件に書き換えると他セッションが使用中のデバイスの名前を横から戻す)。
     func restoreDisplayNameForCleanExit(_ token: AudioWorldToken) {
         guard resolvedDeviceID != nil, let id = resolveDeviceID(token) else { return }
+        directory.setHeadphoneRoute(false, forDeviceID: id, token)
         directory.setName(DriverConfig.deviceName, forDeviceID: id, token)
     }
 
@@ -361,8 +429,17 @@ final class OutputDeviceController: @unchecked Sendable {
 
     /// 読み取れない場合は安全側 (届いているとみなす) に倒す。
     func defaultOutputReachesDriver(_ token: AudioWorldToken) -> Bool {
+        defaultOutputReach(token) ?? true
+    }
+
+    /// 読み取れない場合は偽に倒す (内包する Aggregate も届いているとみなす)。
+    func defaultOutputConfirmedReachingDriver(_ token: AudioWorldToken) -> Bool {
+        defaultOutputReach(token) ?? false
+    }
+
+    private func defaultOutputReach(_ token: AudioWorldToken) -> Bool? {
         guard let id = directory.defaultOutputDeviceID(token),
-              let uid = directory.uid(forDeviceID: id, token) else { return true }
+              let uid = directory.uid(forDeviceID: id, token) else { return nil }
         return reachesDriver(deviceID: id, uid: uid, driverDeviceUID: targetDeviceUID, token)
     }
 

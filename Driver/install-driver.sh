@@ -89,6 +89,7 @@ killall coreaudiod || true
 # 登録が積み上がるほどあらゆる要求が重くなり、やがて飽和して音声系全体が応答しなくなる。
 # 登録はこのヘルパに紐づくため coreaudiod を作り直しても解消しない。
 # ここで落として増加の起点を一定に保つ。launchd が管理しているため停止は一時的。
-killall AirPlayXPCHelper || true
+# 通常の終了シグナルは接続中を理由に先送りされ落ちないため、強制終了する。
+killall -9 AirPlayXPCHelper || true
 
 echo "SimpleEQ 専用ドライバをインストールしました。音声関連のシステムプロセスを再起動しました。"

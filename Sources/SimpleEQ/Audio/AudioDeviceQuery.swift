@@ -92,17 +92,21 @@ func outputSafetyOffsetFrames(_ id: AudioDeviceID, _ token: AudioWorldToken) -> 
     readUInt32Property(id, kAudioDevicePropertySafetyOffset, scope: kAudioObjectPropertyScopeOutput)
 }
 
-/// 最初の出力ストリームの遅延 (フレーム)。
-func firstOutputStreamLatencyFrames(_ id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? {
+private func outputStreamIDs(_ id: AudioDeviceID) -> [AudioStreamID] {
     var streamsAddr = AudioObjectPropertyAddress(
         mSelector: kAudioDevicePropertyStreams, mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain
     )
     var size: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(id, &streamsAddr, 0, nil, &size) == noErr else { return nil }
+    guard AudioObjectGetPropertyDataSize(id, &streamsAddr, 0, nil, &size) == noErr else { return [] }
     var streams = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
-    guard let first = streams.indices.first,
-          AudioObjectGetPropertyData(id, &streamsAddr, 0, nil, &size, &streams) == noErr else { return nil }
-    return readUInt32Property(streams[first], kAudioStreamPropertyLatency, scope: kAudioObjectPropertyScopeGlobal)
+    guard AudioObjectGetPropertyData(id, &streamsAddr, 0, nil, &size, &streams) == noErr else { return [] }
+    return streams
+}
+
+/// 最初の出力ストリームの遅延 (フレーム)。
+func firstOutputStreamLatencyFrames(_ id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? {
+    guard let first = outputStreamIDs(id).first else { return nil }
+    return readUInt32Property(first, kAudioStreamPropertyLatency, scope: kAudioObjectPropertyScopeGlobal)
 }
 
 func processObjectID(forPID pid: pid_t, _ token: AudioWorldToken) -> AudioObjectID? {
@@ -163,6 +167,27 @@ func transportType(_ id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? {
     var size = UInt32(MemoryLayout<UInt32>.size)
     guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return nil }
     return value
+}
+
+// OS 定義値。
+let dataSourceHeadphones: UInt32 = 0x6864_706E // 'hdpn'
+// USB Audio 規格の定義値。
+let terminalTypeUSBHeadphones: UInt32 = 0x0302
+
+func outputIsHeadphones(dataSource: UInt32?, terminalTypes: [UInt32]) -> Bool {
+    dataSource == dataSourceHeadphones
+        || terminalTypes.contains { $0 == kAudioStreamTerminalTypeHeadphones || $0 == terminalTypeUSBHeadphones }
+}
+
+/// 読めない値はヘッドホンの根拠にしない。
+func isHeadphoneOutput(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+    let terminalTypes = outputStreamIDs(id).compactMap {
+        readUInt32Property($0, kAudioStreamPropertyTerminalType, scope: kAudioObjectPropertyScopeGlobal)
+    }
+    return outputIsHeadphones(
+        dataSource: readUInt32Property(id, kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput),
+        terminalTypes: terminalTypes
+    )
 }
 
 /// AirPlay のデバイスは出力先の選択がその端末から外れると HAL から消えるため、出力先として使わない。
@@ -321,6 +346,21 @@ func setDeviceCustomProperty(
     return withUnsafeMutablePointer(to: &boxed) {
         AudioObjectSetPropertyData(id, &addr, 0, nil, size, UnsafeMutableRawPointer($0)) == noErr
     }
+}
+
+func deviceCustomProperty(
+    _ selector: AudioObjectPropertySelector, forDeviceID id: AudioDeviceID, _ token: AudioWorldToken
+) -> CFTypeRef? {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var value: Unmanaged<CFTypeRef>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFTypeRef>?>.size)
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return nil }
+    // Get は所有権付きで返る。
+    return value?.takeRetainedValue()
 }
 
 // デバイス側のプロパティ変更であり、アプリ終了後も値が残りうる。

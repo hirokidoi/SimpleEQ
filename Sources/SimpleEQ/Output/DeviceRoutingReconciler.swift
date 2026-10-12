@@ -153,10 +153,12 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     private let didObserveRingStalled: RingStallReporter
     private let airPlayMode: AirPlayModeReconciling
     private let now: @Sendable () -> Date
+    private let soundEffectsOutputKeeper: SoundEffectsOutputKeeper
 
     private var adoptsSystemOutputSelection: Bool
     private var followsNewOutputDevices: Bool
     private var lastOutputDeviceList: OutputDeviceListSnapshot?
+    private var defaultOutputConfirmedReachingDriverOnLastPass = false
     private var followReturn = OutputDeviceFollowReturn()
     private var lastDriverDeviceID: AudioDeviceID?
     private var coalescingPending = false
@@ -206,11 +208,15 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         self.didObserveDefaultOutputReach = didObserveDefaultOutputReach
         self.didObserveRingStalled = didObserveRingStalled
         self.audioWorld = audioWorld
-        self.schedule = schedule ?? { after, work in
+        let resolvedSchedule: DeviceRoutingScheduler = schedule ?? { after, work in
             audioWorld.queue.asyncAfter(deadline: .now() + after) {
                 work(audioWorld.assumingOnQueue())
             }
         }
+        self.schedule = resolvedSchedule
+        self.soundEffectsOutputKeeper = SoundEffectsOutputKeeper(
+            directory: directory, audioWorld: audioWorld, driverDeviceUID: driverDeviceUID, schedule: resolvedSchedule
+        )
     }
 
     /// 構成変更・検算・明示操作のいずれからも通る単一の入口。冪等。
@@ -298,10 +304,11 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
             resolvedDriverDeviceID: resolvedDriverDeviceID, airPlayEngaged: airPlayEngaged, token
         ) else { return false }
         // AirPlay モードでは引き取り・出力経路・ドライバのリスナーをあるべき状態として問わない。
-        guard airPlayEngaged || systemOutputAdoptionTarget(token) == nil else { return false }
+        let outputDeviceList = directory.outputDeviceListSnapshot(token)
+        guard airPlayEngaged || systemOutputAdoption(outputDeviceList, token) == nil else { return false }
         guard !outputController.restoreObligationNeedsReconcile(token) else { return false }
         guard !airPlayEngaged else { return true }
-        guard newOutputDeviceFollowTarget(directory.outputDeviceListSnapshot(token), token) == nil else { return false }
+        guard newOutputDeviceFollowTarget(outputDeviceList, token) == nil else { return false }
         guard driverListenerRegistrationMatchesIntent(resolvedDriverDeviceID: resolvedDriverDeviceID) else { return false }
         switch engine.processingState {
         case .active:
@@ -352,7 +359,10 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         let airPlayBranch = airPlayMode.reconcile(adopts: adoptsSystemOutputSelection, token)
         let driverDeviceID = reconcileDriverDevice(airPlayEngaged: airPlayMode.isEngaged, token)
         let outputDeviceList = directory.outputDeviceListSnapshot(token)
-        defer { lastOutputDeviceList = outputDeviceList }
+        defer {
+            lastOutputDeviceList = outputDeviceList
+            defaultOutputConfirmedReachingDriverOnLastPass = outputController.defaultOutputConfirmedReachingDriver(token)
+        }
         let outputDevice: ReconciledOutputDevice
         let airPlayEndpointDeviceID: AudioDeviceID?
         switch airPlayBranch {
@@ -388,20 +398,24 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     private func reconcileRoutingOutsideAirPlay(
         driverDeviceID: AudioDeviceID?, outputDeviceList: OutputDeviceListSnapshot, _ token: AudioWorldToken
     ) -> ReconciledOutputDevice {
-        adoptSystemOutputSelection(driverDeviceID: driverDeviceID, token)
+        adoptSystemOutputSelection(driverDeviceID: driverDeviceID, outputDeviceList: outputDeviceList, token)
         followNewOutputDevice(outputDeviceList, token)
         return reconcileOutputDevice(token)
     }
 
     // MARK: - 新しく現れた出力デバイスへの追従
 
+    private func appearedOutputDeviceUID(_ outputDeviceList: OutputDeviceListSnapshot) -> String? {
+        outputDeviceToFollow(
+            previous: lastOutputDeviceList, current: outputDeviceList, intendedUID: engine.intendedOutputDeviceUID
+        )
+    }
+
     private func newOutputDeviceFollowTarget(
         _ outputDeviceList: OutputDeviceListSnapshot, _ token: AudioWorldToken
     ) -> ResolvedOutputDevice? {
         guard followsNewOutputDevices, engine.processingState == .active else { return nil }
-        guard let uid = outputDeviceToFollow(
-            previous: lastOutputDeviceList, current: outputDeviceList, intendedUID: engine.intendedOutputDeviceUID
-        ) else { return nil }
+        guard let uid = appearedOutputDeviceUID(outputDeviceList) else { return nil }
         return directory.selectableOutputDevice(forUID: uid, driverDeviceUID: driverDeviceUID, token)
     }
 
@@ -446,7 +460,7 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
     ) {
         guard let driverDeviceID else { return }
         guard SuspensionPolicy.writesDriverDeviceName(engine.processingState) else { return }
-        guard applyDriverDeviceName(driverDeviceID: driverDeviceID, outputDeviceID: outputDeviceID, token) else { return }
+        guard applyDriverDevicePresentation(driverDeviceID: driverDeviceID, outputDeviceID: outputDeviceID, token) else { return }
         guard let handoffDeviceID = driverDeviceNameHandoffTarget(
             outputDeviceID: outputDeviceID,
             defaultOutputConfirmedAsDriver: outputController.defaultOutputConfirmedAsDriver(token)
@@ -454,8 +468,33 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         republishDriverDeviceNameToSystemUI(handoffDeviceID: handoffDeviceID, driverDeviceID: driverDeviceID, token)
     }
 
+    /// ヘッドホン状態は表示名より先に書く。表示名の書き換えと受け渡しが OS の表示を読み直させる契機になる。
     /// - Returns: 表示名を書き換えたか。
     @discardableResult
+    private func applyDriverDevicePresentation(
+        driverDeviceID: AudioDeviceID, outputDeviceID: AudioDeviceID?, _ token: AudioWorldToken
+    ) -> Bool {
+        applyDriverHeadphoneRoute(driverDeviceID: driverDeviceID, outputDeviceID: outputDeviceID, token)
+        return applyDriverDeviceName(driverDeviceID: driverDeviceID, outputDeviceID: outputDeviceID, token)
+    }
+
+    /// 読めない間は書かない (この名乗りを持たないドライバは読めない)。
+    private func applyDriverHeadphoneRoute(
+        driverDeviceID: AudioDeviceID, outputDeviceID: AudioDeviceID?, _ token: AudioWorldToken
+    ) {
+        guard let current = directory.headphoneRoute(forDeviceID: driverDeviceID, token) else { return }
+        let intended = outputDeviceID.map { directory.isHeadphoneOutput($0, token) } ?? false
+        guard current != intended else { return }
+        guard intended else {
+            directory.setHeadphoneRoute(false, forDeviceID: driverDeviceID, token)
+            return
+        }
+        // 内蔵ヘッドホンと名乗ると、OS がサウンドエフェクトの再生装置を専用ドライバへ移す。
+        soundEffectsOutputKeeper.keepingSoundEffectsOutput(across: {
+            directory.setHeadphoneRoute(true, forDeviceID: driverDeviceID, token)
+        }, token)
+    }
+
     private func applyDriverDeviceName(
         driverDeviceID: AudioDeviceID, outputDeviceID: AudioDeviceID?, _ token: AudioWorldToken
     ) -> Bool {
@@ -480,23 +519,50 @@ final class DeviceRoutingReconciler: @unchecked Sendable {
         outputController.occupyDefaultOutputForDriver(token)
     }
 
-    private func systemOutputAdoptionTarget(_ token: AudioWorldToken) -> ResolvedOutputDevice? {
-        guard adoptsSystemOutputSelection, engine.processingState == .active else { return nil }
+    private struct SystemOutputAdoption {
+        let target: ResolvedOutputDevice
+        let movedToAppearedDevice: Bool
+    }
+
+    private func systemOutputAdoption(
+        _ outputDeviceList: OutputDeviceListSnapshot, _ token: AudioWorldToken
+    ) -> SystemOutputAdoption? {
+        guard engine.processingState == .active else { return nil }
+        let appearedUID = defaultOutputConfirmedReachingDriverOnLastPass ? appearedOutputDeviceUID(outputDeviceList) : nil
+        guard adoptsSystemOutputSelection || appearedUID != nil else { return nil }
         guard !outputController.defaultOutputReachesDriver(token) else { return nil }
         guard let currentID = directory.defaultOutputDeviceID(token),
               let currentUID = directory.uid(forDeviceID: currentID, token) else { return nil }
-        return directory.selectableOutputDevice(forUID: currentUID, driverDeviceUID: driverDeviceUID, token)
+        // ドライバが持っていた既定出力を OS が現れた端子へ移す場合がある。この移動だけは引き継ぎ設定に関わらず扱う。
+        let movedToAppearedDevice = currentUID == appearedUID
+        guard adoptsSystemOutputSelection || movedToAppearedDevice,
+              let target = directory.selectableOutputDevice(forUID: currentUID, driverDeviceUID: driverDeviceUID, token)
+        else { return nil }
+        return SystemOutputAdoption(target: target, movedToAppearedDevice: movedToAppearedDevice)
     }
 
     /// 掴み直しを先に行うと、出力先が切り替わるまでの間、引き継ぐ前の出力先から音が出る。
-    private func adoptSystemOutputSelection(driverDeviceID: AudioDeviceID?, _ token: AudioWorldToken) {
-        guard let target = systemOutputAdoptionTarget(token) else { return }
+    private func adoptSystemOutputSelection(
+        driverDeviceID: AudioDeviceID?, outputDeviceList: OutputDeviceListSnapshot, _ token: AudioWorldToken
+    ) {
+        guard let adoption = systemOutputAdoption(outputDeviceList, token) else { return }
+        let target = adoption.target
+        let movedToAppearedDevice = adoption.movedToAppearedDevice
+        if movedToAppearedDevice, !followsNewOutputDevices {
+            outputController.occupyDefaultOutputForDriver(driverDeviceID: driverDeviceID, token)
+            return
+        }
+        let previousUID = engine.intendedOutputDeviceUID
         guard engine.switchOutputDevice(to: target, token) else { return }
         if let driverDeviceID {
-            applyDriverDeviceName(driverDeviceID: driverDeviceID, outputDeviceID: target.deviceID, token)
+            applyDriverDevicePresentation(driverDeviceID: driverDeviceID, outputDeviceID: target.deviceID, token)
         }
         outputController.occupyDefaultOutputForDriver(driverDeviceID: driverDeviceID, token)
-        followReturn.disarm()
+        if movedToAppearedDevice {
+            followReturn.noteFollowed(to: target.uid, from: previousUID)
+        } else {
+            followReturn.disarm()
+        }
         didAdoptOutputDevice(target, token)
     }
 

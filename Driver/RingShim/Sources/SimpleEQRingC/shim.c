@@ -340,6 +340,11 @@ uint32_t simpleeq_driver_name_override_selector(void)
     return kSimpleEQNameOverrideSelector;
 }
 
+uint32_t simpleeq_driver_headphone_route_selector(void)
+{
+    return kSimpleEQHeadphoneRouteSelector;
+}
+
 uint32_t simpleeq_driver_name_override_max_length(void)
 {
     return kSimpleEQNameOverrideMaxLength;

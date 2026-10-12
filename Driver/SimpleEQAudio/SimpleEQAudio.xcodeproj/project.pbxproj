@@ -241,22 +241,18 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_OBJC_WEAK = YES;
-				// アプリ側 (project.yml) と同じ ad-hoc "Sign to Run Locally" (バイナリ配布は行わず署名/公証なし)。
+				// バイナリ配布は行わないため ad-hoc 署名 (署名・公証なし)。
 				CODE_SIGN_STYLE = Manual;
 				CODE_SIGN_IDENTITY = "-";
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"$(inherited)",
 					"DEBUG=0",
 				);
-				// Driver/Shared/SimpleEQRingLayout.h (共有定義ヘッダ) を参照する。
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/../Shared";
 				INFOPLIST_FILE = SimpleEQAudio/SimpleEQAudio.plist;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Audio/Plug-Ins/HAL";
-				// アプリ本体 (project.yml) と同一。ドライバはアプリと組で配布・運用され、下限を別々に
-				// 管理する理由が無い。
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 2.1;
-				// SimpleEQAudio.c の kPlugIn_BundleID マクロと同一値に統一している。
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hirokidoi.simpleeq.driver;
 				PRODUCT_NAME = SimpleEQAudio;
 				WRAPPER_EXTENSION = driver;
@@ -278,7 +274,7 @@
 				INFOPLIST_FILE = SimpleEQAudio/SimpleEQAudio.plist;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Audio/Plug-Ins/HAL";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 2.1;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hirokidoi.simpleeq.driver;
 				PRODUCT_NAME = SimpleEQAudio;
 				WRAPPER_EXTENSION = driver;

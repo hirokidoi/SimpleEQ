@@ -74,6 +74,8 @@ enum
     kObjectID_Stream_Output         = 4,
     kObjectID_Volume_Output_Master  = 5,
     kObjectID_Mute_Output_Master    = 6,
+    // HAL は後からコントロール一覧を読み直さず、構成変更は再生中のクライアントを止める。常に置き、候補の有無で切り替える。
+    kObjectID_DataSource_Output     = 7,
 };
 
 enum
@@ -121,6 +123,14 @@ static Boolean     gBox_Acquired = true;
 
 static Boolean     gDevice_IsHidden     = true;
 static CFStringRef gDevice_NameOverride = NULL;
+static Boolean     gDevice_HeadphoneRoute = false;
+
+// OS が出力をヘッドホンと判定する組は、built-in の transport とこのデータソース。
+#define kDataSource_Headphones ((UInt32)'hdpn')
+
+// プラグイン向けヘッダには無い HAL 側の定義値 (AudioHardware.h)。
+#define kDevicePropertyDataSource  ((AudioObjectPropertySelector)'ssrc')
+#define kDevicePropertyDataSources ((AudioObjectPropertySelector)'ssc#')
 
 static pthread_mutex_t gDevice_IOMutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -144,6 +154,7 @@ static const struct ObjectInfo kDevice_ObjectList[] = {
     { kObjectID_Stream_Output,        kObjectType_Stream,  kAudioObjectPropertyScopeOutput },
     { kObjectID_Volume_Output_Master, kObjectType_Control, kAudioObjectPropertyScopeOutput },
     { kObjectID_Mute_Output_Master,   kObjectType_Control, kAudioObjectPropertyScopeOutput },
+    { kObjectID_DataSource_Output,    kObjectType_Control, kAudioObjectPropertyScopeOutput },
 };
 static const UInt32 kDevice_ObjectListSize = sizeof(kDevice_ObjectList) / sizeof(struct ObjectInfo);
 
@@ -1039,6 +1050,14 @@ static CFStringRef CurrentDeviceName_Locked(void)
     return (CFStringRef)CFRetain(gDevice_NameOverride != NULL ? gDevice_NameOverride : CFSTR(kSimpleEQDeviceName));
 }
 
+static UInt32 CurrentTransportType(void)
+{
+    pthread_mutex_lock(&gPlugIn_StateMutex);
+    UInt32 theTransport = gDevice_HeadphoneRoute ? kAudioDeviceTransportTypeBuiltIn : kAudioDeviceTransportTypeVirtual;
+    pthread_mutex_unlock(&gPlugIn_StateMutex);
+    return theTransport;
+}
+
 //==================================================================================================
 #pragma mark -
 #pragma mark AudioServerPlugInDriverInterface Implementation
@@ -1346,6 +1365,7 @@ static Boolean SimpleEQAudio_HasProperty(AudioServerPlugInDriverRef inDriver, Au
             break;
         case kObjectID_Volume_Output_Master:
         case kObjectID_Mute_Output_Master:
+        case kObjectID_DataSource_Output:
             theAnswer = SimpleEQAudio_HasControlProperty(inDriver, inObjectID, inClientProcessID, inAddress);
             break;
     };
@@ -1377,6 +1397,7 @@ static OSStatus SimpleEQAudio_IsPropertySettable(AudioServerPlugInDriverRef inDr
             break;
         case kObjectID_Volume_Output_Master:
         case kObjectID_Mute_Output_Master:
+        case kObjectID_DataSource_Output:
             theAnswer = SimpleEQAudio_IsControlPropertySettable(inDriver, inObjectID, inClientProcessID, inAddress, outIsSettable);
             break;
         default:
@@ -1411,6 +1432,7 @@ static OSStatus SimpleEQAudio_GetPropertyDataSize(AudioServerPlugInDriverRef inD
             break;
         case kObjectID_Volume_Output_Master:
         case kObjectID_Mute_Output_Master:
+        case kObjectID_DataSource_Output:
             theAnswer = SimpleEQAudio_GetControlPropertyDataSize(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, outDataSize);
             break;
         default:
@@ -1446,6 +1468,7 @@ static OSStatus SimpleEQAudio_GetPropertyData(AudioServerPlugInDriverRef inDrive
             break;
         case kObjectID_Volume_Output_Master:
         case kObjectID_Mute_Output_Master:
+        case kObjectID_DataSource_Output:
             theAnswer = SimpleEQAudio_GetControlPropertyData(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, inDataSize, outDataSize, outData);
             break;
         default:
@@ -1482,6 +1505,7 @@ static OSStatus SimpleEQAudio_SetPropertyData(AudioServerPlugInDriverRef inDrive
             break;
         case kObjectID_Volume_Output_Master:
         case kObjectID_Mute_Output_Master:
+        case kObjectID_DataSource_Output:
             theAnswer = SimpleEQAudio_SetControlPropertyData(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, inDataSize, inData, &theNumberPropertiesChanged, theChangedAddresses);
             break;
         default:
@@ -1860,7 +1884,7 @@ static OSStatus SimpleEQAudio_GetBoxPropertyData(AudioServerPlugInDriverRef inDr
         case kAudioBoxPropertyBoxUID:
             *((CFStringRef*)outData) = CFSTR(kBox_UID); *outDataSize = sizeof(CFStringRef); break;
         case kAudioBoxPropertyTransportType:
-            *((UInt32*)outData) = kAudioDeviceTransportTypeVirtual; *outDataSize = sizeof(UInt32); break;
+            *((UInt32*)outData) = CurrentTransportType(); *outDataSize = sizeof(UInt32); break;
         case kAudioBoxPropertyHasAudio:
             *((UInt32*)outData) = 1; *outDataSize = sizeof(UInt32); break;
         case kAudioBoxPropertyHasVideo:
@@ -1978,10 +2002,12 @@ Done:
 #define kAudioDevicePropertyCustom_VisibilityOverride ((AudioObjectPropertySelector)kSimpleEQVisibilityOverrideSelector)
 
 #define kAudioDevicePropertyCustom_NameOverride ((AudioObjectPropertySelector)kSimpleEQNameOverrideSelector)
+#define kAudioDevicePropertyCustom_HeadphoneRoute ((AudioObjectPropertySelector)kSimpleEQHeadphoneRouteSelector)
 
 static const AudioServerPlugInCustomPropertyInfo kDevice_CustomPropertyList[] = {
     { kAudioDevicePropertyCustom_VisibilityOverride, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kAudioDevicePropertyCustom_NameOverride,       kAudioServerPlugInCustomPropertyDataTypeCFString,       kAudioServerPlugInCustomPropertyDataTypeNone },
+    { kAudioDevicePropertyCustom_HeadphoneRoute,     kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQDriftCompositionSelector,             kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQMixerGainSelector,                    kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQOwnershipSelector,                    kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
@@ -2021,6 +2047,7 @@ static Boolean SimpleEQAudio_HasDeviceProperty(AudioServerPlugInDriverRef inDriv
         case kAudioDevicePropertyIcon:
         case kAudioDevicePropertyCustom_VisibilityOverride:
         case kAudioDevicePropertyCustom_NameOverride:
+        case kAudioDevicePropertyCustom_HeadphoneRoute:
         case kSimpleEQDriftCompositionSelector:
         case kSimpleEQMixerGainSelector:
         case kSimpleEQOwnershipSelector:
@@ -2087,6 +2114,7 @@ static OSStatus SimpleEQAudio_IsDevicePropertySettable(AudioServerPlugInDriverRe
         case kAudioDevicePropertyNominalSampleRate:
         case kAudioDevicePropertyCustom_VisibilityOverride:
         case kAudioDevicePropertyCustom_NameOverride:
+        case kAudioDevicePropertyCustom_HeadphoneRoute:
         case kSimpleEQDriftCompositionSelector:
         case kSimpleEQMixerGainSelector:
         case kSimpleEQOwnershipSelector:
@@ -2144,6 +2172,7 @@ static OSStatus SimpleEQAudio_GetDevicePropertyDataSize(AudioServerPlugInDriverR
         case kAudioDevicePropertyIcon: *outDataSize = sizeof(CFURLRef); break;
         case kAudioObjectPropertyCustomPropertyInfoList: *outDataSize = kDevice_CustomPropertyListBytes; break;
         case kAudioDevicePropertyCustom_VisibilityOverride: *outDataSize = sizeof(CFPropertyListRef); break;
+        case kAudioDevicePropertyCustom_HeadphoneRoute: *outDataSize = sizeof(CFPropertyListRef); break;
         case kAudioDevicePropertyCustom_NameOverride: *outDataSize = sizeof(CFStringRef); break;
         case kSimpleEQDriftCompositionSelector: *outDataSize = sizeof(CFPropertyListRef); break;
         case kSimpleEQMixerGainSelector: *outDataSize = sizeof(CFPropertyListRef); break;
@@ -2245,7 +2274,7 @@ static OSStatus SimpleEQAudio_GetDevicePropertyData(AudioServerPlugInDriverRef i
 
         case kAudioDevicePropertyTransportType:
             FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kAudioDevicePropertyTransportType");
-            *((UInt32*)outData) = kAudioDeviceTransportTypeVirtual;
+            *((UInt32*)outData) = CurrentTransportType();
             *outDataSize = sizeof(UInt32);
             break;
 
@@ -2344,6 +2373,14 @@ static OSStatus SimpleEQAudio_GetDevicePropertyData(AudioServerPlugInDriverRef i
             FailWithAction(inDataSize < kDevice_CustomPropertyListBytes, theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kAudioObjectPropertyCustomPropertyInfoList");
             memcpy(outData, kDevice_CustomPropertyList, kDevice_CustomPropertyListBytes);
             *outDataSize = kDevice_CustomPropertyListBytes;
+            break;
+
+        case kAudioDevicePropertyCustom_HeadphoneRoute:
+            FailWithAction(inDataSize < sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kAudioDevicePropertyCustom_HeadphoneRoute");
+            pthread_mutex_lock(&gPlugIn_StateMutex);
+            *((CFPropertyListRef*)outData) = gDevice_HeadphoneRoute ? kCFBooleanTrue : kCFBooleanFalse;
+            pthread_mutex_unlock(&gPlugIn_StateMutex);
+            *outDataSize = sizeof(CFPropertyListRef);
             break;
 
         case kAudioDevicePropertyCustom_VisibilityOverride:
@@ -2465,6 +2502,38 @@ static OSStatus SimpleEQAudio_SetDevicePropertyData(AudioServerPlugInDriverRef i
             }
             break;
 
+        case kAudioDevicePropertyCustom_HeadphoneRoute:
+            FailWithAction(inDataSize != sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_SetDevicePropertyData: wrong size for kAudioDevicePropertyCustom_HeadphoneRoute");
+            FailWithAction(*((const CFPropertyListRef*)inData) == NULL || CFGetTypeID(*((const CFPropertyListRef*)inData)) != CFBooleanGetTypeID(), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kAudioDevicePropertyCustom_HeadphoneRoute expects a CFBooleanRef");
+            {
+                Boolean theNewRoute = CFBooleanGetValue((CFBooleanRef)(*((const CFPropertyListRef*)inData)));
+                pthread_mutex_lock(&gPlugIn_StateMutex);
+                Boolean theChanged = (gDevice_HeadphoneRoute != theNewRoute);
+                gDevice_HeadphoneRoute = theNewRoute;
+                pthread_mutex_unlock(&gPlugIn_StateMutex);
+                if(theChanged)
+                {
+                    AudioObjectPropertyAddress theDeviceAddresses[] = {
+                        { kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain },
+                        { kDevicePropertyDataSource,  kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain },
+                        { kDevicePropertyDataSources, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain },
+                    };
+                    gPlugIn_Host->PropertiesChanged(gPlugIn_Host, kObjectID_Device, sizeof(theDeviceAddresses) / sizeof(theDeviceAddresses[0]), theDeviceAddresses);
+                    AudioObjectPropertyAddress theBoxAddress = { kAudioBoxPropertyTransportType, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+                    gPlugIn_Host->PropertiesChanged(gPlugIn_Host, kObjectID_Box, 1, &theBoxAddress);
+                    AudioObjectPropertyAddress theControlAddresses[] = {
+                        { kAudioSelectorControlPropertyCurrentItem,    kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain },
+                        { kAudioSelectorControlPropertyAvailableItems, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain },
+                    };
+                    gPlugIn_Host->PropertiesChanged(gPlugIn_Host, kObjectID_DataSource_Output, sizeof(theControlAddresses) / sizeof(theControlAddresses[0]), theControlAddresses);
+                    *outNumberPropertiesChanged = 1;
+                    outChangedAddresses[0].mSelector = kAudioDevicePropertyCustom_HeadphoneRoute;
+                    outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
+                    outChangedAddresses[0].mElement = kAudioObjectPropertyElementMain;
+                }
+            }
+            break;
+
         case kAudioDevicePropertyCustom_VisibilityOverride:
             FailWithAction(inDataSize != sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_SetDevicePropertyData: wrong size for kAudioDevicePropertyCustom_VisibilityOverride");
             FailWithAction(*((const CFPropertyListRef*)inData) == NULL || CFGetTypeID(*((const CFPropertyListRef*)inData)) != CFBooleanGetTypeID(), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kAudioDevicePropertyCustom_VisibilityOverride expects a CFBooleanRef");
@@ -2502,6 +2571,8 @@ static OSStatus SimpleEQAudio_SetDevicePropertyData(AudioServerPlugInDriverRef i
 
                 if(theChanged)
                 {
+                    AudioObjectPropertyAddress theItemNameAddress = { kAudioSelectorControlPropertyItemName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+                    gPlugIn_Host->PropertiesChanged(gPlugIn_Host, kObjectID_DataSource_Output, 1, &theItemNameAddress);
                     *outNumberPropertiesChanged = 2;
                     outChangedAddresses[0].mSelector = kAudioDevicePropertyCustom_NameOverride;
                     outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
@@ -2911,6 +2982,23 @@ static Boolean SimpleEQAudio_HasControlProperty(AudioServerPlugInDriverRef inDri
                     break;
             };
             break;
+
+        case kObjectID_DataSource_Output:
+            switch(inAddress->mSelector)
+            {
+                case kAudioObjectPropertyBaseClass:
+                case kAudioObjectPropertyClass:
+                case kAudioObjectPropertyOwner:
+                case kAudioObjectPropertyOwnedObjects:
+                case kAudioControlPropertyScope:
+                case kAudioControlPropertyElement:
+                case kAudioSelectorControlPropertyCurrentItem:
+                case kAudioSelectorControlPropertyAvailableItems:
+                case kAudioSelectorControlPropertyItemName:
+                    theAnswer = true;
+                    break;
+            };
+            break;
     };
 
 Done:
@@ -2971,6 +3059,26 @@ static OSStatus SimpleEQAudio_IsControlPropertySettable(AudioServerPlugInDriverR
             };
             break;
 
+        case kObjectID_DataSource_Output:
+            switch(inAddress->mSelector)
+            {
+                case kAudioObjectPropertyBaseClass:
+                case kAudioObjectPropertyClass:
+                case kAudioObjectPropertyOwner:
+                case kAudioObjectPropertyOwnedObjects:
+                case kAudioControlPropertyScope:
+                case kAudioControlPropertyElement:
+                case kAudioSelectorControlPropertyCurrentItem:
+                case kAudioSelectorControlPropertyAvailableItems:
+                case kAudioSelectorControlPropertyItemName:
+                    *outIsSettable = false;
+                    break;
+                default:
+                    theAnswer = kAudioHardwareUnknownPropertyError;
+                    break;
+            };
+            break;
+
         default:
             theAnswer = kAudioHardwareBadObjectError;
             break;
@@ -3020,6 +3128,28 @@ static OSStatus SimpleEQAudio_GetControlPropertyDataSize(AudioServerPlugInDriver
                 case kAudioControlPropertyScope:        *outDataSize = sizeof(AudioObjectPropertyScope); break;
                 case kAudioControlPropertyElement:      *outDataSize = sizeof(AudioObjectPropertyElement); break;
                 case kAudioBooleanControlPropertyValue: *outDataSize = sizeof(UInt32); break;
+                default:
+                    theAnswer = kAudioHardwareUnknownPropertyError;
+                    break;
+            };
+            break;
+
+        case kObjectID_DataSource_Output:
+            switch(inAddress->mSelector)
+            {
+                case kAudioObjectPropertyBaseClass:    *outDataSize = sizeof(AudioClassID);  break;
+                case kAudioObjectPropertyClass:         *outDataSize = sizeof(AudioClassID);  break;
+                case kAudioObjectPropertyOwner:         *outDataSize = sizeof(AudioObjectID); break;
+                case kAudioObjectPropertyOwnedObjects:  *outDataSize = 0;                     break;
+                case kAudioControlPropertyScope:        *outDataSize = sizeof(AudioObjectPropertyScope); break;
+                case kAudioControlPropertyElement:      *outDataSize = sizeof(AudioObjectPropertyElement); break;
+                case kAudioSelectorControlPropertyCurrentItem:    *outDataSize = sizeof(UInt32); break;
+                case kAudioSelectorControlPropertyAvailableItems:
+                    pthread_mutex_lock(&gPlugIn_StateMutex);
+                    *outDataSize = gDevice_HeadphoneRoute ? sizeof(UInt32) : 0;
+                    pthread_mutex_unlock(&gPlugIn_StateMutex);
+                    break;
+                case kAudioSelectorControlPropertyItemName:       *outDataSize = sizeof(CFStringRef); break;
                 default:
                     theAnswer = kAudioHardwareUnknownPropertyError;
                     break;
@@ -3179,6 +3309,93 @@ static OSStatus SimpleEQAudio_GetControlPropertyData(AudioServerPlugInDriverRef 
                     *((UInt32*)outData) = gMute_Master_Value ? 1 : 0;
                     pthread_mutex_unlock(&gPlugIn_StateMutex);
                     *outDataSize = sizeof(UInt32);
+                    break;
+
+                default:
+                    theAnswer = kAudioHardwareUnknownPropertyError;
+                    break;
+            };
+            break;
+
+        case kObjectID_DataSource_Output:
+            switch(inAddress->mSelector)
+            {
+                case kAudioObjectPropertyBaseClass:
+                    FailWithAction(inDataSize < sizeof(AudioClassID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetControlPropertyData: not enough space for kAudioObjectPropertyBaseClass");
+                    *((AudioClassID*)outData) = kAudioSelectorControlClassID;
+                    *outDataSize = sizeof(AudioClassID);
+                    break;
+
+                case kAudioObjectPropertyClass:
+                    FailWithAction(inDataSize < sizeof(AudioClassID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetControlPropertyData: not enough space for kAudioObjectPropertyClass");
+                    *((AudioClassID*)outData) = kAudioDataSourceControlClassID;
+                    *outDataSize = sizeof(AudioClassID);
+                    break;
+
+                case kAudioObjectPropertyOwner:
+                    FailWithAction(inDataSize < sizeof(AudioObjectID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetControlPropertyData: not enough space for kAudioObjectPropertyOwner");
+                    *((AudioObjectID*)outData) = kObjectID_Device;
+                    *outDataSize = sizeof(AudioObjectID);
+                    break;
+
+                case kAudioObjectPropertyOwnedObjects:
+                    *outDataSize = 0;
+                    break;
+
+                case kAudioControlPropertyScope:
+                    FailWithAction(inDataSize < sizeof(AudioObjectPropertyScope), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetControlPropertyData: not enough space for kAudioControlPropertyScope");
+                    *((AudioObjectPropertyScope*)outData) = kAudioObjectPropertyScopeOutput;
+                    *outDataSize = sizeof(AudioObjectPropertyScope);
+                    break;
+
+                case kAudioControlPropertyElement:
+                    FailWithAction(inDataSize < sizeof(AudioObjectPropertyElement), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetControlPropertyData: not enough space for kAudioControlPropertyElement");
+                    *((AudioObjectPropertyElement*)outData) = kAudioObjectPropertyElementMain;
+                    *outDataSize = sizeof(AudioObjectPropertyElement);
+                    break;
+
+                case kAudioSelectorControlPropertyCurrentItem:
+                    FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetControlPropertyData: not enough space for the data source item");
+                    pthread_mutex_lock(&gPlugIn_StateMutex);
+                    *((UInt32*)outData) = gDevice_HeadphoneRoute ? kDataSource_Headphones : 0;
+                    pthread_mutex_unlock(&gPlugIn_StateMutex);
+                    *outDataSize = sizeof(UInt32);
+                    break;
+
+                case kAudioSelectorControlPropertyAvailableItems:
+                    pthread_mutex_lock(&gPlugIn_StateMutex);
+                    if(gDevice_HeadphoneRoute && inDataSize >= sizeof(UInt32))
+                    {
+                        *((UInt32*)outData) = kDataSource_Headphones;
+                        *outDataSize = sizeof(UInt32);
+                    }
+                    else
+                    {
+                        *outDataSize = 0;
+                    }
+                    pthread_mutex_unlock(&gPlugIn_StateMutex);
+                    break;
+
+                case kAudioSelectorControlPropertyItemName:
+                    FailWithAction(inDataSize < sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetControlPropertyData: not enough space for kAudioSelectorControlPropertyItemName");
+                    // 項目名が空だと内蔵扱いのときシステム設定の名前が空欄になる。
+                    {
+                        pthread_mutex_lock(&gPlugIn_StateMutex);
+                        CFStringRef theName = CurrentDeviceName_Locked();
+                        pthread_mutex_unlock(&gPlugIn_StateMutex);
+                        CFMutableStringRef theTrimmed = CFStringCreateMutableCopy(NULL, 0, theName);
+                        if(theTrimmed != NULL)
+                        {
+                            CFRelease(theName);
+                            CFStringTrimWhitespace(theTrimmed);
+                            *((CFStringRef*)outData) = theTrimmed;
+                        }
+                        else
+                        {
+                            *((CFStringRef*)outData) = theName;
+                        }
+                    }
+                    *outDataSize = sizeof(CFStringRef);
                     break;
 
                 default:

@@ -20,6 +20,9 @@ enum DriverConfig {
 
     static let nameOverrideMaxLength = Int(simpleeq_driver_name_override_max_length())
 
+    static let headphoneRouteSelector =
+        AudioObjectPropertySelector(simpleeq_driver_headphone_route_selector())
+
     static let mixerGainSelector =
         AudioObjectPropertySelector(simpleeq_mixer_gain_selector())
 
