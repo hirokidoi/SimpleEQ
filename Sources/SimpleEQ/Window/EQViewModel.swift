@@ -78,6 +78,19 @@ final class EQViewModel: ObservableObject {
             applyNewOutputDeviceFollowingSetting()
         }
     }
+    @Published var bluetoothAutoDisconnectMinutes: Int? {
+        didSet {
+            guard oldValue != bluetoothAutoDisconnectMinutes else { return }
+            settings.bluetoothAutoDisconnectMinutes = bluetoothAutoDisconnectMinutes
+            applyBluetoothAutoDisconnectSetting()
+        }
+    }
+    @Published private(set) var bluetoothAutoDisconnectStatus: BluetoothAutoDisconnectStatus = .none
+    var bluetoothAuthorizationDenied: Bool { bluetoothAutoDisconnectStatus == .unauthorized }
+    /// 画面に出す値。許可が無い間は保存値によらず nil (しない)。
+    var displayedBluetoothAutoDisconnectMinutes: Int? {
+        bluetoothAuthorizationDenied ? nil : bluetoothAutoDisconnectMinutes
+    }
     /// セッション限定 (非永続) の出力デバイス UID。
     @Published var sessionOutputDeviceUID: String? {
         didSet {
@@ -426,6 +439,8 @@ final class EQViewModel: ObservableObject {
     private let autoPreamp: AutoPreampCoordinator?
     /// セッション横断の所有権調停役。テストからの構築では未注入 (nil) で、その場合「こちらで使う」は何もしない。
     private let ownershipCoordinator: OwnershipCoordinator?
+    /// Bluetooth 自動切断の調停役。テストからの構築では未注入 (nil) で、その場合は設定が何にも届かない。
+    private let bluetoothAutoDisconnect: BluetoothAutoDisconnectCoordinator?
     private var appliedSampleRate: Double = AudioConfig.baseSampleRate
     /// 出力候補一覧の再列挙をトリガーする通知を登録済みか (二重登録防止)。
     nonisolated private let deviceListListenerRegistered = Mutex<Bool>(false)
@@ -453,6 +468,7 @@ final class EQViewModel: ObservableObject {
         activationCoordinator: AudioActivationCoordinator? = nil,
         autoPreamp: AutoPreampCoordinator? = nil,
         ownershipCoordinator: OwnershipCoordinator? = nil,
+        bluetoothAutoDisconnect: BluetoothAutoDisconnectCoordinator? = nil,
         renderMetrics: RenderMetrics = RenderMetrics()
     ) {
         self.renderMetrics = renderMetrics
@@ -461,6 +477,7 @@ final class EQViewModel: ObservableObject {
         self.audioWorld = audioWorld
         self.driverInstallCoordinator = DriverInstallCoordinator(outputController: outputController, audioWorld: audioWorld)
         self.ownershipCoordinator = ownershipCoordinator
+        self.bluetoothAutoDisconnect = bluetoothAutoDisconnect
         self.deviceRoutingReconciler = deviceRoutingReconciler
         self.activationCoordinator = activationCoordinator
         self.autoPreamp = autoPreamp
@@ -485,6 +502,7 @@ final class EQViewModel: ObservableObject {
         persistedDefaultOutputDeviceUID = settings.outputDeviceUID
         adoptsSystemOutputSelection = settings.adoptsSystemOutputSelection
         followsNewOutputDevices = settings.followsNewOutputDevices
+        bluetoothAutoDisconnectMinutes = settings.bluetoothAutoDisconnectMinutes
         sessionOutputDeviceUID = resolvedOutputDeviceUID
         confirmedOutputDeviceUID = resolvedOutputDeviceUID
         preampDb = settings.preampDb
@@ -568,6 +586,20 @@ final class EQViewModel: ObservableObject {
         ) { [deviceRoutingReconciler] token in
             deviceRoutingReconciler?.setFollowsNewOutputDevices(follows, token)
         }
+    }
+
+    private func applyBluetoothAutoDisconnectSetting() {
+        let configuration = BluetoothAutoDisconnectSettings(silenceMinutes: bluetoothAutoDisconnectMinutes)
+        audioWorld.submit(
+            coalescingKey: AudioRequestKey.bluetoothAutoDisconnect
+        ) { [bluetoothAutoDisconnect] token in
+            bluetoothAutoDisconnect?.configure(configuration, token)
+        }
+    }
+
+    /// 起動配線から 1 回呼ぶ。保存された設定を調停役へ届ける。
+    func startBluetoothAutoDisconnect() {
+        applyBluetoothAutoDisconnectSetting()
     }
 
     /// 選択の巻き戻し。戻す先は直近に確定した値 (confirmedOutputDeviceUID)。
@@ -892,6 +924,11 @@ final class EQViewModel: ObservableObject {
         placeSessionOutputDeviceUID(device.uid)
         confirmedOutputDeviceUID = device.uid
         resolvedOutputDeviceName = name
+    }
+
+    func updateBluetoothAutoDisconnectStatus(_ status: BluetoothAutoDisconnectStatus) {
+        guard bluetoothAutoDisconnectStatus != status else { return }
+        bluetoothAutoDisconnectStatus = status
     }
 
     func updateRingStalled(_ stalled: Bool) {

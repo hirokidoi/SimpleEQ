@@ -1791,6 +1791,111 @@ final class EQViewModelTests: XCTestCase {
         XCTAssertEqual(routingEngine.switchCalls.last?.uid, "bluetooth-uid", "入れ直すと追う")
     }
 
+    func testBluetoothAutoDisconnectSettingsPersistAcrossLaunch() {
+        let store = SettingsStore(defaults: defaults)
+        let vm = makeVM(store)
+        XCTAssertNil(vm.bluetoothAutoDisconnectMinutes)
+
+        let probe = EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices.first!
+        vm.bluetoothAutoDisconnectMinutes = probe
+
+        let relaunched = makeVM(SettingsStore(defaults: defaults))
+        XCTAssertEqual(relaunched.bluetoothAutoDisconnectMinutes, probe)
+    }
+
+    private func makeVMWithBluetoothAutoDisconnect(
+        _ store: SettingsStore
+    ) -> (vm: EQViewModel, audioWorld: AudioWorld, control: FakeBluetoothConnectionControl) {
+        let audioWorld = makeTestAudioWorld()
+        let control = FakeBluetoothConnectionControl()
+        let coordinator = BluetoothAutoDisconnectCoordinator(
+            engine: FakeBluetoothAutoDisconnectEngine(), directory: MockAudioDeviceDirectory(),
+            airPlayMode: FakeAirPlayMode(), connectionControl: control, audioWorld: audioWorld
+        )
+        let vm = EQViewModel(
+            engine: AudioEngine(), settings: store, outputController: makeOutputController(settings: store),
+            audioWorld: audioWorld, bluetoothAutoDisconnect: coordinator
+        )
+        return (vm, audioWorld, control)
+    }
+
+    // しないから時間を選んだ遷移でだけ許可を求める。接続したデバイスへの追従とは独立。
+    func testChoosingMinutesFromOffRequestsTheBluetoothAuthorization() {
+        let store = SettingsStore(defaults: defaults)
+        let (vm, audioWorld, control) = makeVMWithBluetoothAutoDisconnect(store)
+        vm.followsNewOutputDevices = false
+
+        audioWorld.queue.sync {}
+        XCTAssertEqual(control.prepareCount, 0, "しないの間は求めない")
+
+        let choices = EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices
+        vm.bluetoothAutoDisconnectMinutes = choices.first
+        audioWorld.queue.sync {}
+        XCTAssertEqual(control.prepareCount, 1, "追従が OFF でも有効になる")
+
+        vm.followsNewOutputDevices = true
+        audioWorld.queue.sync {}
+        XCTAssertEqual(control.prepareCount, 1, "追従の切り替えでは求め直さない")
+
+        vm.bluetoothAutoDisconnectMinutes = nil
+        audioWorld.queue.sync {}
+        vm.bluetoothAutoDisconnectMinutes = choices.first
+        audioWorld.queue.sync {}
+        XCTAssertEqual(control.prepareCount, 2, "入れ直すと有効化の遷移になる")
+
+        vm.bluetoothAutoDisconnectMinutes = choices.last
+        audioWorld.queue.sync {}
+        XCTAssertEqual(control.prepareCount, 2, "時間の変更では求め直さない")
+    }
+
+    func testStartBluetoothAutoDisconnectAppliesTheSavedSetting() {
+        let store = SettingsStore(defaults: defaults)
+        store.bluetoothAutoDisconnectMinutes = EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices.first
+        let (vm, audioWorld, control) = makeVMWithBluetoothAutoDisconnect(store)
+        audioWorld.queue.sync {}
+        XCTAssertEqual(control.prepareCount, 0, "起動配線の前は何も届かない")
+
+        vm.startBluetoothAutoDisconnect()
+        audioWorld.queue.sync {}
+        XCTAssertEqual(control.prepareCount, 1, "保存値が有効なまま起動したときも許可を求める")
+    }
+
+    func testUpdateBluetoothAutoDisconnectStatusSkipsRedundantUpdates() {
+        let vm = makeVM(SettingsStore(defaults: defaults))
+        XCTAssertEqual(vm.bluetoothAutoDisconnectStatus, .none)
+
+        vm.updateBluetoothAutoDisconnectStatus(.playing(deviceName: "Headphones"))
+        XCTAssertEqual(vm.bluetoothAutoDisconnectStatus, .playing(deviceName: "Headphones"))
+
+        var changeCount = 0
+        let cancellable = vm.$bluetoothAutoDisconnectStatus.dropFirst().sink { _ in changeCount += 1 }
+        vm.updateBluetoothAutoDisconnectStatus(.playing(deviceName: "Headphones"))
+        XCTAssertEqual(changeCount, 0, "同値の反映で @Published を再発行しない")
+
+        vm.updateBluetoothAutoDisconnectStatus(.none)
+        XCTAssertEqual(changeCount, 1)
+        _ = cancellable
+    }
+
+    func testUnauthorizedStatusDisplaysOffWithoutTouchingTheSavedMinutes() {
+        let store = SettingsStore(defaults: defaults)
+        let probe = EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices.first
+        store.bluetoothAutoDisconnectMinutes = probe
+        let vm = makeVM(store)
+        XCTAssertFalse(vm.bluetoothAuthorizationDenied)
+        XCTAssertEqual(vm.displayedBluetoothAutoDisconnectMinutes, probe)
+
+        vm.updateBluetoothAutoDisconnectStatus(.unauthorized)
+        XCTAssertTrue(vm.bluetoothAuthorizationDenied)
+        XCTAssertNil(vm.displayedBluetoothAutoDisconnectMinutes)
+        XCTAssertEqual(vm.bluetoothAutoDisconnectMinutes, probe)
+        XCTAssertEqual(SettingsStore(defaults: defaults).bluetoothAutoDisconnectMinutes, probe)
+
+        vm.updateBluetoothAutoDisconnectStatus(.none)
+        XCTAssertFalse(vm.bluetoothAuthorizationDenied)
+        XCTAssertEqual(vm.displayedBluetoothAutoDisconnectMinutes, probe)
+    }
+
     // 次回起動時の既定値の永続化と、現在のセッションの出力先選択は独立している。
     func testPersistedDefaultOutputDeviceUIDNeverAffectsLiveState() {
         let store = SettingsStore(defaults: defaults)

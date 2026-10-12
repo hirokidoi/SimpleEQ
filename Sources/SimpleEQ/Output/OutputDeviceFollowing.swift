@@ -18,6 +18,15 @@ func isFollowableOutputTransport(_ transport: UInt32?) -> Bool {
     }
 }
 
+func isBluetoothOutputTransport(_ transport: UInt32?) -> Bool {
+    switch transport {
+    case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
+        return true
+    default:
+        return false
+    }
+}
+
 /// 出力先が前の一覧に無い (coreaudiod の再起動などで一覧ごと入れ替わった) ときは追わない。
 /// 同時に複数現れたときは、どれを選ぶか決められないため追わない。
 func outputDeviceToFollow(

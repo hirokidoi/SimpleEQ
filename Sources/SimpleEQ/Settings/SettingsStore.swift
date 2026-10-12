@@ -42,6 +42,8 @@ final class SettingsStore {
         var adoptsSystemSelection = true
         /// nil は既定を意味する。
         var followsNewDevices: Bool?
+        /// nil は自動切断しないことを意味する。
+        var bluetoothAutoDisconnectMinutes: Int?
     }
 
     private struct WindowState: Codable {
@@ -158,6 +160,10 @@ final class SettingsStore {
         p.handles.revealHoldSeconds = p.handles.revealHoldSeconds.map {
             clamped($0, to: EQLayout.Tuning.handleRevealHoldSecondsRange)
         }
+        if let minutes = p.output.bluetoothAutoDisconnectMinutes,
+           !EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices.contains(minutes) {
+            p.output.bluetoothAutoDisconnectMinutes = nil
+        }
         p.mixer.channels = p.mixer.channels.map(normalizedMixerChannels)
         return p
     }
@@ -270,6 +276,12 @@ final class SettingsStore {
     var followsNewOutputDevices: Bool {
         get { readState { $0.output.followsNewDevices } ?? Self.followsNewOutputDevicesDefault }
         set { writeState { $0.output.followsNewDevices = newValue } }
+    }
+
+    /// 出力先の Bluetooth デバイスとの接続を切るまでの無音の長さ (分)。nil は切らない。
+    var bluetoothAutoDisconnectMinutes: Int? {
+        get { readState { $0.output.bluetoothAutoDisconnectMinutes } }
+        set { writeState { $0.output.bluetoothAutoDisconnectMinutes = newValue } }
     }
 
     /// ビジュアライザの再描画上限フレームレート (fps)。

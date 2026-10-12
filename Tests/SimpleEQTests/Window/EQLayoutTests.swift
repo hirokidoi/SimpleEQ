@@ -95,6 +95,14 @@ final class EQLayoutTests: XCTestCase {
         }
     }
 
+    func testBluetoothAutoDisconnectMinutesChoicesAreSortedUniqueAndPositive() {
+        let choices = EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices
+        XCTAssertFalse(choices.isEmpty)
+        XCTAssertEqual(choices, choices.sorted())
+        XCTAssertEqual(Set(choices).count, choices.count)
+        XCTAssertTrue(choices.allSatisfy { $0 > 0 })
+    }
+
     // レンジを持つ既定値は、そのレンジ内に収まっていること。
     func testSliderTuningDefaultsAreWithinTheirRanges() {
         let items: [(name: String, value: Double, range: ClosedRange<Double>)] = [

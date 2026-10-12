@@ -36,6 +36,8 @@ protocol AudioDeviceDirectory: Sendable {
     func selfProcessObjectID(_ token: AudioWorldToken) -> AudioObjectID?
 
     func outputDeviceListSnapshot(_ token: AudioWorldToken) -> OutputDeviceListSnapshot
+
+    func transportType(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32?
 }
 
 extension AudioDeviceDirectory {
@@ -113,13 +115,17 @@ final class CoreAudioDeviceDirectory: AudioDeviceDirectory {
         processObjectID(forPID: getpid(), token)
     }
 
+    func transportType(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? {
+        SimpleEQ.transportType(id, token)
+    }
+
     func outputDeviceListSnapshot(_ token: AudioWorldToken) -> OutputDeviceListSnapshot {
         var outputUIDs = Set<String>()
         var followableUIDs = Set<String>()
         for id in allDeviceIDs(token) where deviceHasStreams(id, needsOutput: true, token) {
             guard let uid = deviceUID(id, token) else { continue }
             outputUIDs.insert(uid)
-            if isFollowableOutputTransport(transportType(id, token)) { followableUIDs.insert(uid) }
+            if isFollowableOutputTransport(SimpleEQ.transportType(id, token)) { followableUIDs.insert(uid) }
         }
         return OutputDeviceListSnapshot(outputUIDs: outputUIDs, followableUIDs: followableUIDs)
     }

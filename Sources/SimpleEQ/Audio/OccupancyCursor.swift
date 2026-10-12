@@ -76,8 +76,8 @@ final class OccupancyCursor {
     /// realtime スレッド外からの store と、read(into:frames:writeCounter:epoch:payload:) からの load/clear が異なるスレッドで起こるため atomic。
     private let occupancyResetRequestFlag = AtomicUInt64(0)
 
-    /// 積む側 (observeOutputLevel) と読む側 (read(into:frames:writeCounter:epoch:payload:)) は同じ realtime スレッドで動くため atomic にしない。
-    private var silentOutputFrames = 0
+    /// 書き手は realtime 経路のみ (単一スレッドの load+store)。どの世界からも読める。
+    private let silentOutputFrames = AtomicUInt64(0)
 
     private(set) var metrics: AudioRuntimeMetrics
 
@@ -131,8 +131,7 @@ final class OccupancyCursor {
 
     // --- realtime 経路の内部状態の参照と、経路外からの要求 -------------------------------------
 
-    /// 読む側も同じ realtime 経路に限る (非アトミック)。
-    var silentOutputFrameCount: Int { silentOutputFrames }
+    var silentOutputFrameCount: Int { Int(silentOutputFrames.value) }
 
     /// 要求はキューイングしない (連続する事象は 1 回のリセットへ束ねてよい)。realtime スレッド外から呼ぶ。
     func requestOccupancyReset() {
@@ -144,9 +143,9 @@ final class OccupancyCursor {
 
     func observeOutputLevel(peak: Float, effectiveOutputGain: Float, frames: Int) {
         if OccupancyPolicy.isOutputSilent(peak: peak, effectiveOutputGain: effectiveOutputGain) {
-            silentOutputFrames += frames
+            silentOutputFrames.add(UInt64(frames))
         } else {
-            silentOutputFrames = 0
+            silentOutputFrames.store(0)
         }
     }
 
@@ -177,7 +176,7 @@ final class OccupancyCursor {
             return .outputRestart
         }
         if OccupancyPolicy.requiresSilenceReset(
-            silentFrames: silentOutputFrames, available: available,
+            silentFrames: silentOutputFrameCount, available: available,
             targetOccupancyFrames: targetOccupancy, writerBlockFrames: writerBlockFramesEstimate,
             sampleRate: appliedSampleRate
         ) {
@@ -366,7 +365,7 @@ final class OccupancyCursor {
                     }
                     seamEnvelopeGain = OccupancyPolicy.fallingSeamGain(current: seamEnvelopeGain, totalFrames: silenceSeamFadeTotalFrames)
                 }
-                silentOutputFrames = 0
+                silentOutputFrames.store(0)
                 return 0
             }
             // 着地の切り詰め: 推定と食い違う回は目標を超えた位置で完了しうるため、超過をここで捨てる (削り過ぎる側には倒れない)。
@@ -426,7 +425,7 @@ final class OccupancyCursor {
             }
         }
 
-        if toRead == 0 { silentOutputFrames = 0 }
+        if toRead == 0 { silentOutputFrames.store(0) }
         return toRead
     }
 }

@@ -38,8 +38,8 @@ enum EQLayout {
     static let settingsWindowWidth: CGFloat = 640
     /// Settings ウィンドウの高さの下限。
     static let settingsWindowMinHeight: CGFloat = 460
-    /// Settings ウィンドウを開いたときの高さ。
-    static let settingsWindowDefaultHeight: CGFloat = 920
+    /// Settings ウィンドウを開いたときの高さ (実機で調整した値)。
+    static let settingsWindowDefaultHeight: CGFloat = 680
 
     /// Diagnostics ウィンドウの幅 (固定)。値の桁が揃って読めるよう Settings と同じ幅に合わせる。
     static let diagnosticsWindowWidth: CGFloat = settingsWindowWidth
@@ -444,6 +444,9 @@ enum EQLayout {
 
     /// Settings 画面で調整可能な値の既定・範囲・レベル対応表を集約する。
     enum Tuning {
+        /// 無音で Bluetooth デバイスを切断するまでの時間 (分、設計値)。
+        static let bluetoothAutoDisconnectMinutesChoices: [Int] = [5, 10, 15, 20, 30, 45, 60]
+
         /// ビジュアライザを描き直す頻度の上限 (fps)。
         static let visualizerFpsChoices: [Double] = [10, 12, 15, 20, 30, 60]
         static let visualizerFpsDefault: Double = 30

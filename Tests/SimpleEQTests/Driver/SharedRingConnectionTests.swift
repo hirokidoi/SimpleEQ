@@ -1561,6 +1561,15 @@ final class SharedRingConnectionTests: XCTestCase {
         XCTAssertFalse(reader.metrics.writerIOIsRunning)
     }
 
+    // 稼働の判定は転記を待たず、読んだ時点のヘッダの値に従う。
+    func testWriterIOIsRunningFollowsTheHeaderWithoutAnyRefresh() {
+        let running = try! SharedRingReader.open(path: makeFixture(writerIOIsRunning: 1).path, primingEnabled: false).get()
+        let stopped = try! SharedRingReader.open(path: makeFixture(writerIOIsRunning: 0).path, primingEnabled: false).get()
+
+        XCTAssertTrue(running.writerIOIsRunning)
+        XCTAssertFalse(stopped.writerIOIsRunning)
+    }
+
     // 転記は「写し取り」であり加算ではない。同じ値を重ねて読ませても増えない。
     func testDriverWritePositionObservationsAreOverwrittenNotAccumulatedAcrossReads() {
         let url = makeFixture(presentationStallCount: 5, writeDeadlineMissedCount: 7)

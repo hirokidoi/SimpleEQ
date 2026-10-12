@@ -816,6 +816,50 @@ final class AudioEngineTests: XCTestCase {
         engine.suspend(cause: .applicationTermination, testToken) // 実資源 (AudioUnit) の後始末
     }
 
+    // MARK: - AudioEngine.outputSilenceObservation
+
+    func testOutputSilenceObservationIsNilWhileNotActive() {
+        let engine = makeSilencedEngine()
+        XCTAssertNil(engine.outputSilenceObservation(testToken))
+    }
+
+    func testOutputSilenceObservationReadsTheLiveHeaderWhileOwnedAndActive() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        let url = makeMinimalSharedRingReaderFixture(
+            writerIOIsRunning: 1, ownerProcessID: UInt32(bitPattern: getpid())
+        )
+        tempURLs.update { $0.append(url) }
+        let reader = try SharedRingReader.open(path: url.path).get()
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: reader, testToken))
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+
+        let observation = try XCTUnwrap(engine.outputSilenceObservation(testToken))
+        XCTAssertTrue(observation.writerIOIsRunning, "転記値ではなくヘッダの稼働フラグを読む")
+        XCTAssertEqual(observation.primingSilenceCount, engine.runtimeMetrics.primingSilenceCountSinceLaunch)
+    }
+
+    func testOutputSilenceObservationIsNilWhileAnotherProcessOwnsTheRing() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        let url = makeMinimalSharedRingReaderFixture(
+            writerIOIsRunning: 1, ownerProcessID: UInt32(bitPattern: getpid()) &+ 1
+        )
+        tempURLs.update { $0.append(url) }
+        let reader = try SharedRingReader.open(path: url.path).get()
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: reader, testToken))
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+
+        XCTAssertEqual(engine.processingState, .active, "前提: 稼働中")
+        XCTAssertNil(engine.outputSilenceObservation(testToken))
+    }
+
     // MARK: - AudioEngine.outputDeviceDidConfirm × OutputDeviceController (復帰先の実出力先追従)
 
     // 出力先の確定で記録した復帰先は、エンジンの停止をまたいで消えない (別の store であるため)。

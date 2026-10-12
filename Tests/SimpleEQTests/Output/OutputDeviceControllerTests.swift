@@ -125,6 +125,11 @@ final class MockAudioDeviceDirectory: AudioDeviceDirectory, @unchecked Sendable 
     /// 出力を持つデバイスは deviceIDsByUID に載っているものとして読む。
     var followableOutputUIDs: Set<String> = []
 
+    /// 記録の無いデバイスは読めないものとして扱う。
+    var transportTypes: [AudioDeviceID: UInt32] = [:]
+
+    func transportType(forDeviceID id: AudioDeviceID, _ token: AudioWorldToken) -> UInt32? { transportTypes[id] }
+
     func outputDeviceListSnapshot(_ token: AudioWorldToken) -> OutputDeviceListSnapshot {
         let outputUIDs = Set(deviceIDsByUID.keys)
         return OutputDeviceListSnapshot(

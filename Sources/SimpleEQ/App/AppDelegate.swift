@@ -86,6 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         airPlayMode: airPlayMode,
         audioWorld: audioWorld
     )
+    private lazy var bluetoothAutoDisconnect = BluetoothAutoDisconnectCoordinator(
+        engine: engine, airPlayMode: airPlayMode, connectionControl: IOBluetoothConnectionControl(),
+        audioWorld: audioWorld
+    )
     private lazy var viewModel: EQViewModel = EQViewModel(
         engine: engine,
         settings: settings,
@@ -98,7 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         deviceRoutingReconciler: deviceRoutingReconciler,
         activationCoordinator: activationCoordinator,
         autoPreamp: autoPreamp,
-        ownershipCoordinator: ownershipCoordinator
+        ownershipCoordinator: ownershipCoordinator,
+        bluetoothAutoDisconnect: bluetoothAutoDisconnect
     )
 
     private lazy var diagnostics: DiagnosticsModel = DiagnosticsModel(
@@ -151,6 +156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         engine.appliedSampleRateDidChange = { [weak self] rate in
             DispatchQueue.main.async { self?.viewModel.handleAppliedSampleRateDidChange(rate) }
+        }
+        bluetoothAutoDisconnect.statusDidChange = { [weak self] status in
+            DispatchQueue.main.async { self?.viewModel.updateBluetoothAutoDisconnectStatus(status) }
         }
         airPlayMode.requestCapture = { [airPlayCaptureBuilder] request in airPlayCaptureBuilder.build(request) }
         airPlayMode.requestRouteReconciliation = { [deviceRoutingReconciler] token in
@@ -225,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         viewModel.startObservingOutputDevices()
         viewModel.startAutoPreampDerivation()
+        viewModel.startBluetoothAutoDisconnect()
         startPeriodicRoutingVerification()
         startMixerCoordination()
         startOwnershipCoordination()
@@ -331,10 +340,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.audioWorld.submit(
                     coalescingKey: AudioRequestKey.periodicVerification
-                ) { [deviceRoutingReconciler = self.deviceRoutingReconciler, engine = self.engine] token in
+                ) { [deviceRoutingReconciler = self.deviceRoutingReconciler, engine = self.engine,
+                     bluetoothAutoDisconnect = self.bluetoothAutoDisconnect] token in
                     deviceRoutingReconciler.reconcile(trigger: .periodicVerification, token)
                     engine.applyDriverSampleRateIfChanged(token)
                     engine.refreshDriverObservations(token)
+                    bluetoothAutoDisconnect.evaluate(token)
                     // 停止中は自ドライバの ID やデバイスのレートを HAL へ問い合わせに行かない。
                     guard runsPeriodicDeviceQueries(processingState: engine.processingState) else { return }
                     engine.refreshDriverDeviceIDIfNeeded(token)

@@ -543,6 +543,36 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.followsNewOutputDevices)
     }
 
+    func testBluetoothAutoDisconnectMinutesDefaultToOffAndPersist() {
+        let store = SettingsStore(defaults: defaults)
+        XCTAssertNil(store.bluetoothAutoDisconnectMinutes, "既定は切断しない")
+        let probe = EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices.first!
+        store.bluetoothAutoDisconnectMinutes = probe
+        XCTAssertEqual(SettingsStore(defaults: defaults).bluetoothAutoDisconnectMinutes, probe)
+        store.bluetoothAutoDisconnectMinutes = nil
+        XCTAssertNil(SettingsStore(defaults: defaults).bluetoothAutoDisconnectMinutes)
+    }
+
+    // 項目を持たない保存値を読んでも、ほかの設定は捨てない。
+    func testSavedSettingsWithoutTheBluetoothItemKeepOtherSettings() throws {
+        SettingsStore(defaults: defaults).alwaysOnTop = true
+        let data = try XCTUnwrap(defaults.data(forKey: SettingsStore.defaultsKey))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let output = try XCTUnwrap(json["output"] as? [String: Any])
+        XCTAssertNil(output["bluetoothAutoDisconnectMinutes"], "未設定の間は保存値に現れない")
+
+        let reloaded = SettingsStore(defaults: defaults)
+        XCTAssertTrue(reloaded.alwaysOnTop)
+        XCTAssertNil(reloaded.bluetoothAutoDisconnectMinutes)
+    }
+
+    func testBluetoothAutoDisconnectMinutesOutsideTheChoicesFallBackToOff() {
+        writeStoredPayload(overriding: [
+            "output.bluetoothAutoDisconnectMinutes": EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices.max()! + 1
+        ])
+        XCTAssertNil(SettingsStore(defaults: defaults).bluetoothAutoDisconnectMinutes)
+    }
+
     func testLoadingSchemaFromBeforeOutputAdoptionToggleResetsAllSettingsToDefaults() {
         let oldSchema: [String: Any] = [
             "eq.gains": EQSpec.builtInSeeds[.slot1]!.curve,

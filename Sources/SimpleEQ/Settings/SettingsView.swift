@@ -158,6 +158,9 @@ struct SettingsView: View {
 
     private var deviceSection: some View {
         PanelSection("Device") {
+            settingsRow(title: "取り込み専用ドライバ", subtitle: "検出されない時は専用ドライバをインストール（管理者権限が必要）してアプリの再起動が必要") {
+                DriverStatusRow(viewModel: viewModel)
+            }
             settingsRow(
                 title: "起動時の出力デバイス", subtitle: "「自動選択」の場合は起動時の出力デバイスが自動的に選択される"
             ) {
@@ -182,10 +185,59 @@ struct SettingsView: View {
             ) {
                 SettingsToggle(isOn: $viewModel.followsNewOutputDevices)
             }
-            settingsRow(title: "取り込み専用ドライバ", subtitle: "検出されない時は専用ドライバをインストール（管理者権限が必要）してアプリの再起動が必要") {
-                DriverStatusRow(viewModel: viewModel)
+            settingsRow(
+                title: "Bluetooth デバイスの自動切断",
+                subtitle: "無音が続いたら出力先の Bluetooth デバイスとの接続を切る"
+            ) {
+                HStack(spacing: 12) {
+                    Picker("", selection: Binding(
+                        get: { viewModel.displayedBluetoothAutoDisconnectMinutes },
+                        set: { viewModel.bluetoothAutoDisconnectMinutes = $0 }
+                    )) {
+                        Text("しない").tag(Int?.none)
+                        ForEach(EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices, id: \.self) { minutes in
+                            Text("\(minutes) 分").tag(Int?.some(minutes))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .colorScheme(.dark)
+                    .foregroundColor(EQLayout.Palette.text)
+                    .fixedSize()
+                    .disabled(viewModel.bluetoothAuthorizationDenied)
+                    .opacity(viewModel.bluetoothAuthorizationDenied ? EQLayout.disabledOpacity : 1)
+                    Spacer(minLength: 0)
+                    bluetoothAutoDisconnectStatusView
+                }
             }
         }
+    }
+
+    @ViewBuilder
+    private var bluetoothAutoDisconnectStatusView: some View {
+        switch viewModel.bluetoothAutoDisconnectStatus {
+        case .none:
+            EmptyView()
+        case .playing(let deviceName):
+            bluetoothStatusLines(deviceName: deviceName, detail: "再生中")
+        case .countingDown(let deviceName, let minutesRemaining):
+            bluetoothStatusLines(deviceName: deviceName, detail: "あと \(minutesRemaining) 分で切断")
+        case .unauthorized:
+            bluetoothStatusDetail("Bluetooth が許可されていません")
+        }
+    }
+
+    private func bluetoothStatusLines(deviceName: String, detail: String) -> some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text(deviceName).font(.system(size: 13))
+            bluetoothStatusDetail(detail)
+        }
+    }
+
+    private func bluetoothStatusDetail(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(EQLayout.Palette.faint)
     }
 
     // MARK: - Handles (即時反映)

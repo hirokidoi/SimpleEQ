@@ -8,4 +8,12 @@ final class AppInfoPlistTests: XCTestCase {
         let description = try XCTUnwrap(plist["NSAudioCaptureUsageDescription"] as? String)
         XCTAssertFalse(description.isEmpty)
     }
+
+    // 説明文が無いと、許可を求める時点でアプリが強制終了される。
+    func testTheBluetoothUsageIsDescribed() throws {
+        let data = try Data(contentsOf: RepositoryFiles.appInfoPlist)
+        let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let description = try XCTUnwrap(plist["NSBluetoothAlwaysUsageDescription"] as? String)
+        XCTAssertFalse(description.isEmpty)
+    }
 }

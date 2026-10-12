@@ -112,4 +112,6 @@ enum AudioRequestKey: Hashable {
     case mixerGainTable
     /// 意味があるのは最新の 1 件だけ。届かないことはリース満了として正しく扱われる。
     case ownershipRenew
+    /// 意味があるのは最新の 1 件だけ。
+    case bluetoothAutoDisconnect
 }

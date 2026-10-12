@@ -29,5 +29,7 @@
     <true/>
     <key>NSAudioCaptureUsageDescription</key>
     <string>AirPlay で再生中のシステムの音にイコライザーをかけるため、システムの音を取り込みます。</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>無音が続いたときに、出力先の Bluetooth デバイスとの接続を切るために使います。</string>
 </dict>
 </plist>

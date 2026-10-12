@@ -127,6 +127,19 @@ final class AudioEngine: @unchecked Sendable {
         runtimeMetrics.recordReaderObserved(ringReader != nil)
     }
 
+    func outputSilenceObservation(_ token: AudioWorldToken) -> OutputSilenceObservation? {
+        guard processingState == .active, captureSource == nil, let reader = ringReader, reader.isSelfOwner else {
+            return nil
+        }
+        // 無音カウンタを先に読む (巻き戻りと加算が同じ回に起きても、読み落としは「音」側へ倒れる)。
+        let silentFrames = reader.silentOutputFrameCount
+        return OutputSilenceObservation(
+            writerIOIsRunning: reader.writerIOIsRunning,
+            silentSeconds: OccupancyPolicy.durationSeconds(frames: silentFrames, sampleRate: AudioConfig.appliedSampleRate),
+            primingSilenceCount: runtimeMetrics.primingSilenceCountSinceLaunch
+        )
+    }
+
     /// HAL への問い合わせを含むため、読み手が居ない間は呼んではならない。
     func refreshOutputDeviceSampleRate(_ token: AudioWorldToken) {
         guard let id = currentOutputDeviceID(token) else {

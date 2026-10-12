@@ -76,7 +76,6 @@ final class CaptureRing: @unchecked Sendable {
         cursor.observeOutputLevel(peak: peak, effectiveOutputGain: effectiveOutputGain, frames: frames)
     }
 
-    /// 読む側も同じ realtime 経路に限る (非アトミック)。
     var silentOutputFrameCount: Int { cursor.silentOutputFrameCount }
 
     // --- 経路外 -------------------------------------------------------------------------

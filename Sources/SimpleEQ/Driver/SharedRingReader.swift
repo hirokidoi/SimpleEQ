@@ -322,8 +322,9 @@ final class SharedRingReader {
 
     // --- realtime 経路の内部状態の参照と、経路外からの要求 -------------------------------------
 
-    /// 読む側も同じ realtime 経路に限る (非アトミック)。
     var silentOutputFrameCount: Int { cursor.silentOutputFrameCount }
+
+    var writerIOIsRunning: Bool { simpleeq_ring_load_writer_io_is_running_acquire(mappedBase) != 0 }
 
     /// realtime スレッド外から呼ぶ。
     func requestOccupancyReset() {
@@ -359,7 +360,7 @@ final class SharedRingReader {
         )
         metrics.recordWriterState(
             epoch: UInt64(simpleeq_ring_load_epoch_acquire(mappedBase)),
-            ioIsRunning: simpleeq_ring_load_writer_io_is_running_acquire(mappedBase) != 0,
+            ioIsRunning: writerIOIsRunning,
             ioCycleFrames: Int(simpleeq_ring_io_cycle_frames(mappedBase))
         )
         metrics.recordDriverVersions(
@@ -461,7 +462,7 @@ final class SharedRingReader {
     /// 判定はヘッダの読み取りのみで完結する (HAL への問い合わせを含まない)。
     /// 非稼働の間は経過が伸びても停止とみなさない。
     func checkWriterStalled(now: UInt64 = mach_absolute_time()) -> Bool {
-        let running = simpleeq_ring_load_writer_io_is_running_acquire(mappedBase) != 0
+        let running = writerIOIsRunning
         guard let snapshot = readTimeSnapshot() else {
             // スナップショットが無い場合は稼働中なら安全側 (停止とみなす) に倒す。
             return running
