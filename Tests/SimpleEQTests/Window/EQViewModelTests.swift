@@ -3266,4 +3266,115 @@ final class EQViewModelTests: XCTestCase {
             measuredSoundLab.value.last, MeasuredSoundLab(lifted), "動いた操作値が導出まで届く"
         )
     }
+
+    // MARK: - ビジュアライザ遅延オフセット
+
+    private var delayOffsetStep: Int { PresentationDelayLine.userOffsetMillisecondsStep }
+
+    private func makeVMWithOutput(
+        _ store: SettingsStore, uid: String? = "device-a"
+    ) -> (vm: EQViewModel, engine: AudioEngine, audioWorld: AudioWorld) {
+        let engine = AudioEngine()
+        let audioWorld = makeTestAudioWorld()
+        let vm = EQViewModel(
+            engine: engine, settings: store, outputController: makeOutputController(settings: store), audioWorld: audioWorld,
+            resolvedOutputDeviceName: "A", resolvedOutputDeviceUID: uid
+        )
+        return (vm, engine, audioWorld)
+    }
+
+    func testVisualizerDelayOffsetIsStoredPerConfirmedOutputAndDroppedAtDefault() {
+        let store = SettingsStore(defaults: defaults)
+        let (vm, _, _) = makeVMWithOutput(store)
+        XCTAssertEqual(vm.visualizerDelayOffsetMilliseconds, PresentationDelayLine.userOffsetMillisecondsDefault)
+
+        vm.visualizerDelayOffsetMilliseconds = delayOffsetStep
+        XCTAssertEqual(vm.visualizerDelayOffsets, ["device-a": delayOffsetStep])
+        XCTAssertEqual(store.visualizerDelayOffsets, ["device-a": delayOffsetStep])
+        XCTAssertEqual(vm.visualizerDelayOffsetMilliseconds, delayOffsetStep)
+
+        vm.visualizerDelayOffsetMilliseconds = PresentationDelayLine.userOffsetMillisecondsDefault
+        XCTAssertEqual(vm.visualizerDelayOffsets, [:])
+        XCTAssertEqual(store.visualizerDelayOffsets, [:])
+    }
+
+    func testVisualizerDelayOffsetIsNormalizedOnSet() {
+        let (vm, _, _) = makeVMWithOutput(SettingsStore(defaults: defaults))
+        vm.visualizerDelayOffsetMilliseconds = PresentationDelayLine.userOffsetMillisecondsRange.upperBound + delayOffsetStep
+        XCTAssertEqual(vm.visualizerDelayOffsetMilliseconds, PresentationDelayLine.userOffsetMillisecondsRange.upperBound)
+    }
+
+    func testVisualizerDelayOffsetIgnoresSetWithoutAConfirmedOutput() {
+        let store = SettingsStore(defaults: defaults)
+        let (vm, _, _) = makeVMWithOutput(store, uid: nil)
+        XCTAssertNil(vm.visualizerDelayOffsetTargetUID)
+
+        vm.visualizerDelayOffsetMilliseconds = delayOffsetStep
+
+        XCTAssertEqual(vm.visualizerDelayOffsets, [:])
+        XCTAssertEqual(store.visualizerDelayOffsets, [:])
+    }
+
+    func testVisualizerDelayOffsetIgnoresSetInAirPlayMode() {
+        let store = SettingsStore(defaults: defaults)
+        let (vm, _, _) = makeVMWithOutput(store)
+        vm.updateAirPlayMode(.capturing)
+        XCTAssertNil(vm.visualizerDelayOffsetTargetUID)
+
+        vm.visualizerDelayOffsetMilliseconds = delayOffsetStep
+
+        XCTAssertEqual(vm.visualizerDelayOffsets, [:])
+        XCTAssertEqual(store.visualizerDelayOffsets, [:])
+    }
+
+    func testVisualizerDelayOffsetTargetFollowsAdoptedAndClearedOutput() {
+        let (vm, _, _) = makeVMWithOutput(SettingsStore(defaults: defaults))
+        vm.adoptOutputDevice(ResolvedOutputDevice(uid: "device-b", deviceID: 1), name: "B")
+        XCTAssertEqual(vm.visualizerDelayOffsetTargetUID, "device-b")
+
+        vm.updateProcessingState(.suspended(.routeUnavailable), activeDevice: nil)
+        XCTAssertNil(vm.visualizerDelayOffsetTargetUID)
+    }
+
+    func testResetVisualizerDelayOffsetsClearsEveryDevice() {
+        let store = SettingsStore(defaults: defaults)
+        store.visualizerDelayOffsets = ["device-a": delayOffsetStep, "device-b": -delayOffsetStep]
+        let (vm, _, _) = makeVMWithOutput(store)
+        XCTAssertEqual(vm.visualizerDelayOffsets.count, 2, "前提: 起動時に保存値を読む")
+
+        vm.resetVisualizerDelayOffsets()
+
+        XCTAssertEqual(vm.visualizerDelayOffsets, [:])
+        XCTAssertEqual(store.visualizerDelayOffsets, [:])
+    }
+
+    func testVisualizerDelayOffsetsReachTheEngineAtLaunchAndOnEveryChange() {
+        let store = SettingsStore(defaults: defaults)
+        store.visualizerDelayOffsets = ["device-b": delayOffsetStep]
+        let (vm, engine, audioWorld) = makeVMWithOutput(store)
+        audioWorld.queue.sync {}
+        XCTAssertEqual(engine.visualizerDelayOffsetsMilliseconds, ["device-b": delayOffsetStep], "起動時に保存値が届く")
+
+        vm.visualizerDelayOffsetMilliseconds = -delayOffsetStep
+        audioWorld.queue.sync {}
+        XCTAssertEqual(engine.visualizerDelayOffsetsMilliseconds, ["device-b": delayOffsetStep, "device-a": -delayOffsetStep])
+
+        vm.resetVisualizerDelayOffsets()
+        audioWorld.queue.sync {}
+        XCTAssertEqual(engine.visualizerDelayOffsetsMilliseconds, [:])
+    }
+
+    func testProcessingSettingsChangesDoNotResendTheVisualizerDelayOffsets() {
+        let store = SettingsStore(defaults: defaults)
+        let (vm, engine, audioWorld) = makeVMWithOutput(store)
+        audioWorld.queue.sync {}
+        let marker = ["marker": delayOffsetStep]
+        audioWorld.submitUncoalesced { [engine] token in engine.applyVisualizerDelayOffsets(marker, token) }
+        audioWorld.queue.sync {}
+
+        vm.bypass.toggle()
+        audioWorld.queue.sync {}
+
+        XCTAssertEqual(engine.visualizerDelayOffsetsMilliseconds, marker, "処理設定の再適用に表を相乗りさせない")
+    }
 }

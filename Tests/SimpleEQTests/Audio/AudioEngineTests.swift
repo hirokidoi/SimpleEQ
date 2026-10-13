@@ -81,11 +81,11 @@ private func usableOutputDevice() -> (deviceID: AudioDeviceID, uid: String)? {
 
 private final class PresentationDelayStub {
     private(set) var calls: [(deviceID: AudioDeviceID, sampleRate: Double)] = []
-    private var nextValues: [Int]
+    private var nextValues: [Int?]
 
-    init(_ nextValues: [Int]) { self.nextValues = nextValues }
+    init(_ nextValues: [Int?]) { self.nextValues = nextValues }
 
-    func next(_ deviceID: AudioDeviceID, _ sampleRate: Double, _ token: AudioWorldToken) -> Int {
+    func next(_ deviceID: AudioDeviceID, _ sampleRate: Double, _ token: AudioWorldToken) -> Int? {
         calls.append((deviceID, sampleRate))
         return nextValues.isEmpty ? 0 : nextValues.removeFirst()
     }
@@ -1084,13 +1084,17 @@ final class AudioEngineTests: XCTestCase {
         let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
         let engine = makeSilencedEngine()
         let stub = PresentationDelayStub([4321])
-        engine.readPresentationDelayFrames = stub.next
+        engine.readDeclaredPresentationLatencyFrames = stub.next
         let url = makeMinimalSharedRingReaderFixture()
         tempURLs.update { $0.append(url) }
         let ringReader = try SharedRingReader.open(path: url.path).get()
 
         XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
-        XCTAssertEqual(engine.presentationDelay?.delayFrames, 4321)
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 4321, "オフセットなしなら遅延は申告値")
+        XCTAssertEqual(
+            engine.presentationDelay?.capacityFrames,
+            PresentationDelayLine.capacityFrames(declaredFrames: 4321, appliedSampleRate: AudioConfig.appliedSampleRate)
+        )
         XCTAssertEqual(stub.calls.map(\.deviceID), [device.deviceID])
         XCTAssertEqual(stub.calls.map(\.sampleRate), [AudioConfig.appliedSampleRate])
 
@@ -1098,21 +1102,186 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertNil(engine.presentationDelay, "停止で手放す")
     }
 
-    func testAssembleLeavesTheDelayNilWhenTheStubDeclaresZero() throws {
+    func testAssembleInstallsAZeroDelayLineWhenTheStubDeclaresZero() throws {
         guard let device = usableOutputDevice() else {
             throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
         }
         let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
         let engine = makeSilencedEngine()
-        engine.readPresentationDelayFrames = PresentationDelayStub([0]).next
+        engine.readDeclaredPresentationLatencyFrames = PresentationDelayStub([0]).next
         let url = makeMinimalSharedRingReaderFixture()
         tempURLs.update { $0.append(url) }
         let ringReader = try SharedRingReader.open(path: url.path).get()
 
         XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
-        XCTAssertNil(engine.presentationDelay)
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 0)
+        XCTAssertGreaterThan(engine.presentationDelay?.capacityFrames ?? 0, 0, "後からオフセットで伸ばせるよう容量は確保される")
 
         engine.suspend(cause: .applicationTermination, testToken)
+    }
+
+    // MARK: - 出力先別のオフセット
+
+    private func offsetFrames(_ milliseconds: Int) -> Int {
+        Int((Double(milliseconds) / 1000 * AudioConfig.appliedSampleRate).rounded())
+    }
+
+    private func assembledEngine(
+        declared: Int?, device: (deviceID: AudioDeviceID, uid: String), offsetsBeforeAssemble: [String: Int] = [:]
+    ) throws -> (engine: AudioEngine, ringReader: SharedRingReader) {
+        let engine = makeSilencedEngine()
+        engine.readDeclaredPresentationLatencyFrames = PresentationDelayStub([declared, declared, declared]).next
+        if !offsetsBeforeAssemble.isEmpty { engine.applyVisualizerDelayOffsets(offsetsBeforeAssemble, testToken) }
+        let url = makeMinimalSharedRingReaderFixture()
+        tempURLs.update { $0.append(url) }
+        let ringReader = try SharedRingReader.open(path: url.path).get()
+        XCTAssertTrue(engine.assemble(
+            outputDevice: ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID), ringReader: ringReader, testToken
+        ))
+        return (engine, ringReader)
+    }
+
+    func testOffsetsAppliedBeforeAssembleShapeTheInitialDelay() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let (engine, _) = try assembledEngine(declared: 4000, device: device, offsetsBeforeAssemble: [device.uid: 120])
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 4000 + offsetFrames(120))
+    }
+
+    func testApplyingOffsetsWhileRunningMovesTheDelayWithoutRebuildingTheLine() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let (engine, _) = try assembledEngine(declared: 4000, device: device)
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+        let before = try XCTUnwrap(engine.presentationDelay)
+        XCTAssertEqual(before.delayFrames, 4000)
+
+        engine.applyVisualizerDelayOffsets([device.uid: 120], testToken)
+        XCTAssertTrue(engine.presentationDelay === before, "作り直さず同じ遅延線のまま")
+        XCTAssertEqual(before.delayFrames, 4000 + offsetFrames(120))
+
+        engine.applyVisualizerDelayOffsets([device.uid: -50], testToken)
+        XCTAssertTrue(engine.presentationDelay === before)
+        XCTAssertEqual(before.delayFrames, 4000 + offsetFrames(-50))
+
+        engine.applyVisualizerDelayOffsets([:], testToken)
+        XCTAssertEqual(before.delayFrames, 4000, "表が空なら申告値だけ")
+    }
+
+    func testOffsetsOfOtherDevicesDoNotAffectTheRunningDelay() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let (engine, _) = try assembledEngine(declared: 4000, device: device)
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+
+        engine.applyVisualizerDelayOffsets(["some-other-device": 200], testToken)
+
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 4000)
+    }
+
+    func testSwitchingToAnotherUIDUsesThatUIDsOffset() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let otherUID = "forced-different-uid-for-offset-switch"
+        let (engine, _) = try assembledEngine(
+            declared: 20000, device: device, offsetsBeforeAssemble: [device.uid: 100, otherUID: -100]
+        )
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 20000 + offsetFrames(100))
+
+        XCTAssertTrue(engine.switchOutputDevice(to: ResolvedOutputDevice(uid: otherUID, deviceID: device.deviceID), testToken))
+
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 20000 + offsetFrames(-100), "切替先の UID のオフセットで作り直される")
+    }
+
+    func testNotNeededSwitchRebuildsTheDelayWhenItsTargetUIDDiffers() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let otherUID = "forced-different-uid-for-notneeded-rebuild"
+        let (engine, ringReader) = try assembledEngine(
+            declared: 20000, device: device, offsetsBeforeAssemble: [device.uid: 100, otherUID: -100]
+        )
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+        engine.readDeclaredPresentationLatencyFrames = PresentationDelayStub(Array(repeating: 20000, count: 8)).next
+        // 遅延線の対象だけ別 UID にした状態を作る (実デバイスは同じまま)。
+        XCTAssertTrue(engine.switchOutputDevice(to: ResolvedOutputDevice(uid: otherUID, deviceID: device.deviceID), testToken))
+        let before = try XCTUnwrap(engine.presentationDelay)
+        XCTAssertEqual(before.delayFrames, 20000 + offsetFrames(-100), "前提: 遅延線は別 UID 向け")
+        Thread.sleep(forTimeInterval: 0.2)
+        let resetsBefore = ringReader.metrics.occupancyResetDueToOutputRestartCount
+
+        XCTAssertTrue(engine.switchOutputDevice(to: ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID), testToken))
+
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertFalse(engine.presentationDelay === before, "対象 UID が違うので作り直される")
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 20000 + offsetFrames(100), "実際の出力先の UID のオフセットになる")
+        XCTAssertEqual(ringReader.metrics.occupancyResetDueToOutputRestartCount, resetsBefore + 1)
+    }
+
+    func testNotNeededSwitchKeepsTheDelayWhenItsTargetUIDMatches() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let (engine, _) = try assembledEngine(declared: 20000, device: device)
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+        let before = try XCTUnwrap(engine.presentationDelay)
+
+        XCTAssertTrue(engine.switchOutputDevice(to: ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID), testToken))
+
+        XCTAssertTrue(engine.presentationDelay === before, "対象 UID が一致するなら作り直さない")
+    }
+
+    func testTheOffsetTableSurvivesSuspension() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let (engine, ringReader) = try assembledEngine(declared: 4000, device: device)
+        engine.applyVisualizerDelayOffsets([device.uid: 70], testToken)
+        engine.suspend(cause: .routeUnavailable, testToken)
+        XCTAssertNil(engine.presentationDelay)
+
+        XCTAssertTrue(engine.assemble(
+            outputDevice: ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID), ringReader: ringReader, testToken
+        ))
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 4000 + offsetFrames(70), "停止をまたいで表が残り、再組み立てで効く")
+    }
+
+    func testTheSnapshotCarriesTheDeclaredAndAppliedDelayWhileRunningAndNilWhenStopped() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let (engine, _) = try assembledEngine(declared: 4000, device: device, offsetsBeforeAssemble: [device.uid: 100])
+
+        XCTAssertEqual(
+            engine.runtimeMetricsSnapshot(testToken).presentationDelay,
+            PresentationDelayObservation(declaredFrames: 4000, appliedFrames: 4000 + offsetFrames(100))
+        )
+
+        engine.suspend(cause: .applicationTermination, testToken)
+        XCTAssertNil(engine.runtimeMetricsSnapshot(testToken).presentationDelay)
+    }
+
+    func testTheSnapshotLeavesDeclaredNilWhenTheStubCannotRead() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        let (engine, _) = try assembledEngine(declared: nil, device: device, offsetsBeforeAssemble: [device.uid: 100])
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+
+        XCTAssertEqual(
+            engine.runtimeMetricsSnapshot(testToken).presentationDelay,
+            PresentationDelayObservation(declaredFrames: nil, appliedFrames: offsetFrames(100)),
+            "読めない申告値は 0 として遅延計算に使い、観測では nil のまま"
+        )
     }
 
     func testSwitchOutputDeviceRebuildsTheDelayForTheNewDeviceOnSuccess() throws {
@@ -1122,7 +1291,7 @@ final class AudioEngineTests: XCTestCase {
         let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
         let engine = makeSilencedEngine()
         let stub = PresentationDelayStub([100, 200])
-        engine.readPresentationDelayFrames = stub.next
+        engine.readDeclaredPresentationLatencyFrames = stub.next
         let url = makeMinimalSharedRingReaderFixture()
         tempURLs.update { $0.append(url) }
         let ringReader = try SharedRingReader.open(path: url.path).get()
@@ -1146,7 +1315,7 @@ final class AudioEngineTests: XCTestCase {
         let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
         let engine = makeSilencedEngine()
         let stub = PresentationDelayStub([100])
-        engine.readPresentationDelayFrames = stub.next
+        engine.readDeclaredPresentationLatencyFrames = stub.next
         let url = makeMinimalSharedRingReaderFixture()
         tempURLs.update { $0.append(url) }
         let ringReader = try SharedRingReader.open(path: url.path).get()
@@ -1171,7 +1340,7 @@ final class AudioEngineTests: XCTestCase {
         let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
         let engine = makeSilencedEngine()
         let stub = PresentationDelayStub([100, 200])
-        engine.readPresentationDelayFrames = stub.next
+        engine.readDeclaredPresentationLatencyFrames = stub.next
         let url = makeMinimalSharedRingReaderFixture(sampleRate: 48000)
         tempURLs.update { $0.append(url) }
         let ringReader = try SharedRingReader.open(path: url.path).get()
@@ -1186,6 +1355,30 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertEqual(engine.presentationDelay?.delayFrames, 200, "レート変更で新しい処理レートに合わせて作り直される")
         XCTAssertEqual(stub.calls.map(\.sampleRate), [48000, 44100], "作り直しに渡る処理レートが新しいレートに変わる")
         XCTAssertEqual(stub.calls.map(\.deviceID), [device.deviceID, device.deviceID], "現在の出力デバイスで作り直す")
+
+        engine.suspend(cause: .applicationTermination, testToken)
+    }
+
+    func testPerformRateChangeAppliesTheOffsetAtTheNewRate() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        restoringBaseSampleRateAfterTest()
+        let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
+        let engine = makeSilencedEngine()
+        engine.readDeclaredPresentationLatencyFrames = PresentationDelayStub([100, 200]).next
+        engine.applyVisualizerDelayOffsets([device.uid: 70], testToken)
+        let url = makeMinimalSharedRingReaderFixture(sampleRate: 48000)
+        tempURLs.update { $0.append(url) }
+        let ringReader = try SharedRingReader.open(path: url.path).get()
+        XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: ringReader, testToken))
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 100 + offsetFrames(70), "前提: 組み立て時にオフセットが効いている")
+
+        setHeaderSampleRate(url, 44100)
+        engine.applyDriverSampleRateIfChanged(testToken)
+
+        XCTAssertEqual(AudioConfig.appliedSampleRate, 44100, "前提: レート変更が適用されている")
+        XCTAssertEqual(engine.presentationDelay?.delayFrames, 200 + offsetFrames(70), "作り直しでも新しいレートに換算したオフセットが効く")
 
         engine.suspend(cause: .applicationTermination, testToken)
     }
@@ -1529,10 +1722,14 @@ final class AudioEngineTests: XCTestCase {
     func testTheCapturePathInstallsTheDelayTheEndpointDeclares() throws {
         let f = try makeCapturePathFixture()
         let delayFrames = 1234
-        f.engine.readPresentationDelayFrames = { _, _, _ in delayFrames }
+        f.engine.readDeclaredPresentationLatencyFrames = { _, _, _ in delayFrames }
+        f.engine.applyVisualizerDelayOffsets([f.device.uid: 200], testToken)
 
         XCTAssertTrue(f.engine.assembleAirPlay(capture: f.capture, ringReader: f.reader, testToken), "前提: 実デバイスへの組み立てが成立すること")
-        XCTAssertEqual(f.engine.presentationDelay?.delayFrames, delayFrames)
+        XCTAssertEqual(f.engine.presentationDelay?.delayFrames, delayFrames, "AirPlay ではエンドポイント UID のオフセットを使わない")
+
+        f.engine.applyVisualizerDelayOffsets([f.device.uid: -200], testToken)
+        XCTAssertEqual(f.engine.presentationDelay?.delayFrames, delayFrames, "実行中に届いた表も使わない")
 
         f.engine.suspend(cause: .routeUnavailable, testToken)
         XCTAssertNil(f.engine.presentationDelay, "停止で手放す")
@@ -1543,7 +1740,7 @@ final class AudioEngineTests: XCTestCase {
         let channels = Int(AudioConfig.channels)
         let fftSize = LevelMeter.deriveFFTSize(sampleRate: engine.levelMeter.appliedSampleRate)
         let frameCount = LevelMeter.deriveHopSize(fftSize: fftSize)
-        let delay = PresentationDelayLine(delayFrames: frameCount, channels: channels)
+        let delay = PresentationDelayLine(capacityFrames: frameCount, delayFrames: frameCount, channels: channels)
 
         var loud = [Float](repeating: 1.5, count: frameCount * channels)
         let peak = loud.withUnsafeMutableBufferPointer {

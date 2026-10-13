@@ -212,6 +212,45 @@ final class EQViewModel: ObservableObject {
             setting: visualizerFps, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled
         )
     }
+    /// 出力デバイス UID ごとのビジュアライザ遅延オフセット (ミリ秒)。
+    @Published private(set) var visualizerDelayOffsets: [String: Int]
+    static let visualizerDelayOffsetRange = Double(PresentationDelayLine.userOffsetMillisecondsRange.lowerBound)
+        ... Double(PresentationDelayLine.userOffsetMillisecondsRange.upperBound)
+    static let visualizerDelayOffsetStep = Double(PresentationDelayLine.userOffsetMillisecondsStep)
+    static let visualizerDelayOffsetDefault = Double(PresentationDelayLine.userOffsetMillisecondsDefault)
+    var visualizerDelayOffsetTargetUID: String? { isAirPlayMode ? nil : confirmedOutputDeviceUID }
+    var visualizerDelayOffsetMilliseconds: Int {
+        get {
+            visualizerDelayOffsetTargetUID.flatMap { visualizerDelayOffsets[$0] }
+                ?? PresentationDelayLine.userOffsetMillisecondsDefault
+        }
+        set {
+            guard let uid = visualizerDelayOffsetTargetUID else { return }
+            let normalized = PresentationDelayLine.normalizedUserOffsetMilliseconds(newValue)
+            var offsets = visualizerDelayOffsets
+            if normalized == PresentationDelayLine.userOffsetMillisecondsDefault {
+                offsets[uid] = nil
+            } else {
+                offsets[uid] = normalized
+            }
+            commitVisualizerDelayOffsets(offsets)
+        }
+    }
+    func resetVisualizerDelayOffsets() {
+        commitVisualizerDelayOffsets([:])
+    }
+    private func commitVisualizerDelayOffsets(_ offsets: [String: Int]) {
+        guard offsets != visualizerDelayOffsets else { return }
+        visualizerDelayOffsets = offsets
+        settings.visualizerDelayOffsets = offsets
+        applyVisualizerDelayOffsetsToEngine()
+    }
+    private func applyVisualizerDelayOffsetsToEngine() {
+        let offsets = visualizerDelayOffsets
+        audioWorld.submit(coalescingKey: AudioRequestKey.visualizerDelayOffsets) { [engine] token in
+            engine.applyVisualizerDelayOffsets(offsets, token)
+        }
+    }
     /// ビジュアライザ (バーレベル) の dBFS 下限。
     @Published var floorDb: Double {
         didSet {
@@ -420,7 +459,7 @@ final class EQViewModel: ObservableObject {
     /// sessionOutputDeviceUID の巻き戻し (再代入) 中、didSet の再入を防ぐガード。
     private var isApplyingOutputDeviceSelection = false
     /// 直近に確定した出力デバイス UID。選択の失敗時、戻す先として使う。
-    private var confirmedOutputDeviceUID: String?
+    @Published private(set) var confirmedOutputDeviceUID: String?
     /// Settings 画面の「取り込み口」行表示用。
     var driverDeviceName: String { DriverConfig.deviceName }
     /// 出力先が解決できない間の表示用プレースホルダー。
@@ -522,12 +561,14 @@ final class EQViewModel: ObservableObject {
         peakCapBrightenAmount = settings.peakCapBrightenAmount
         ledDimAmount = settings.ledDimAmount
         handleRevealHoldSeconds = settings.handleRevealHoldSeconds
+        visualizerDelayOffsets = settings.visualizerDelayOffsets
 
         selectedPreset = settings.preset
         syncSelectedPresetIfInvalid()
 
         engine.levelMeter.captureEnabled = visualizerActive
         applyProcessingSettingsToEngine()
+        applyVisualizerDelayOffsetsToEngine()
         autoPreamp?.didDerive = { [weak self] db in self?.applyDerivedPreamp(db) }
 
         refreshVisualizerFpsCeiling()
@@ -912,7 +953,7 @@ final class EQViewModel: ObservableObject {
     /// 停止状態への遷移時に、出力先の選択と表示名をプレースホルダーへ戻す。
     private func clearOutputDeviceSelection() {
         placeSessionOutputDeviceUID(nil)
-        confirmedOutputDeviceUID = nil
+        if confirmedOutputDeviceUID != nil { confirmedOutputDeviceUID = nil }
         resolvedOutputDeviceName = Self.unresolvedOutputDeviceName
     }
 
@@ -922,7 +963,7 @@ final class EQViewModel: ObservableObject {
             || confirmedOutputDeviceUID != device.uid
             || resolvedOutputDeviceName != name else { return }
         placeSessionOutputDeviceUID(device.uid)
-        confirmedOutputDeviceUID = device.uid
+        if confirmedOutputDeviceUID != device.uid { confirmedOutputDeviceUID = device.uid }
         resolvedOutputDeviceName = name
     }
 

@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var loginItemEnabled = LoginItem.isEnabled
     @State private var showingResetPresetsConfirmation = false
     @State private var showingResetMixerConfirmation = false
+    @State private var showingResetVisualizerDelayConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -291,21 +292,9 @@ struct SettingsView: View {
     private var presetsSection: some View {
         PanelSection("Presets") {
             settingsRow(title: "プリセットの初期化", subtitle: "現在登録されている内容をすべて削除して初期値に戻す") {
-                Button {
-                    showingResetPresetsConfirmation = true
-                } label: {
-                    Text("初期化実行")
-                        .font(.system(size: 13))
-                        .foregroundColor(EQLayout.Palette.faint)
-                        .frame(maxWidth: 100)
-                        .padding(.vertical, 10)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(EQLayout.Palette.buttonLine, lineWidth: 1))
-                        .contentShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-                .destructiveConfirmationAlert(
+                resetExecutionButton(
                     "プリセットを初期化しますか？", isPresented: $showingResetPresetsConfirmation,
-                    confirmTitle: "初期化", onConfirm: viewModel.resetAllPresets
+                    onConfirm: viewModel.resetAllPresets
                 )
             }
         }
@@ -316,21 +305,9 @@ struct SettingsView: View {
     private var mixerSection: some View {
         PanelSection("Mixer") {
             settingsRow(title: "ミキサーの初期化", subtitle: "現在登録されているチャンネルをすべて削除して初期状態に戻す") {
-                Button {
-                    showingResetMixerConfirmation = true
-                } label: {
-                    Text("初期化実行")
-                        .font(.system(size: 13))
-                        .foregroundColor(EQLayout.Palette.faint)
-                        .frame(maxWidth: 100)
-                        .padding(.vertical, 10)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(EQLayout.Palette.buttonLine, lineWidth: 1))
-                        .contentShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-                .destructiveConfirmationAlert(
+                resetExecutionButton(
                     "ミキサーを初期化しますか？", isPresented: $showingResetMixerConfirmation,
-                    confirmTitle: "初期化", onConfirm: mixer.resetToInitialState
+                    onConfirm: mixer.resetToInitialState
                 )
             }
         }
@@ -400,10 +377,66 @@ struct SettingsView: View {
             }
             .disabled(!viewModel.peakHoldEnabled)
             .opacity(viewModel.peakHoldEnabled ? 1 : EQLayout.disabledOpacity)
+
+            let delayOffsetAdjustable = viewModel.visualizerDelayOffsetTargetUID != nil
+            sliderRow(
+                title: "表示タイミングの補正", subtitle: visualizerDelayOffsetSubtitle,
+                value: visualizerDelayOffsetBinding,
+                range: EQViewModel.visualizerDelayOffsetRange, step: EQViewModel.visualizerDelayOffsetStep,
+                defaultValue: EQViewModel.visualizerDelayOffsetDefault
+            ) { Self.formatSignedMilliseconds($0) }
+            .disabled(!delayOffsetAdjustable)
+            .opacity(delayOffsetAdjustable ? 1 : EQLayout.disabledOpacity)
+
+            settingsRow(title: "表示タイミング補正の初期化", subtitle: "すべての出力先の補正を初期値に戻す") {
+                resetExecutionButton(
+                    "表示タイミング補正を初期化しますか？", isPresented: $showingResetVisualizerDelayConfirmation,
+                    onConfirm: viewModel.resetVisualizerDelayOffsets
+                )
+            }
         }
     }
 
+    private var visualizerDelayOffsetBinding: Binding<Double> {
+        Binding(
+            get: { Double(viewModel.visualizerDelayOffsetMilliseconds) },
+            set: { viewModel.visualizerDelayOffsetMilliseconds = Int($0.rounded()) }
+        )
+    }
+
+    private var visualizerDelayOffsetSubtitle: String {
+        if viewModel.isAirPlayMode { return "AirPlay では調整できません" }
+        if viewModel.visualizerDelayOffsetTargetUID == nil { return "出力先が確定していないため調整できません" }
+        return "\(viewModel.resolvedOutputDeviceName) に適用"
+    }
+
+    private static func formatSignedMilliseconds(_ milliseconds: Double) -> String {
+        let rounded = Int(milliseconds.rounded())
+        let sign = rounded > 0 ? "+" : ""
+        return "\(sign)\(rounded) ms"
+    }
+
     // MARK: - 行ビルダー
+
+    private func resetExecutionButton(
+        _ confirmationTitle: String, isPresented: Binding<Bool>, onConfirm: @escaping () -> Void
+    ) -> some View {
+        Button {
+            isPresented.wrappedValue = true
+        } label: {
+            Text("初期化実行")
+                .font(.system(size: 13))
+                .foregroundColor(EQLayout.Palette.faint)
+                .frame(maxWidth: 100)
+                .padding(.vertical, 10)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(EQLayout.Palette.buttonLine, lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .destructiveConfirmationAlert(
+            confirmationTitle, isPresented: isPresented, confirmTitle: "初期化", onConfirm: onConfirm
+        )
+    }
 
     @ViewBuilder
     private func settingsRow<Control: View>(

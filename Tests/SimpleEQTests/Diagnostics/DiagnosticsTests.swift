@@ -236,6 +236,46 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(identity?.rows.first { $0.title == "出力デバイスの実レート" }?.values, [unreadableValue])
     }
 
+    // MARK: - ビジュアライザの遅延
+
+    private func delayRows(_ observation: PresentationDelayObservation?) -> (declared: [String]?, applied: [String]?, text: String) {
+        let snapshot = AudioRuntimeMetrics().snapshot(appliedSampleRate: AudioConfig.appliedSampleRate, presentationDelay: observation)
+        let rows = DiagnosticsReport.sections(snapshot, render: idleRender()).first { $0.title == "状態" }?.rows ?? []
+        return (
+            rows.first { $0.title == "申告遅延" }?.values,
+            rows.first { $0.title == "適用中の遅延" }?.values,
+            DiagnosticsReport.text(snapshot, render: idleRender(), exportedAt: Date())
+        )
+    }
+
+    private func expectedFramesText(_ frames: Int) -> String {
+        let ms = OccupancyPolicy.formattedMilliseconds(frames: frames, sampleRate: AudioConfig.appliedSampleRate)
+        return "\(frames) frames (\(ms) ms)"
+    }
+
+    func testDelayRowsShowTheDeclaredAndAppliedFramesOnScreenAndInTheExport() {
+        let rows = delayRows(PresentationDelayObservation(declaredFrames: 5000, appliedFrames: 5480))
+
+        XCTAssertEqual(rows.declared, [expectedFramesText(5000)])
+        XCTAssertEqual(rows.applied, [expectedFramesText(5480)])
+        XCTAssertTrue(rows.text.contains("申告遅延 (出力先が申告する遅延の合計): " + expectedFramesText(5000)))
+        XCTAssertTrue(rows.text.contains("適用中の遅延 (ビジュアライザを遅らせている量): " + expectedFramesText(5480)))
+    }
+
+    func testDelayRowsAreUnreadableWhileTheDelayLineIsAbsent() {
+        let rows = delayRows(nil)
+
+        XCTAssertEqual(rows.declared, [unreadableValue])
+        XCTAssertEqual(rows.applied, [unreadableValue])
+    }
+
+    func testOnlyTheDeclaredDelayIsUnreadableWhenTheDeclaredValueCouldNotBeRead() {
+        let rows = delayRows(PresentationDelayObservation(declaredFrames: nil, appliedFrames: 480))
+
+        XCTAssertEqual(rows.declared, [unreadableValue])
+        XCTAssertEqual(rows.applied, [expectedFramesText(480)])
+    }
+
     // バッファ量の行は観測の有無で行数が変わらない (変わると、その下の並び全体が動く)。
     func testBufferRowsKeepTheSameNumberOfValuesBeforeAndAfterObservation() {
         let unobserved = AudioRuntimeMetrics()

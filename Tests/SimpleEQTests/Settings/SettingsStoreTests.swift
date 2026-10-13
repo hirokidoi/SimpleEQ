@@ -903,4 +903,63 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(reloaded?.first?.gain, MixerGainScale.unityGain, "上限 0dB を超えない")
         XCTAssertEqual(reloaded?.first?.muted, false, "先に現れた側を残す")
     }
+
+    // MARK: - ビジュアライザ遅延オフセット
+
+    private var offsetStep: Int { PresentationDelayLine.userOffsetMillisecondsStep }
+    private var offsetRange: ClosedRange<Int> { PresentationDelayLine.userOffsetMillisecondsRange }
+
+    func testAbsentVisualizerDelayOffsetsReadAsEmptyWithoutDiscardingTheRest() {
+        let store = SettingsStore(defaults: defaults)
+        store.visualizerDelayOffsets = ["a": offsetStep]
+        store.ledDimAmount = 0.35
+        var json = try! JSONSerialization.jsonObject(
+            with: defaults.data(forKey: SettingsStore.defaultsKey)!
+        ) as! [String: Any]
+        XCTAssertTrue(Self.removing("visualizer.delayOffsetsMillisecondsByDeviceUID", from: &json), "前提: 保存されている項目を落とすこと")
+        defaults.set(try! JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
+
+        let reloaded = SettingsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.visualizerDelayOffsets, [:])
+        XCTAssertEqual(reloaded.ledDimAmount, 0.35)
+    }
+
+    func testStoredVisualizerDelayOffsetsAreNormalizedOnLoad() {
+        writeStoredPayload(overriding: ["visualizer.delayOffsetsMillisecondsByDeviceUID": [
+            "over": offsetRange.upperBound + offsetStep,
+            "under": offsetRange.lowerBound - offsetStep,
+            "between": offsetStep * 2 + 1,
+            "default": PresentationDelayLine.userOffsetMillisecondsDefault,
+            "": offsetStep,
+        ]])
+        XCTAssertEqual(SettingsStore(defaults: defaults).visualizerDelayOffsets, [
+            "over": offsetRange.upperBound,
+            "under": offsetRange.lowerBound,
+            "between": offsetStep * 2,
+        ])
+    }
+
+    func testVisualizerDelayOffsetsRoundTripAcrossInstances() {
+        let offsets = ["a": offsetStep, "b": -offsetStep]
+        SettingsStore(defaults: defaults).visualizerDelayOffsets = offsets
+        XCTAssertEqual(SettingsStore(defaults: defaults).visualizerDelayOffsets, offsets)
+    }
+
+    func testSettingVisualizerDelayOffsetsNormalizesAndDropsDefaults() {
+        let store = SettingsStore(defaults: defaults)
+        store.visualizerDelayOffsets = ["a": offsetRange.upperBound + offsetStep, "b": PresentationDelayLine.userOffsetMillisecondsDefault]
+        XCTAssertEqual(store.visualizerDelayOffsets, ["a": offsetRange.upperBound])
+    }
+
+    func testEmptyVisualizerDelayOffsetsAreStoredAsAbsent() {
+        let store = SettingsStore(defaults: defaults)
+        store.visualizerDelayOffsets = ["a": offsetStep]
+        store.visualizerDelayOffsets = [:]
+        let json = try! JSONSerialization.jsonObject(
+            with: defaults.data(forKey: SettingsStore.defaultsKey)!
+        ) as! [String: Any]
+        var copy = json
+        XCTAssertFalse(Self.removing("visualizer.delayOffsetsMillisecondsByDeviceUID", from: &copy), "空の表は保存 JSON にキーを出さない")
+        XCTAssertEqual(SettingsStore(defaults: defaults).visualizerDelayOffsets, [:])
+    }
 }

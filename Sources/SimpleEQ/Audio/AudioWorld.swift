@@ -114,4 +114,6 @@ enum AudioRequestKey: Hashable {
     case ownershipRenew
     /// 意味があるのは最新の 1 件だけ。
     case bluetoothAutoDisconnect
+    /// 意味があるのは最新の 1 件だけ。
+    case visualizerDelayOffsets
 }

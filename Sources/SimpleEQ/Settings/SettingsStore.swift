@@ -73,6 +73,8 @@ final class SettingsStore {
         var attackLevel = EQLayout.Tuning.attack.defaultLevel
         var releaseLevel = EQLayout.Tuning.release.defaultLevel
         var peakHold = PeakHoldState()
+        /// 出力デバイス UID ごとのビジュアライザ遅延オフセット (ミリ秒)。
+        var delayOffsetsMillisecondsByDeviceUID: [String: Int]?
     }
 
     private struct HandleState: Codable {
@@ -154,6 +156,9 @@ final class SettingsStore {
         p.visualizer.peakHold.capBrightenAmount = clamped(
             p.visualizer.peakHold.capBrightenAmount, to: EQLayout.Tuning.peakCapBrightenAmountRange
         )
+        p.visualizer.delayOffsetsMillisecondsByDeviceUID = normalizedDelayOffsets(
+            p.visualizer.delayOffsetsMillisecondsByDeviceUID ?? [:]
+        )
         p.handles.fadeLevel = clamped(p.handles.fadeLevel, to: EQLayout.Tuning.handleFade)
         p.handles.previewLevel = clamped(p.handles.previewLevel, to: EQLayout.Tuning.handlePreview)
         p.handles.ledDimAmount = clamped(p.handles.ledDimAmount, to: EQLayout.Tuning.ledDimAmountRange)
@@ -177,6 +182,15 @@ final class SettingsStore {
                 key: entry.key, gain: MixerGainScale.normalizedGain(entry.gain), muted: entry.muted
             )
         }
+    }
+
+    private static func normalizedDelayOffsets(_ offsets: [String: Int]) -> [String: Int]? {
+        var result: [String: Int] = [:]
+        for (uid, milliseconds) in offsets where !uid.isEmpty {
+            let normalized = PresentationDelayLine.normalizedUserOffsetMilliseconds(milliseconds)
+            if normalized != PresentationDelayLine.userOffsetMillisecondsDefault { result[uid] = normalized }
+        }
+        return result.isEmpty ? nil : result
     }
 
     private static func clamped(_ value: Double, to range: ClosedRange<Double>) -> Double {
@@ -306,6 +320,12 @@ final class SettingsStore {
     var releaseLevel: Int {
         get { readState { $0.visualizer.releaseLevel } }
         set { writeState { $0.visualizer.releaseLevel = newValue } }
+    }
+
+    /// 出力デバイス UID ごとのビジュアライザ遅延オフセット (ミリ秒)。
+    var visualizerDelayOffsets: [String: Int] {
+        get { readState { $0.visualizer.delayOffsetsMillisecondsByDeviceUID } ?? [:] }
+        set { writeState { $0.visualizer.delayOffsetsMillisecondsByDeviceUID = Self.normalizedDelayOffsets(newValue) } }
     }
 
     /// ハンドル表示アルファのフェード速度の段。

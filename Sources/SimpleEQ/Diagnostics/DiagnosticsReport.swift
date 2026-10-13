@@ -105,6 +105,14 @@ enum DiagnosticsReport {
                 values: [hertzText(s.outputDeviceSampleRate)]
             ),
             DiagnosticsRow(
+                title: "申告遅延", subtitle: "出力先が申告する遅延の合計",
+                values: [s.presentationDelay?.declaredFrames.map { framesText($0, s) } ?? unobserved]
+            ),
+            DiagnosticsRow(
+                title: "適用中の遅延", subtitle: "ビジュアライザを遅らせている量",
+                values: [s.presentationDelay.map { framesText($0.appliedFrames, s) } ?? unobserved]
+            ),
+            DiagnosticsRow(
                 title: "ドライバの実レート", subtitle: "アプリが適用中のレート",
                 values: [hertzText(s.appliedSampleRate)]
             ),
