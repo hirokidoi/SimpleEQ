@@ -6,11 +6,13 @@
 #include <stdint.h>
 #include <sys/syslog.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #include "SimpleEQRingLayout.h"
 
@@ -3490,9 +3492,79 @@ Done:
     return theAnswer;
 }
 
+static bool SimpleEQAudio_ClientIsAudioService(pid_t inClientProcessID, bool *outIdentified)
+{
+    *outIdentified = false;
+    if(inClientProcessID <= 0) { return false; }
+
+    char thePath[PROC_PIDPATHINFO_MAXSIZE];
+    if(proc_pidpath(inClientProcessID, thePath, sizeof(thePath)) > 0)
+    {
+        *outIdentified = true;
+        return SimpleEQVolumeControlPathIsAudioService(thePath);
+    }
+
+    int theMIB[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, inClientProcessID };
+    struct kinfo_proc theInfo;
+    size_t theInfoSize = sizeof(theInfo);
+    if(sysctl(theMIB, 4, &theInfo, &theInfoSize, NULL, 0) == 0 && theInfoSize == sizeof(theInfo))
+    {
+        *outIdentified = true;
+        return SimpleEQVolumeControlProcessNameIsAudioService(theInfo.kp_proc.p_comm);
+    }
+    return false;
+}
+
+static bool SimpleEQAudio_RefusesVolumeControlWrite(pid_t inClientProcessID)
+{
+    static atomic_bool sUnidentifiedLogged = false;
+    SimpleEQRingHeader *theHeader = gSimpleEQRing_Header;
+    if(theHeader == NULL) { return false; }
+
+    uint32_t theOwnerProcessID = atomic_load_explicit(&theHeader->ownerProcessID, memory_order_relaxed);
+    bool theSeatIsHeld = SimpleEQOwnership_SeatIsHeld(theOwnerProcessID, &theHeader->ownershipLeaseDeadlineHostTime);
+
+    bool theFromAudioService = false;
+    if(theSeatIsHeld)
+    {
+        bool theIdentified = false;
+        theFromAudioService = SimpleEQAudio_ClientIsAudioService(inClientProcessID, &theIdentified);
+        if(!theIdentified && !atomic_exchange(&sUnidentifiedLogged, true))
+        {
+            syslog(LOG_NOTICE, "SimpleEQAudio: could not identify the volume control writer (pid %d), accepted", (int)inClientProcessID);
+        }
+    }
+    // 識別できないときは受け付ける。拒否する側に倒すと、ユーザ操作を落とす恐れがある。
+    return SimpleEQVolumeControlRefusesWrite(theFromAudioService, theSeatIsHeld);
+}
+
+static void SimpleEQAudio_LogRefusedVolumeControlWrite(pid_t inClientProcessID, AudioObjectID inObjectID, AudioObjectPropertySelector inSelector, const void *inData)
+{
+    pthread_mutex_lock(&gPlugIn_StateMutex);
+    Float32 theHeldVolume = gVolume_Master_Value;
+    bool theHeldMute = gMute_Master_Value;
+    pthread_mutex_unlock(&gPlugIn_StateMutex);
+
+    if(inObjectID == kObjectID_Mute_Output_Master)
+    {
+        syslog(LOG_NOTICE, "SimpleEQAudio: refused volume control write pid=%d target=mute requested=%u held=%u",
+               (int)inClientProcessID, (unsigned)(*((const UInt32*)inData) != 0), (unsigned)theHeldMute);
+    }
+    else if(inSelector == kAudioLevelControlPropertyDecibelValue)
+    {
+        syslog(LOG_NOTICE, "SimpleEQAudio: refused volume control write pid=%d target=volume-db requested=%f held=%f",
+               (int)inClientProcessID, (double)*((const Float32*)inData), (double)VolumeToDecibel(theHeldVolume));
+    }
+    else
+    {
+        syslog(LOG_NOTICE, "SimpleEQAudio: refused volume control write pid=%d target=volume-scalar requested=%f held=%f",
+               (int)inClientProcessID, (double)*((const Float32*)inData), (double)VolumeToScalar(theHeldVolume));
+    }
+}
+
 static OSStatus SimpleEQAudio_SetControlPropertyData(AudioServerPlugInDriverRef inDriver, AudioObjectID inObjectID, pid_t inClientProcessID, const AudioObjectPropertyAddress* inAddress, UInt32 inQualifierDataSize, const void* inQualifierData, UInt32 inDataSize, const void* inData, UInt32* outNumberPropertiesChanged, AudioObjectPropertyAddress outChangedAddresses[2])
 {
-    #pragma unused(inClientProcessID, inQualifierDataSize, inQualifierData)
+    #pragma unused(inQualifierDataSize, inQualifierData)
     OSStatus theAnswer = 0;
     Float32 theNewVolume;
 
@@ -3502,6 +3574,19 @@ static OSStatus SimpleEQAudio_SetControlPropertyData(AudioServerPlugInDriverRef 
     FailWithAction(outChangedAddresses == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetControlPropertyData: no place to return the properties that changed");
 
     *outNumberPropertiesChanged = 0;
+
+    bool theIsKnownWrite =
+        (inObjectID == kObjectID_Volume_Output_Master
+            && (inAddress->mSelector == kAudioLevelControlPropertyScalarValue || inAddress->mSelector == kAudioLevelControlPropertyDecibelValue)
+            && inDataSize == sizeof(Float32))
+        || (inObjectID == kObjectID_Mute_Output_Master
+            && inAddress->mSelector == kAudioBooleanControlPropertyValue
+            && inDataSize == sizeof(UInt32));
+    if(theIsKnownWrite && inData != NULL && SimpleEQAudio_RefusesVolumeControlWrite(inClientProcessID))
+    {
+        SimpleEQAudio_LogRefusedVolumeControlWrite(inClientProcessID, inObjectID, inAddress->mSelector, inData);
+        goto Done;
+    }
 
     switch(inObjectID)
     {

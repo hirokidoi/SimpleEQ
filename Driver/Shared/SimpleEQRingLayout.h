@@ -12,7 +12,7 @@
 #define kSimpleEQRingLayoutVersion ((uint32_t)3)
 
 #define kSimpleEQDriverVersionMajor ((uint16_t)2)
-#define kSimpleEQDriverVersionMinor ((uint16_t)3)
+#define kSimpleEQDriverVersionMinor ((uint16_t)4)
 
 #define kSimpleEQRingMagic ((uint32_t)0x53455152u)
 
@@ -46,6 +46,32 @@
 
 #define kSimpleEQVolumeMinDB ((float)-64.0)
 #define kSimpleEQVolumeMaxDB ((float)0.0)
+
+//==================================================================================================
+#pragma mark Volume / Mute control writes
+//==================================================================================================
+
+/// 保存した音量をホストが書き戻すときの書き込み元。
+#define kSimpleEQAudioServicePath "/usr/sbin/coreaudiod"
+
+static inline bool SimpleEQVolumeControlPathIsAudioService(const char *inPath)
+{
+    if(inPath == NULL) { return false; }
+    return strcmp(inPath, kSimpleEQAudioServicePath) == 0;
+}
+
+static inline bool SimpleEQVolumeControlProcessNameIsAudioService(const char *inName)
+{
+    if(inName == NULL) { return false; }
+    const char *theLastSlash = strrchr(kSimpleEQAudioServicePath, '/');
+    const char *theServiceName = theLastSlash != NULL ? theLastSlash + 1 : kSimpleEQAudioServicePath;
+    return strcmp(inName, theServiceName) == 0;
+}
+
+static inline bool SimpleEQVolumeControlRefusesWrite(bool inFromAudioService, bool inOwnershipSeatIsHeld)
+{
+    return inFromAudioService && inOwnershipSeatIsHeld;
+}
 
 //==================================================================================================
 #pragma mark Mixer (client table / per-client gain)

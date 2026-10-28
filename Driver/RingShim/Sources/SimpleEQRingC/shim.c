@@ -360,6 +360,28 @@ uint32_t simpleeq_driver_name_override_max_length(void)
     return kSimpleEQNameOverrideMaxLength;
 }
 
+// --- 音量・ミュートの書き込み元 ---------------------------------------------
+
+const char *simpleeq_audio_service_path(void)
+{
+    return kSimpleEQAudioServicePath;
+}
+
+bool simpleeq_volume_control_path_is_audio_service(const char *inPath)
+{
+    return SimpleEQVolumeControlPathIsAudioService(inPath);
+}
+
+bool simpleeq_volume_control_process_name_is_audio_service(const char *inName)
+{
+    return SimpleEQVolumeControlProcessNameIsAudioService(inName);
+}
+
+bool simpleeq_volume_control_refuses_write(bool inFromAudioService, bool inOwnershipSeatIsHeld)
+{
+    return SimpleEQVolumeControlRefusesWrite(inFromAudioService, inOwnershipSeatIsHeld);
+}
+
 // --- 所有権 (セッション横断の調停) ------------------------------------------
 
 uint32_t simpleeq_ownership_selector(void)

@@ -105,6 +105,13 @@ uint32_t    simpleeq_driver_headphone_route_selector(void);
 uint32_t    simpleeq_driver_presentation_latency_selector(void);
 uint32_t    simpleeq_driver_presentation_latency_neutral_frames(void);
 
+// --- 音量・ミュートの書き込み元 ---------------------------------------------
+
+const char *simpleeq_audio_service_path(void);
+bool simpleeq_volume_control_path_is_audio_service(const char *inPath);
+bool simpleeq_volume_control_process_name_is_audio_service(const char *inName);
+bool simpleeq_volume_control_refuses_write(bool inFromAudioService, bool inOwnershipSeatIsHeld);
+
 // --- 所有権 (セッション横断の調停) ------------------------------------------
 
 uint32_t simpleeq_ownership_selector(void);

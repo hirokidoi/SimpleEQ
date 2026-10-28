@@ -173,6 +173,34 @@ final class DriverSourceConsistencyTests: XCTestCase {
         )
     }
 
+    func testVolumeControlWritesAreJudgedWithTheActualSeatAcrossEverySelector() throws {
+        let source = try String(contentsOf: RepositoryFiles.driverSourceFile, encoding: .utf8)
+
+        let refuser = "SimpleEQAudio_RefusesVolumeControlWrite"
+        let definition = try XCTUnwrap(source.range(of: "\nstatic bool \(refuser)("), "拒否判定の関数の定義が見当たらない")
+        let end = try XCTUnwrap(source.range(of: "\n}\n", range: definition.upperBound..<source.endIndex))
+        let refuserBody = String(source[definition.upperBound..<end.lowerBound])
+        let pattern = try NSRegularExpression(pattern: "SimpleEQVolumeControlRefusesWrite\\(([A-Za-z_]\\w*), ([A-Za-z_]\\w*)\\)")
+        let match = try XCTUnwrap(
+            pattern.firstMatch(in: refuserBody, range: NSRange(refuserBody.startIndex..., in: refuserBody)),
+            "共有ヘッダの判定へ書き込み元と席の値を変数で渡していない"
+        )
+        let writer = String(refuserBody[try XCTUnwrap(Range(match.range(at: 1), in: refuserBody))])
+        let seat = String(refuserBody[try XCTUnwrap(Range(match.range(at: 2), in: refuserBody))])
+        XCTAssertTrue(refuserBody.contains("\(writer) = SimpleEQAudio_ClientIsAudioService("), "判定へ渡す \(writer) が書き込み元の識別結果ではない")
+        XCTAssertTrue(refuserBody.contains("\(seat) = SimpleEQOwnership_SeatIsHeld("), "判定へ渡す \(seat) が席の判定結果ではない")
+
+        let setter = try XCTUnwrap(
+            source.range(of: "\nstatic OSStatus SimpleEQAudio_SetControlPropertyData(", options: .backwards), "コントロールの Set の定義が見当たらない"
+        )
+        let dispatch = try XCTUnwrap(source.range(of: "switch(inObjectID)", range: setter.upperBound..<source.endIndex))
+        let entry = source[setter.upperBound..<dispatch.lowerBound]
+        XCTAssertTrue(entry.contains("\(refuser)(inClientProcessID)"), "Set の入口で拒否判定を呼んでいない")
+        for selector in ["kAudioLevelControlPropertyScalarValue", "kAudioLevelControlPropertyDecibelValue", "kAudioBooleanControlPropertyValue"] {
+            XCTAssertTrue(entry.contains(selector), "\(selector) が拒否の対象に入っていない")
+        }
+    }
+
     /// case ラベルから次の case ラベルの手前までの本体。
     private static func driverSourceCaseBody(inFunction name: String, label: String) throws -> String {
         let source = try String(contentsOf: RepositoryFiles.driverSourceFile, encoding: .utf8)
