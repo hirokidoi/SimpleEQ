@@ -14,7 +14,9 @@ struct SettingsView: View {
     @State private var loginItemEnabled = LoginItem.isEnabled
     @State private var showingResetPresetsConfirmation = false
     @State private var showingResetMixerConfirmation = false
-    @State private var showingResetVisualizerDelayConfirmation = false
+    @State private var showingResetAVSyncOffsetConfirmation = false
+    // ドラッグ中に確定すると刻みごとに構成変更で音が途切れるため、離したときだけ確定する。
+    @State private var avSyncOffsetDraft = AVSyncOffsetDraft.idle
 
     var body: some View {
         VStack(spacing: 0) {
@@ -378,35 +380,67 @@ struct SettingsView: View {
             .disabled(!viewModel.peakHoldEnabled)
             .opacity(viewModel.peakHoldEnabled ? 1 : EQLayout.disabledOpacity)
 
-            let delayOffsetAdjustable = viewModel.visualizerDelayOffsetTargetUID != nil
+            let avSyncOffsetAdjustable = viewModel.avSyncOffsetTargetUID != nil
             sliderRow(
-                title: "表示タイミングの補正", subtitle: visualizerDelayOffsetSubtitle,
-                value: visualizerDelayOffsetBinding,
-                range: EQViewModel.visualizerDelayOffsetRange, step: EQViewModel.visualizerDelayOffsetStep,
-                defaultValue: EQViewModel.visualizerDelayOffsetDefault
-            ) { Self.formatSignedMilliseconds($0) }
-            .disabled(!delayOffsetAdjustable)
-            .opacity(delayOffsetAdjustable ? 1 : EQLayout.disabledOpacity)
+                title: "映像との同期補正", subtitle: avSyncOffsetSubtitle,
+                value: avSyncOffsetBinding,
+                range: EQViewModel.avSyncOffsetRange, step: EQViewModel.avSyncOffsetStep,
+                defaultValue: EQViewModel.avSyncOffsetDefault,
+                format: { Self.formatSignedMilliseconds($0) },
+                onEditingChanged: avSyncOffsetEditingChanged
+            )
+            .disabled(!avSyncOffsetAdjustable)
+            .opacity(avSyncOffsetAdjustable ? 1 : EQLayout.disabledOpacity)
+            .onChange(of: viewModel.avSyncOffsetTargetUID) { _, _ in
+                if case .editing = avSyncOffsetDraft { avSyncOffsetDraft = .discarded }
+            }
+            .onDisappear { avSyncOffsetDraft = .idle }
 
-            settingsRow(title: "表示タイミング補正の初期化", subtitle: "すべての出力先の補正を初期値に戻す") {
+            settingsRow(title: "映像との同期補正の初期化", subtitle: "すべての出力先の補正を初期値に戻す") {
                 resetExecutionButton(
-                    "表示タイミング補正を初期化しますか？", isPresented: $showingResetVisualizerDelayConfirmation,
-                    onConfirm: viewModel.resetVisualizerDelayOffsets
+                    "映像との同期補正を初期化しますか？", isPresented: $showingResetAVSyncOffsetConfirmation,
+                    onConfirm: viewModel.resetAVSyncOffsets
                 )
             }
         }
     }
 
-    private var visualizerDelayOffsetBinding: Binding<Double> {
+    private enum AVSyncOffsetDraft {
+        case idle
+        case editing(Double)
+        case discarded
+    }
+
+    private var avSyncOffsetBinding: Binding<Double> {
         Binding(
-            get: { Double(viewModel.visualizerDelayOffsetMilliseconds) },
-            set: { viewModel.visualizerDelayOffsetMilliseconds = Int($0.rounded()) }
+            get: {
+                if case .editing(let value) = avSyncOffsetDraft { return value }
+                return Double(viewModel.avSyncOffsetMilliseconds)
+            },
+            set: { newValue in
+                switch avSyncOffsetDraft {
+                case .editing: avSyncOffsetDraft = .editing(newValue)
+                case .discarded: break
+                case .idle: viewModel.avSyncOffsetMilliseconds = Int(newValue.rounded())
+                }
+            }
         )
     }
 
-    private var visualizerDelayOffsetSubtitle: String {
+    private func avSyncOffsetEditingChanged(_ editing: Bool) {
+        if editing {
+            avSyncOffsetDraft = .editing(Double(viewModel.avSyncOffsetMilliseconds))
+            return
+        }
+        if case .editing(let value) = avSyncOffsetDraft {
+            viewModel.avSyncOffsetMilliseconds = Int(value.rounded())
+        }
+        avSyncOffsetDraft = .idle
+    }
+
+    private var avSyncOffsetSubtitle: String {
         if viewModel.isAirPlayMode { return "AirPlay では調整できません" }
-        if viewModel.visualizerDelayOffsetTargetUID == nil { return "出力先が確定していないため調整できません" }
+        if viewModel.avSyncOffsetTargetUID == nil { return "出力先が確定していないため調整できません" }
         return "\(viewModel.resolvedOutputDeviceName) に適用"
     }
 
@@ -448,11 +482,12 @@ struct SettingsView: View {
     private func sliderRow(
         title: String, subtitle: String? = nil,
         value: Binding<Double>, range: ClosedRange<Double>, step: Double, defaultValue: Double,
-        format: @escaping (Double) -> String
+        format: @escaping (Double) -> String,
+        onEditingChanged: @escaping (Bool) -> Void = { _ in }
     ) -> some View {
         panelSliderRow(
             title: title, subtitle: subtitle, value: value, range: range, step: step,
-            defaultValue: defaultValue, format: format
+            defaultValue: defaultValue, format: format, onEditingChanged: onEditingChanged
         )
     }
 

@@ -44,6 +44,8 @@ final class SettingsStore {
         var followsNewDevices: Bool?
         /// nil は自動切断しないことを意味する。
         var bluetoothAutoDisconnectMinutes: Int?
+        /// 出力デバイス UID ごとの映像との同期補正 (ミリ秒)。
+        var avSyncOffsetsMillisecondsByDeviceUID: [String: Int]?
     }
 
     private struct WindowState: Codable {
@@ -73,8 +75,6 @@ final class SettingsStore {
         var attackLevel = EQLayout.Tuning.attack.defaultLevel
         var releaseLevel = EQLayout.Tuning.release.defaultLevel
         var peakHold = PeakHoldState()
-        /// 出力デバイス UID ごとのビジュアライザ遅延オフセット (ミリ秒)。
-        var delayOffsetsMillisecondsByDeviceUID: [String: Int]?
     }
 
     private struct HandleState: Codable {
@@ -156,9 +156,6 @@ final class SettingsStore {
         p.visualizer.peakHold.capBrightenAmount = clamped(
             p.visualizer.peakHold.capBrightenAmount, to: EQLayout.Tuning.peakCapBrightenAmountRange
         )
-        p.visualizer.delayOffsetsMillisecondsByDeviceUID = normalizedDelayOffsets(
-            p.visualizer.delayOffsetsMillisecondsByDeviceUID ?? [:]
-        )
         p.handles.fadeLevel = clamped(p.handles.fadeLevel, to: EQLayout.Tuning.handleFade)
         p.handles.previewLevel = clamped(p.handles.previewLevel, to: EQLayout.Tuning.handlePreview)
         p.handles.ledDimAmount = clamped(p.handles.ledDimAmount, to: EQLayout.Tuning.ledDimAmountRange)
@@ -169,6 +166,9 @@ final class SettingsStore {
            !EQLayout.Tuning.bluetoothAutoDisconnectMinutesChoices.contains(minutes) {
             p.output.bluetoothAutoDisconnectMinutes = nil
         }
+        p.output.avSyncOffsetsMillisecondsByDeviceUID = normalizedAVSyncOffsets(
+            p.output.avSyncOffsetsMillisecondsByDeviceUID ?? [:]
+        )
         p.mixer.channels = p.mixer.channels.map(normalizedMixerChannels)
         return p
     }
@@ -184,11 +184,11 @@ final class SettingsStore {
         }
     }
 
-    private static func normalizedDelayOffsets(_ offsets: [String: Int]) -> [String: Int]? {
+    private static func normalizedAVSyncOffsets(_ offsets: [String: Int]) -> [String: Int]? {
         var result: [String: Int] = [:]
         for (uid, milliseconds) in offsets where !uid.isEmpty {
-            let normalized = PresentationDelayLine.normalizedUserOffsetMilliseconds(milliseconds)
-            if normalized != PresentationDelayLine.userOffsetMillisecondsDefault { result[uid] = normalized }
+            let normalized = DriverPresentationLatencyPolicy.normalizedAVSyncOffsetMilliseconds(milliseconds)
+            if normalized != DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault { result[uid] = normalized }
         }
         return result.isEmpty ? nil : result
     }
@@ -322,10 +322,10 @@ final class SettingsStore {
         set { writeState { $0.visualizer.releaseLevel = newValue } }
     }
 
-    /// 出力デバイス UID ごとのビジュアライザ遅延オフセット (ミリ秒)。
-    var visualizerDelayOffsets: [String: Int] {
-        get { readState { $0.visualizer.delayOffsetsMillisecondsByDeviceUID } ?? [:] }
-        set { writeState { $0.visualizer.delayOffsetsMillisecondsByDeviceUID = Self.normalizedDelayOffsets(newValue) } }
+    /// 出力デバイス UID ごとの映像との同期補正 (ミリ秒)。
+    var avSyncOffsets: [String: Int] {
+        get { readState { $0.output.avSyncOffsetsMillisecondsByDeviceUID } ?? [:] }
+        set { writeState { $0.output.avSyncOffsetsMillisecondsByDeviceUID = Self.normalizedAVSyncOffsets(newValue) } }
     }
 
     /// ハンドル表示アルファのフェード速度の段。

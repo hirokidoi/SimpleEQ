@@ -345,6 +345,16 @@ uint32_t simpleeq_driver_headphone_route_selector(void)
     return kSimpleEQHeadphoneRouteSelector;
 }
 
+uint32_t simpleeq_driver_presentation_latency_selector(void)
+{
+    return kSimpleEQPresentationLatencySelector;
+}
+
+uint32_t simpleeq_driver_presentation_latency_neutral_frames(void)
+{
+    return kSimpleEQPresentationLatencyNeutralFrames;
+}
+
 uint32_t simpleeq_driver_name_override_max_length(void)
 {
     return kSimpleEQNameOverrideMaxLength;

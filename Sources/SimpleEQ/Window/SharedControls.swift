@@ -290,12 +290,13 @@ func panelSliderRow<Inline: View, Trailing: View>(
     title: String, subtitle: String? = nil, labelWidth: CGFloat = EQLayout.panelLabelWidth,
     value: Binding<Double>, range: ClosedRange<Double>,
     format: @escaping (Double) -> String,
+    onEditingChanged: @escaping (Bool) -> Void = { _ in },
     @ViewBuilder inline: @escaping () -> Inline,
     @ViewBuilder trailing: @escaping () -> Trailing
 ) -> some View {
     PanelRow(title: title, subtitle: subtitle, labelWidth: labelWidth) {
         HStack(spacing: 10) {
-            Slider(value: value, in: range).tint(EQLayout.Palette.cyan)
+            Slider(value: value, in: range, onEditingChanged: onEditingChanged).tint(EQLayout.Palette.cyan)
             inline()
             Text(format(value.wrappedValue))
                 .font(.system(size: 12, weight: .bold))
@@ -311,11 +312,13 @@ func panelSliderRow<Inline: View, Trailing: View>(
 func panelSliderRow(
     title: String, subtitle: String? = nil, labelWidth: CGFloat = EQLayout.panelLabelWidth,
     value: Binding<Double>, range: ClosedRange<Double>, step: Double, defaultValue: Double,
-    format: @escaping (Double) -> String
+    format: @escaping (Double) -> String,
+    onEditingChanged: @escaping (Bool) -> Void = { _ in }
 ) -> some View {
     panelSliderRow(
         title: title, subtitle: subtitle, labelWidth: labelWidth,
-        value: steppedBinding(value, range: range, step: step), range: range, format: format
+        value: steppedBinding(value, range: range, step: step), range: range, format: format,
+        onEditingChanged: onEditingChanged
     ) {
         EmptyView()
     } trailing: {

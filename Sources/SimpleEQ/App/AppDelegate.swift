@@ -349,6 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // 停止中は自ドライバの ID やデバイスのレートを HAL へ問い合わせに行かない。
                     guard runsPeriodicDeviceQueries(processingState: engine.processingState) else { return }
                     engine.refreshDriverDeviceIDIfNeeded(token)
+                    engine.reassertDriverPresentationLatency(token)
                     engine.refreshOutputDeviceSampleRate(token)
                 }
             }

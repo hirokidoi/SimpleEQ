@@ -63,6 +63,14 @@ enum SuspensionPolicy {
         }
     }
 
+    /// 出力段の駆動に結びついた値なので、所有権を失う停止では触れない (新しい所有者がもう書いているかもしれない)。
+    static func returnsDriverPresentationLatencyToNeutral(_ cause: SuspensionCause) -> Bool {
+        switch cause {
+        case .routeUnavailable, .driverOperation, .applicationTermination: return true
+        case .ownershipUnavailable: return false
+        }
+    }
+
     private static func maintainsDriverVisibility(_ cause: SuspensionCause) -> Bool {
         switch cause {
         case .routeUnavailable: return true

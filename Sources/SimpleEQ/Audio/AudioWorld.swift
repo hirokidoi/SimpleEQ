@@ -115,5 +115,5 @@ enum AudioRequestKey: Hashable {
     /// 意味があるのは最新の 1 件だけ。
     case bluetoothAutoDisconnect
     /// 意味があるのは最新の 1 件だけ。
-    case visualizerDelayOffsets
+    case avSyncOffsets
 }

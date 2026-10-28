@@ -212,43 +212,43 @@ final class EQViewModel: ObservableObject {
             setting: visualizerFps, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled
         )
     }
-    /// 出力デバイス UID ごとのビジュアライザ遅延オフセット (ミリ秒)。
-    @Published private(set) var visualizerDelayOffsets: [String: Int]
-    static let visualizerDelayOffsetRange = Double(PresentationDelayLine.userOffsetMillisecondsRange.lowerBound)
-        ... Double(PresentationDelayLine.userOffsetMillisecondsRange.upperBound)
-    static let visualizerDelayOffsetStep = Double(PresentationDelayLine.userOffsetMillisecondsStep)
-    static let visualizerDelayOffsetDefault = Double(PresentationDelayLine.userOffsetMillisecondsDefault)
-    var visualizerDelayOffsetTargetUID: String? { isAirPlayMode ? nil : confirmedOutputDeviceUID }
-    var visualizerDelayOffsetMilliseconds: Int {
+    /// 出力デバイス UID ごとの映像との同期補正 (ミリ秒)。
+    @Published private(set) var avSyncOffsets: [String: Int]
+    static let avSyncOffsetRange = Double(DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsRange.lowerBound)
+        ... Double(DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsRange.upperBound)
+    static let avSyncOffsetStep = Double(DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsStep)
+    static let avSyncOffsetDefault = Double(DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault)
+    var avSyncOffsetTargetUID: String? { isAirPlayMode ? nil : confirmedOutputDeviceUID }
+    var avSyncOffsetMilliseconds: Int {
         get {
-            visualizerDelayOffsetTargetUID.flatMap { visualizerDelayOffsets[$0] }
-                ?? PresentationDelayLine.userOffsetMillisecondsDefault
+            avSyncOffsetTargetUID.flatMap { avSyncOffsets[$0] }
+                ?? DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault
         }
         set {
-            guard let uid = visualizerDelayOffsetTargetUID else { return }
-            let normalized = PresentationDelayLine.normalizedUserOffsetMilliseconds(newValue)
-            var offsets = visualizerDelayOffsets
-            if normalized == PresentationDelayLine.userOffsetMillisecondsDefault {
+            guard let uid = avSyncOffsetTargetUID else { return }
+            let normalized = DriverPresentationLatencyPolicy.normalizedAVSyncOffsetMilliseconds(newValue)
+            var offsets = avSyncOffsets
+            if normalized == DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault {
                 offsets[uid] = nil
             } else {
                 offsets[uid] = normalized
             }
-            commitVisualizerDelayOffsets(offsets)
+            commitAVSyncOffsets(offsets)
         }
     }
-    func resetVisualizerDelayOffsets() {
-        commitVisualizerDelayOffsets([:])
+    func resetAVSyncOffsets() {
+        commitAVSyncOffsets([:])
     }
-    private func commitVisualizerDelayOffsets(_ offsets: [String: Int]) {
-        guard offsets != visualizerDelayOffsets else { return }
-        visualizerDelayOffsets = offsets
-        settings.visualizerDelayOffsets = offsets
-        applyVisualizerDelayOffsetsToEngine()
+    private func commitAVSyncOffsets(_ offsets: [String: Int]) {
+        guard offsets != avSyncOffsets else { return }
+        avSyncOffsets = offsets
+        settings.avSyncOffsets = offsets
+        applyAVSyncOffsetsToEngine()
     }
-    private func applyVisualizerDelayOffsetsToEngine() {
-        let offsets = visualizerDelayOffsets
-        audioWorld.submit(coalescingKey: AudioRequestKey.visualizerDelayOffsets) { [engine] token in
-            engine.applyVisualizerDelayOffsets(offsets, token)
+    private func applyAVSyncOffsetsToEngine() {
+        let offsets = avSyncOffsets
+        audioWorld.submit(coalescingKey: AudioRequestKey.avSyncOffsets) { [engine] token in
+            engine.applyAVSyncOffsets(offsets, token)
         }
     }
     /// ビジュアライザ (バーレベル) の dBFS 下限。
@@ -561,14 +561,14 @@ final class EQViewModel: ObservableObject {
         peakCapBrightenAmount = settings.peakCapBrightenAmount
         ledDimAmount = settings.ledDimAmount
         handleRevealHoldSeconds = settings.handleRevealHoldSeconds
-        visualizerDelayOffsets = settings.visualizerDelayOffsets
+        avSyncOffsets = settings.avSyncOffsets
 
         selectedPreset = settings.preset
         syncSelectedPresetIfInvalid()
 
         engine.levelMeter.captureEnabled = visualizerActive
         applyProcessingSettingsToEngine()
-        applyVisualizerDelayOffsetsToEngine()
+        applyAVSyncOffsetsToEngine()
         autoPreamp?.didDerive = { [weak self] db in self?.applyDerivedPreamp(db) }
 
         refreshVisualizerFpsCeiling()

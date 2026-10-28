@@ -23,6 +23,11 @@ enum DriverConfig {
     static let headphoneRouteSelector =
         AudioObjectPropertySelector(simpleeq_driver_headphone_route_selector())
 
+    static let presentationLatencySelector =
+        AudioObjectPropertySelector(simpleeq_driver_presentation_latency_selector())
+
+    static let presentationLatencyNeutralFrames = Int(simpleeq_driver_presentation_latency_neutral_frames())
+
     static let mixerGainSelector =
         AudioObjectPropertySelector(simpleeq_mixer_gain_selector())
 

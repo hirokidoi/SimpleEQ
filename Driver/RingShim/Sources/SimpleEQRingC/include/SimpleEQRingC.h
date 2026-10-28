@@ -102,6 +102,8 @@ uint32_t    simpleeq_driver_visibility_override_selector(void);
 uint32_t    simpleeq_driver_name_override_selector(void);
 uint32_t    simpleeq_driver_name_override_max_length(void);
 uint32_t    simpleeq_driver_headphone_route_selector(void);
+uint32_t    simpleeq_driver_presentation_latency_selector(void);
+uint32_t    simpleeq_driver_presentation_latency_neutral_frames(void);
 
 // --- 所有権 (セッション横断の調停) ------------------------------------------
 

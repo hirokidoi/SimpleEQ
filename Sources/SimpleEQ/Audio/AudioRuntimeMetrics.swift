@@ -598,6 +598,7 @@ final class AudioRuntimeMetrics {
         let outputDeviceSampleRate: Double
         let volumeRoute: VolumeRouteObservation?
         let presentationDelay: PresentationDelayObservation?
+        let driverPresentationLatencyFrames: Int?
         let readerObserved: Bool
         let writerIOIsRunning: Bool
         let writerIOCycleFrames: Int
@@ -647,7 +648,8 @@ final class AudioRuntimeMetrics {
     /// この型は自分でレートの置き場も音量経路の状態も読みに行かない。
     func snapshot(
         appliedSampleRate: Double, volumeRoute: VolumeRouteObservation? = nil,
-        presentationDelay: PresentationDelayObservation? = nil
+        presentationDelay: PresentationDelayObservation? = nil,
+        driverPresentationLatencyFrames: Int? = nil
     ) -> Snapshot {
         Snapshot(
             appVersion: appVersion,
@@ -657,6 +659,7 @@ final class AudioRuntimeMetrics {
             outputDeviceSampleRate: outputDeviceSampleRate,
             volumeRoute: volumeRoute,
             presentationDelay: presentationDelay,
+            driverPresentationLatencyFrames: driverPresentationLatencyFrames,
             readerObserved: readerObserved,
             writerIOIsRunning: writerIOIsRunning,
             writerIOCycleFrames: writerIOCycleFrames,

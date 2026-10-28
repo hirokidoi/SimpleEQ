@@ -904,62 +904,62 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(reloaded?.first?.muted, false, "先に現れた側を残す")
     }
 
-    // MARK: - ビジュアライザ遅延オフセット
+    // MARK: - 映像との同期補正
 
-    private var offsetStep: Int { PresentationDelayLine.userOffsetMillisecondsStep }
-    private var offsetRange: ClosedRange<Int> { PresentationDelayLine.userOffsetMillisecondsRange }
+    private var offsetStep: Int { DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsStep }
+    private var offsetRange: ClosedRange<Int> { DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsRange }
 
-    func testAbsentVisualizerDelayOffsetsReadAsEmptyWithoutDiscardingTheRest() {
+    func testAbsentAVSyncOffsetsReadAsEmptyWithoutDiscardingTheRest() {
         let store = SettingsStore(defaults: defaults)
-        store.visualizerDelayOffsets = ["a": offsetStep]
+        store.avSyncOffsets = ["a": offsetStep]
         store.ledDimAmount = 0.35
         var json = try! JSONSerialization.jsonObject(
             with: defaults.data(forKey: SettingsStore.defaultsKey)!
         ) as! [String: Any]
-        XCTAssertTrue(Self.removing("visualizer.delayOffsetsMillisecondsByDeviceUID", from: &json), "前提: 保存されている項目を落とすこと")
+        XCTAssertTrue(Self.removing("output.avSyncOffsetsMillisecondsByDeviceUID", from: &json), "前提: 保存されている項目を落とすこと")
         defaults.set(try! JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.defaultsKey)
 
         let reloaded = SettingsStore(defaults: defaults)
-        XCTAssertEqual(reloaded.visualizerDelayOffsets, [:])
+        XCTAssertEqual(reloaded.avSyncOffsets, [:])
         XCTAssertEqual(reloaded.ledDimAmount, 0.35)
     }
 
-    func testStoredVisualizerDelayOffsetsAreNormalizedOnLoad() {
-        writeStoredPayload(overriding: ["visualizer.delayOffsetsMillisecondsByDeviceUID": [
+    func testStoredAVSyncOffsetsAreNormalizedOnLoad() {
+        writeStoredPayload(overriding: ["output.avSyncOffsetsMillisecondsByDeviceUID": [
             "over": offsetRange.upperBound + offsetStep,
             "under": offsetRange.lowerBound - offsetStep,
             "between": offsetStep * 2 + 1,
-            "default": PresentationDelayLine.userOffsetMillisecondsDefault,
+            "default": DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault,
             "": offsetStep,
         ]])
-        XCTAssertEqual(SettingsStore(defaults: defaults).visualizerDelayOffsets, [
+        XCTAssertEqual(SettingsStore(defaults: defaults).avSyncOffsets, [
             "over": offsetRange.upperBound,
             "under": offsetRange.lowerBound,
             "between": offsetStep * 2,
         ])
     }
 
-    func testVisualizerDelayOffsetsRoundTripAcrossInstances() {
+    func testAVSyncOffsetsRoundTripAcrossInstances() {
         let offsets = ["a": offsetStep, "b": -offsetStep]
-        SettingsStore(defaults: defaults).visualizerDelayOffsets = offsets
-        XCTAssertEqual(SettingsStore(defaults: defaults).visualizerDelayOffsets, offsets)
+        SettingsStore(defaults: defaults).avSyncOffsets = offsets
+        XCTAssertEqual(SettingsStore(defaults: defaults).avSyncOffsets, offsets)
     }
 
-    func testSettingVisualizerDelayOffsetsNormalizesAndDropsDefaults() {
+    func testSettingAVSyncOffsetsNormalizesAndDropsDefaults() {
         let store = SettingsStore(defaults: defaults)
-        store.visualizerDelayOffsets = ["a": offsetRange.upperBound + offsetStep, "b": PresentationDelayLine.userOffsetMillisecondsDefault]
-        XCTAssertEqual(store.visualizerDelayOffsets, ["a": offsetRange.upperBound])
+        store.avSyncOffsets = ["a": offsetRange.upperBound + offsetStep, "b": DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault]
+        XCTAssertEqual(store.avSyncOffsets, ["a": offsetRange.upperBound])
     }
 
-    func testEmptyVisualizerDelayOffsetsAreStoredAsAbsent() {
+    func testEmptyAVSyncOffsetsAreStoredAsAbsent() {
         let store = SettingsStore(defaults: defaults)
-        store.visualizerDelayOffsets = ["a": offsetStep]
-        store.visualizerDelayOffsets = [:]
+        store.avSyncOffsets = ["a": offsetStep]
+        store.avSyncOffsets = [:]
         let json = try! JSONSerialization.jsonObject(
             with: defaults.data(forKey: SettingsStore.defaultsKey)!
         ) as! [String: Any]
         var copy = json
-        XCTAssertFalse(Self.removing("visualizer.delayOffsetsMillisecondsByDeviceUID", from: &copy), "空の表は保存 JSON にキーを出さない")
-        XCTAssertEqual(SettingsStore(defaults: defaults).visualizerDelayOffsets, [:])
+        XCTAssertFalse(Self.removing("output.avSyncOffsetsMillisecondsByDeviceUID", from: &copy), "空の表は保存 JSON にキーを出さない")
+        XCTAssertEqual(SettingsStore(defaults: defaults).avSyncOffsets, [:])
     }
 }

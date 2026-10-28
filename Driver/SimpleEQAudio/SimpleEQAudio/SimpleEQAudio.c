@@ -81,6 +81,7 @@ enum
 enum
 {
     ChangeAction_SetSampleRate = 1,
+    ChangeAction_SetPresentationLatency = 2,
 };
 
 enum ObjectType
@@ -124,6 +125,8 @@ static Boolean     gBox_Acquired = true;
 static Boolean     gDevice_IsHidden     = true;
 static CFStringRef gDevice_NameOverride = NULL;
 static Boolean     gDevice_HeadphoneRoute = false;
+static UInt32      gDevice_PresentationLatencyFrames = kSimpleEQPresentationLatencyNeutralFrames;
+static UInt32      gDevice_RequestedPresentationLatencyFrames = kSimpleEQPresentationLatencyNeutralFrames;
 
 // OS が出力をヘッドホンと判定する組は、built-in の transport とこのデータソース。
 #define kDataSource_Headphones ((UInt32)'hdpn')
@@ -1323,6 +1326,17 @@ static OSStatus SimpleEQAudio_PerformDeviceConfigurationChange(AudioServerPlugIn
             });
             break;
 
+        case ChangeAction_SetPresentationLatency:
+            pthread_mutex_lock(&gPlugIn_StateMutex);
+            gDevice_PresentationLatencyFrames = gDevice_RequestedPresentationLatencyFrames;
+            pthread_mutex_unlock(&gPlugIn_StateMutex);
+
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                AudioObjectPropertyAddress theAddress = { kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain };
+                gPlugIn_Host->PropertiesChanged(gPlugIn_Host, kObjectID_Device, 1, &theAddress);
+            });
+            break;
+
         default:
             break;
     }
@@ -1333,10 +1347,23 @@ Done:
 
 static OSStatus SimpleEQAudio_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, UInt64 inChangeAction, void* inChangeInfo)
 {
-    #pragma unused(inChangeAction, inChangeInfo)
+    #pragma unused(inChangeInfo)
     OSStatus theAnswer = 0;
     FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_AbortDeviceConfigurationChange: bad driver reference");
     FailWithAction(inDeviceObjectID != kObjectID_Device, theAnswer = kAudioHardwareBadObjectError, Done, "SimpleEQAudio_AbortDeviceConfigurationChange: bad device ID");
+
+    switch(inChangeAction)
+    {
+        // 戻さないと、同じ値をもう一度受け取っても依頼し直せない。
+        case ChangeAction_SetPresentationLatency:
+            pthread_mutex_lock(&gPlugIn_StateMutex);
+            gDevice_RequestedPresentationLatencyFrames = gDevice_PresentationLatencyFrames;
+            pthread_mutex_unlock(&gPlugIn_StateMutex);
+            break;
+
+        default:
+            break;
+    }
 Done:
     return theAnswer;
 }
@@ -2009,10 +2036,31 @@ static const AudioServerPlugInCustomPropertyInfo kDevice_CustomPropertyList[] = 
     { kAudioDevicePropertyCustom_NameOverride,       kAudioServerPlugInCustomPropertyDataTypeCFString,       kAudioServerPlugInCustomPropertyDataTypeNone },
     { kAudioDevicePropertyCustom_HeadphoneRoute,     kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQDriftCompositionSelector,             kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
+    { kSimpleEQPresentationLatencySelector,          kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQMixerGainSelector,                    kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
     { kSimpleEQOwnershipSelector,                    kAudioServerPlugInCustomPropertyDataTypeCFPropertyList, kAudioServerPlugInCustomPropertyDataTypeNone },
 };
 static const UInt32 kDevice_CustomPropertyListBytes = sizeof(kDevice_CustomPropertyList);
+
+static void SimpleEQAudio_ApplyPresentationLatency(UInt32 inNewFrames, UInt32* outNumberPropertiesChanged, AudioObjectPropertyAddress outChangedAddresses[2])
+{
+    // HAL は通知だけでは遅延を配らないので、構成変更の中で入れ替える。
+    pthread_mutex_lock(&gPlugIn_StateMutex);
+    Boolean theChanged = (gDevice_RequestedPresentationLatencyFrames != inNewFrames);
+    gDevice_RequestedPresentationLatencyFrames = inNewFrames;
+    pthread_mutex_unlock(&gPlugIn_StateMutex);
+    if(theChanged)
+    {
+        *outNumberPropertiesChanged = 1;
+        outChangedAddresses[0].mSelector = kSimpleEQPresentationLatencySelector;
+        outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
+        outChangedAddresses[0].mElement = kAudioObjectPropertyElementMain;
+
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device, ChangeAction_SetPresentationLatency, NULL);
+        });
+    }
+}
 
 static Boolean SimpleEQAudio_HasDeviceProperty(AudioServerPlugInDriverRef inDriver, AudioObjectID inObjectID, pid_t inClientProcessID, const AudioObjectPropertyAddress* inAddress)
 {
@@ -2049,6 +2097,7 @@ static Boolean SimpleEQAudio_HasDeviceProperty(AudioServerPlugInDriverRef inDriv
         case kAudioDevicePropertyCustom_NameOverride:
         case kAudioDevicePropertyCustom_HeadphoneRoute:
         case kSimpleEQDriftCompositionSelector:
+        case kSimpleEQPresentationLatencySelector:
         case kSimpleEQMixerGainSelector:
         case kSimpleEQOwnershipSelector:
             theAnswer = true;
@@ -2116,6 +2165,7 @@ static OSStatus SimpleEQAudio_IsDevicePropertySettable(AudioServerPlugInDriverRe
         case kAudioDevicePropertyCustom_NameOverride:
         case kAudioDevicePropertyCustom_HeadphoneRoute:
         case kSimpleEQDriftCompositionSelector:
+        case kSimpleEQPresentationLatencySelector:
         case kSimpleEQMixerGainSelector:
         case kSimpleEQOwnershipSelector:
             *outIsSettable = true;
@@ -2175,6 +2225,7 @@ static OSStatus SimpleEQAudio_GetDevicePropertyDataSize(AudioServerPlugInDriverR
         case kAudioDevicePropertyCustom_HeadphoneRoute: *outDataSize = sizeof(CFPropertyListRef); break;
         case kAudioDevicePropertyCustom_NameOverride: *outDataSize = sizeof(CFStringRef); break;
         case kSimpleEQDriftCompositionSelector: *outDataSize = sizeof(CFPropertyListRef); break;
+        case kSimpleEQPresentationLatencySelector: *outDataSize = sizeof(CFPropertyListRef); break;
         case kSimpleEQMixerGainSelector: *outDataSize = sizeof(CFPropertyListRef); break;
         case kSimpleEQOwnershipSelector: *outDataSize = sizeof(CFPropertyListRef); break;
         case kAudioDevicePropertyPreferredChannelsForStereo: *outDataSize = 2 * sizeof(UInt32); break;
@@ -2318,7 +2369,10 @@ static OSStatus SimpleEQAudio_GetDevicePropertyData(AudioServerPlugInDriverRef i
 
         case kAudioDevicePropertyLatency:
             FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kAudioDevicePropertyLatency");
-            *((UInt32*)outData) = 0;
+            // 合計はデバイス側だけに置く。クライアントはストリーム側と足すため。
+            pthread_mutex_lock(&gPlugIn_StateMutex);
+            *((UInt32*)outData) = gDevice_PresentationLatencyFrames;
+            pthread_mutex_unlock(&gPlugIn_StateMutex);
             *outDataSize = sizeof(UInt32);
             break;
 
@@ -2407,6 +2461,18 @@ static OSStatus SimpleEQAudio_GetDevicePropertyData(AudioServerPlugInDriverRef i
                 theValue = gDriftCompositionPpm;
                 pthread_mutex_unlock(&gPlugIn_StateMutex);
                 *((CFPropertyListRef*)outData) = CFNumberCreate(NULL, kCFNumberDoubleType, &theValue);
+            }
+            *outDataSize = sizeof(CFPropertyListRef);
+            break;
+
+        case kSimpleEQPresentationLatencySelector:
+            FailWithAction(inDataSize < sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_GetDevicePropertyData: not enough space for kSimpleEQPresentationLatencySelector");
+            {
+                SInt64 theValue;
+                pthread_mutex_lock(&gPlugIn_StateMutex);
+                theValue = gDevice_RequestedPresentationLatencyFrames;
+                pthread_mutex_unlock(&gPlugIn_StateMutex);
+                *((CFPropertyListRef*)outData) = CFNumberCreate(NULL, kCFNumberSInt64Type, &theValue);
             }
             *outDataSize = sizeof(CFPropertyListRef);
             break;
@@ -2601,6 +2667,17 @@ static OSStatus SimpleEQAudio_SetDevicePropertyData(AudioServerPlugInDriverRef i
                     outChangedAddresses[0].mElement = kAudioObjectPropertyElementMain;
                 }
                 pthread_mutex_unlock(&gPlugIn_StateMutex);
+            }
+            break;
+
+        case kSimpleEQPresentationLatencySelector:
+            FailWithAction(inDataSize != sizeof(CFPropertyListRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "SimpleEQAudio_SetDevicePropertyData: wrong size for kSimpleEQPresentationLatencySelector");
+            FailWithAction(*((const CFPropertyListRef*)inData) == NULL || CFGetTypeID(*((const CFPropertyListRef*)inData)) != CFNumberGetTypeID(), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQPresentationLatencySelector expects a CFNumberRef");
+            {
+                SInt64 theNewFrames = 0;
+                FailWithAction(!CFNumberGetValue((CFNumberRef)(*((const CFPropertyListRef*)inData)), kCFNumberSInt64Type, &theNewFrames), theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQPresentationLatencySelector value is not an integer");
+                FailWithAction(theNewFrames < 0 || theNewFrames > (SInt64)UINT32_MAX, theAnswer = kAudioHardwareIllegalOperationError, Done, "SimpleEQAudio_SetDevicePropertyData: kSimpleEQPresentationLatencySelector value is out of range");
+                SimpleEQAudio_ApplyPresentationLatency((UInt32)theNewFrames, outNumberPropertiesChanged, outChangedAddresses);
             }
             break;
 

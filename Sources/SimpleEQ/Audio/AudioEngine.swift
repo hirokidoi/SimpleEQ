@@ -22,12 +22,17 @@ final class AudioEngine: @unchecked Sendable {
     private var captureSource: AirPlayCaptureSource?
     private var captureRing: CaptureRing?
     private(set) var presentationDelay: PresentationDelayLine?
-    private(set) var visualizerDelayOffsetsMilliseconds: [String: Int] = [:]
-    private var presentationDelayOffsetDeviceUID: String?
+    private(set) var avSyncOffsetsMilliseconds: [String: Int] = [:]
+    private var presentationOutputDeviceUID: String?
     private var presentationDeclaredFrames: Int?
     private let presentationDelayScratch: UnsafeMutablePointer<Float>
 
     private let audioWorld: AudioWorld
+    private let driverLatencyIO: DriverPresentationLatencyIO
+    /// 計算値を申告中のときだけ非 nil。
+    private var driverPresentationLatencyDeclaredFrames: Int?
+    /// ドライバから最後に読めた値 (診断用)。
+    private var driverPresentationLatencyObserved: Int?
 
     private(set) var processingState: ProcessingState = .suspended(.routeUnavailable)
     /// オーディオ世界のキュー上で発火する (呼び出し元は必要に応じてメインキューへ戻すこと)。
@@ -158,7 +163,8 @@ final class AudioEngine: @unchecked Sendable {
         return runtimeMetrics.snapshot(
             appliedSampleRate: AudioConfig.appliedSampleRate,
             volumeRoute: outputVolumeBridge.routeObservation(token),
-            presentationDelay: presentationDelayObservation()
+            presentationDelay: presentationDelayObservation(),
+            driverPresentationLatencyFrames: driverPresentationLatencyObserved
         )
     }
 
@@ -227,9 +233,13 @@ final class AudioEngine: @unchecked Sendable {
         return ActiveOutputDeviceInfo(device: ResolvedOutputDevice(uid: uid, deviceID: id), name: deviceName(id, token))
     }
 
-    init(audioWorld: AudioWorld = AudioWorld(), volumeDeviceIO: DeviceVolumeIO = CoreAudioDeviceVolumeIO()) {
+    init(
+        audioWorld: AudioWorld = AudioWorld(), volumeDeviceIO: DeviceVolumeIO = CoreAudioDeviceVolumeIO(),
+        driverPresentationLatencyIO: DriverPresentationLatencyIO = CoreAudioDriverPresentationLatencyIO()
+    ) {
         self.audioWorld = audioWorld
         self.volumeDeviceIO = volumeDeviceIO
+        self.driverLatencyIO = driverPresentationLatencyIO
         outputVolumeBridge = OutputVolumeBridge(audioWorld: audioWorld, deviceIO: volumeDeviceIO)
         eqInputScratch = UnsafeMutablePointer<Float>.allocate(capacity: AudioConfig.maxRenderFrames * Int(AudioConfig.channels))
         presentationDelayScratch = UnsafeMutablePointer<Float>.allocate(capacity: AudioConfig.maxRenderFrames * Int(AudioConfig.channels))
@@ -282,7 +292,7 @@ final class AudioEngine: @unchecked Sendable {
             driverDeviceID: driverDeviceID,
             prepareRoute: { [self] in
                 intendedOutputDeviceUID = outputDevice.uid
-                rebuildPresentationDelay(for: outputDevice.deviceID, offsetDeviceUID: outputDevice.uid, token)
+                rebuildPresentationDelay(for: outputDevice.deviceID, outputDeviceUID: outputDevice.uid, token)
                 let driverAtAssemble = refreshDriverVolumeAndMute(token)
                 outputVolumeBridge.rebind(
                     outputUID: outputDevice.uid, outputDeviceID: outputDevice.deviceID,
@@ -312,7 +322,7 @@ final class AudioEngine: @unchecked Sendable {
             inputSampleRate: capture.sampleRate, driverDeviceID: driverDeviceID,
             prepareRoute: { [self] in
                 outputVolumeBridge.releaseForDeviceCarriedRoute(token)
-                rebuildPresentationDelay(for: capture.endpointDeviceID, offsetDeviceUID: nil, token)
+                rebuildPresentationDelay(for: capture.endpointDeviceID, outputDeviceUID: nil, token)
                 capture.ring.markWriterStarting()
                 return capture.start(token)
             },
@@ -447,12 +457,12 @@ final class AudioEngine: @unchecked Sendable {
         guard let outUnit = outputUnit, captureSource == nil else { return false }
         let previousID = currentOutputDeviceID(token)
         if case .notNeeded = outputSwitchDecision(intendedUID: device.uid, currentUID: previousID.flatMap({ deviceUID($0, token) })) {
-            guard presentationDelayOffsetDeviceUID != device.uid else {
+            guard presentationOutputDeviceUID != device.uid else {
                 confirmOutputDevice(device, token)
                 return true
             }
             AudioOutputUnitStop(outUnit)
-            rebuildPresentationDelay(for: device.deviceID, offsetDeviceUID: device.uid, token)
+            rebuildPresentationDelay(for: device.deviceID, outputDeviceUID: device.uid, token)
             let restarted = AudioOutputUnitStart(outUnit) == noErr
             ringReader?.requestOccupancyReset()
             if restarted {
@@ -465,7 +475,7 @@ final class AudioEngine: @unchecked Sendable {
         }
         AudioOutputUnitStop(outUnit)
         let switched = AudioEngine.applyOutputDevice(device.deviceID, on: outUnit, metrics: runtimeMetrics, token)
-        if switched { rebuildPresentationDelay(for: device.deviceID, offsetDeviceUID: device.uid, token) }
+        if switched { rebuildPresentationDelay(for: device.deviceID, outputDeviceUID: device.uid, token) }
         let restarted = AudioOutputUnitStart(outUnit) == noErr
         ringReader?.requestOccupancyReset()
         if switched && restarted {
@@ -474,38 +484,80 @@ final class AudioEngine: @unchecked Sendable {
         }
         AudioOutputUnitStop(outUnit)
         if let previousID, AudioEngine.applyOutputDevice(previousID, on: outUnit, metrics: runtimeMetrics, token), switched {
-            rebuildPresentationDelay(for: previousID, offsetDeviceUID: deviceUID(previousID, token), token)
+            rebuildPresentationDelay(for: previousID, outputDeviceUID: deviceUID(previousID, token), token)
         }
         AudioOutputUnitStart(outUnit)
         return false
     }
 
     /// 出力段が止まっている間に限って呼ぶ。
-    private func rebuildPresentationDelay(for deviceID: AudioDeviceID, offsetDeviceUID: String?, _ token: AudioWorldToken) {
+    private func rebuildPresentationDelay(for deviceID: AudioDeviceID, outputDeviceUID: String?, _ token: AudioWorldToken) {
         let rate = AudioConfig.appliedSampleRate
         let declared = readDeclaredPresentationLatencyFrames(deviceID, rate, token)
         presentationDeclaredFrames = declared
-        presentationDelayOffsetDeviceUID = offsetDeviceUID
+        presentationOutputDeviceUID = outputDeviceUID
         presentationDelay = PresentationDelayLine(
-            capacityFrames: PresentationDelayLine.capacityFrames(declaredFrames: declared ?? 0, appliedSampleRate: rate),
-            delayFrames: presentationDelayFrames(declared: declared, offsetDeviceUID: offsetDeviceUID),
+            delayFrames: PresentationDelayLine.delayFrames(declaredFrames: declared ?? 0, appliedSampleRate: rate),
             channels: Int(AudioConfig.channels)
         )
+        declareDriverPresentationLatency(outputDeclaredFrames: declared, token)
     }
 
-    private func presentationDelayFrames(declared: Int?, offsetDeviceUID: String?) -> Int {
-        let offset = offsetDeviceUID.flatMap { visualizerDelayOffsetsMilliseconds[$0] }
-            ?? PresentationDelayLine.userOffsetMillisecondsDefault
-        return PresentationDelayLine.delayFrames(
-            declaredFrames: declared ?? 0, offsetMilliseconds: offset, appliedSampleRate: AudioConfig.appliedSampleRate
+    /// 取り込み経路ではドライバを経由しないので、前の値が残らないよう中立を書く。
+    private func declareDriverPresentationLatency(
+        outputDeclaredFrames: Int?, _ token: AudioWorldToken
+    ) {
+        let ownsAudioPath = ringReader?.isSelfOwner ?? false
+        guard captureSource == nil else {
+            driverPresentationLatencyDeclaredFrames = nil
+            writeDriverPresentationLatency(DriverConfig.presentationLatencyNeutralFrames, ownsAudioPath: ownsAudioPath, token)
+            return
+        }
+        let total = DriverPresentationLatencyPolicy.totalFrames(
+            outputDeclaredFrames: outputDeclaredFrames, avSyncOffsetMilliseconds: currentAVSyncOffsetMilliseconds,
+            appliedSampleRate: AudioConfig.appliedSampleRate
         )
+        driverPresentationLatencyDeclaredFrames = total
+        writeDriverPresentationLatency(total, ownsAudioPath: ownsAudioPath, token)
     }
 
-    func applyVisualizerDelayOffsets(_ offsets: [String: Int], _ token: AudioWorldToken) {
-        visualizerDelayOffsetsMilliseconds = offsets
-        presentationDelay?.setDelayFrames(
-            presentationDelayFrames(declared: presentationDeclaredFrames, offsetDeviceUID: presentationDelayOffsetDeviceUID)
-        )
+    /// 処理状態だけでは、満了で他者に席が移った .active の区間を閉じられないため所有判定も要る。
+    private func writeDriverPresentationLatency(_ frames: Int, ownsAudioPath: Bool, _ token: AudioWorldToken) {
+        guard let id = driverDeviceID, ownsAudioPath else {
+            driverPresentationLatencyObserved = nil
+            return
+        }
+        guard let current = driverLatencyIO.read(id, token) else {
+            driverPresentationLatencyObserved = nil
+            return
+        }
+        guard current != frames else {
+            driverPresentationLatencyObserved = current
+            return
+        }
+        guard driverLatencyIO.write(frames, id, token) else {
+            driverPresentationLatencyObserved = current
+            return
+        }
+        driverPresentationLatencyObserved = driverLatencyIO.read(id, token)
+    }
+
+    /// coreaudiod 再起動後と、所有を取り戻した後の自己修復。
+    func reassertDriverPresentationLatency(_ token: AudioWorldToken) {
+        guard processingState == .active, captureSource == nil,
+              let total = driverPresentationLatencyDeclaredFrames else { return }
+        writeDriverPresentationLatency(total, ownsAudioPath: ringReader?.isSelfOwner ?? false, token)
+    }
+
+    private var currentAVSyncOffsetMilliseconds: Int {
+        presentationOutputDeviceUID.flatMap { avSyncOffsetsMilliseconds[$0] }
+            ?? DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault
+    }
+
+    func applyAVSyncOffsets(_ offsets: [String: Int], _ token: AudioWorldToken) {
+        avSyncOffsetsMilliseconds = offsets
+        guard driverPresentationLatencyDeclaredFrames != nil else { return }
+        declareDriverPresentationLatency(outputDeclaredFrames: presentationDeclaredFrames, token)
     }
 
     /// 出力先が確定したときの後処理。
@@ -547,7 +599,15 @@ final class AudioEngine: @unchecked Sendable {
         } else {
             alreadySuspendedAsCause = false
         }
+        // 所有していない停止で書くと新しい所有者の申告を消す。判定は ringReader を捨てる前に取る。
+        let ownedBeforeRelease = ringReader?.isSelfOwner ?? false
         releaseAudioResources(token)
+        let wasDeclaring = driverPresentationLatencyDeclaredFrames != nil
+        driverPresentationLatencyDeclaredFrames = nil
+        if wasDeclaring, SuspensionPolicy.returnsDriverPresentationLatencyToNeutral(cause) {
+            writeDriverPresentationLatency(DriverConfig.presentationLatencyNeutralFrames, ownsAudioPath: ownedBeforeRelease, token)
+        }
+        driverPresentationLatencyObserved = nil
         guard !alreadySuspendedAsCause else { return }
         suspensionHistory.append(cause)
         processingState = .suspended(cause)
@@ -565,7 +625,7 @@ final class AudioEngine: @unchecked Sendable {
         captureSource = nil
         captureRing = nil
         presentationDelay = nil
-        presentationDelayOffsetDeviceUID = nil
+        presentationOutputDeviceUID = nil
         presentationDeclaredFrames = nil
         runtimeMetrics.recordAudioInput(.none)
         intendedOutputDeviceUID = nil
@@ -795,11 +855,12 @@ final class AudioEngine: @unchecked Sendable {
 
         levelMeter.rebuild(appliedSampleRate: newSampleRate)
         if let deviceID = currentOutputDeviceID(token) {
-            rebuildPresentationDelay(for: deviceID, offsetDeviceUID: deviceUID(deviceID, token), token)
+            rebuildPresentationDelay(for: deviceID, outputDeviceUID: deviceUID(deviceID, token), token)
         } else {
             presentationDelay = nil
-            presentationDelayOffsetDeviceUID = nil
+            presentationOutputDeviceUID = nil
             presentationDeclaredFrames = nil
+            declareDriverPresentationLatency(outputDeclaredFrames: nil, token)
         }
         guard buildEQUnitAndStartOutput(on: outUnit, token) else {
             suspend(cause: .routeUnavailable, token)

@@ -12,7 +12,7 @@
 #define kSimpleEQRingLayoutVersion ((uint32_t)3)
 
 #define kSimpleEQDriverVersionMajor ((uint16_t)2)
-#define kSimpleEQDriverVersionMinor ((uint16_t)2)
+#define kSimpleEQDriverVersionMinor ((uint16_t)3)
 
 #define kSimpleEQRingMagic ((uint32_t)0x53455152u)
 
@@ -38,6 +38,11 @@
 #define kSimpleEQHeadphoneRouteSelector ((uint32_t)'seqH')
 
 #define kSimpleEQDriftCompositionSelector ((uint32_t)'seqD')
+
+#define kSimpleEQPresentationLatencySelector ((uint32_t)'seqL')
+
+/// ドライバのレートのフレーム数。
+#define kSimpleEQPresentationLatencyNeutralFrames ((uint32_t)0)
 
 #define kSimpleEQVolumeMinDB ((float)-64.0)
 #define kSimpleEQVolumeMaxDB ((float)0.0)

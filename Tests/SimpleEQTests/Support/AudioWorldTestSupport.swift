@@ -66,8 +66,10 @@ func waitForAudioWorld(
 }
 
 @MainActor
-func makeSilencedEngine() -> AudioEngine {
-    let engine = AudioEngine(volumeDeviceIO: MockDeviceVolumeIO())
+func makeSilencedEngine(
+    driverPresentationLatencyIO: DriverPresentationLatencyIO = MockDriverPresentationLatencyIO()
+) -> AudioEngine {
+    let engine = AudioEngine(volumeDeviceIO: MockDeviceVolumeIO(), driverPresentationLatencyIO: driverPresentationLatencyIO)
     engine.applyDriverVolumeAndMute(volume: 0, muted: true, testToken)
     return engine
 }
@@ -125,5 +127,27 @@ final class MockDeviceVolumeIO: DeviceVolumeIO, @unchecked Sendable {
 
     func removeVolumeMuteListener(_ id: AudioDeviceID, queue: DispatchQueue, _ block: @escaping AudioObjectPropertyListenerBlock) {
         removedListeners.append(id)
+    }
+}
+
+/// ドライバの申告遅延の代役。実機のドライバへ書かず、書き込みを記録する。
+final class MockDriverPresentationLatencyIO: DriverPresentationLatencyIO, @unchecked Sendable {
+    var values: [AudioDeviceID: Int] = [:]
+    var readable = true
+    var writeShouldSucceed = true
+
+    private(set) var writes: [(frames: Int, id: AudioDeviceID)] = []
+
+    var writtenFrames: [Int] { writes.map(\.frames) }
+
+    func read(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Int? {
+        readable ? values[id] : nil
+    }
+
+    func write(_ frames: Int, _ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        writes.append((frames, id))
+        guard writeShouldSucceed else { return false }
+        values[id] = frames
+        return true
     }
 }

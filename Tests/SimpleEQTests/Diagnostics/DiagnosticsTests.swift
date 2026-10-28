@@ -276,6 +276,24 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(rows.applied, [expectedFramesText(480)])
     }
 
+    func testTheDriverDeclaredLatencyRowShowsTheObservedFramesAndIsUnreadableWithout() {
+        func row(_ frames: Int?) -> (values: [String]?, text: String) {
+            let snapshot = AudioRuntimeMetrics().snapshot(
+                appliedSampleRate: AudioConfig.appliedSampleRate, driverPresentationLatencyFrames: frames
+            )
+            let rows = DiagnosticsReport.sections(snapshot, render: idleRender()).first { $0.title == "状態" }?.rows ?? []
+            return (
+                rows.first { $0.title == "ドライバの申告遅延" }?.values,
+                DiagnosticsReport.text(snapshot, render: idleRender(), exportedAt: Date())
+            )
+        }
+
+        let observed = row(6000)
+        XCTAssertEqual(observed.values, [expectedFramesText(6000)], "申告遅延の行と同じ表記")
+        XCTAssertTrue(observed.text.contains("ドライバの申告遅延 (専用ドライバがシステムへ申告している遅延): " + expectedFramesText(6000)))
+        XCTAssertEqual(row(nil).values, [unreadableValue])
+    }
+
     // バッファ量の行は観測の有無で行数が変わらない (変わると、その下の並び全体が動く)。
     func testBufferRowsKeepTheSameNumberOfValuesBeforeAndAfterObservation() {
         let unobserved = AudioRuntimeMetrics()
