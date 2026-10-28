@@ -34,6 +34,9 @@ final class AudioEngine: @unchecked Sendable {
     /// ドライバから最後に読めた値 (診断用)。
     private var driverPresentationLatencyObserved: Int?
 
+    private let sampleRateIO: DeviceSampleRateIO
+    private var driverSampleRateFollower = DriverSampleRateFollower()
+
     private(set) var processingState: ProcessingState = .suspended(.routeUnavailable)
     /// オーディオ世界のキュー上で発火する (呼び出し元は必要に応じてメインキューへ戻すこと)。
     /// 第2引数は稼働状態が稼働中でなければ nil。
@@ -150,12 +153,18 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     /// HAL への問い合わせを含むため、読み手が居ない間は呼んではならない。
+    /// 出力先のレートが動いたらドライバを合わせ直す。
     func refreshOutputDeviceSampleRate(_ token: AudioWorldToken) {
+        driverSampleRateFollower.periodicPassDidBegin()
         guard let id = currentOutputDeviceID(token) else {
             runtimeMetrics.recordOutputDeviceSampleRate(0)
             return
         }
-        runtimeMetrics.recordOutputDeviceSampleRate(nominalSampleRate(id, token) ?? 0)
+        let outputRate = sampleRateIO.nominalRate(id, token)
+        runtimeMetrics.recordOutputDeviceSampleRate(outputRate ?? 0)
+        driverSampleRateFollower.followOutputRate(
+            outputRate, appliedTotal: driverPresentationLatencyDeclaredFrames, port: driverSampleRatePort(for: id, token)
+        )
     }
 
     func runtimeMetricsSnapshot(_ token: AudioWorldToken) -> AudioRuntimeMetrics.Snapshot {
@@ -235,11 +244,13 @@ final class AudioEngine: @unchecked Sendable {
 
     init(
         audioWorld: AudioWorld = AudioWorld(), volumeDeviceIO: DeviceVolumeIO = CoreAudioDeviceVolumeIO(),
-        driverPresentationLatencyIO: DriverPresentationLatencyIO = CoreAudioDriverPresentationLatencyIO()
+        driverPresentationLatencyIO: DriverPresentationLatencyIO = CoreAudioDriverPresentationLatencyIO(),
+        deviceSampleRateIO: DeviceSampleRateIO = CoreAudioDeviceSampleRateIO()
     ) {
         self.audioWorld = audioWorld
         self.volumeDeviceIO = volumeDeviceIO
         self.driverLatencyIO = driverPresentationLatencyIO
+        self.sampleRateIO = deviceSampleRateIO
         outputVolumeBridge = OutputVolumeBridge(audioWorld: audioWorld, deviceIO: volumeDeviceIO)
         eqInputScratch = UnsafeMutablePointer<Float>.allocate(capacity: AudioConfig.maxRenderFrames * Int(AudioConfig.channels))
         presentationDelayScratch = UnsafeMutablePointer<Float>.allocate(capacity: AudioConfig.maxRenderFrames * Int(AudioConfig.channels))
@@ -292,7 +303,7 @@ final class AudioEngine: @unchecked Sendable {
             driverDeviceID: driverDeviceID,
             prepareRoute: { [self] in
                 intendedOutputDeviceUID = outputDevice.uid
-                rebuildPresentationDelay(for: outputDevice.deviceID, outputDeviceUID: outputDevice.uid, token)
+                rebuildForOutputDevice(outputDevice.deviceID, outputDeviceUID: outputDevice.uid, token)
                 let driverAtAssemble = refreshDriverVolumeAndMute(token)
                 outputVolumeBridge.rebind(
                     outputUID: outputDevice.uid, outputDeviceID: outputDevice.deviceID,
@@ -462,7 +473,7 @@ final class AudioEngine: @unchecked Sendable {
                 return true
             }
             AudioOutputUnitStop(outUnit)
-            rebuildPresentationDelay(for: device.deviceID, outputDeviceUID: device.uid, token)
+            rebuildForOutputDevice(device.deviceID, outputDeviceUID: device.uid, token)
             let restarted = AudioOutputUnitStart(outUnit) == noErr
             ringReader?.requestOccupancyReset()
             if restarted {
@@ -475,7 +486,7 @@ final class AudioEngine: @unchecked Sendable {
         }
         AudioOutputUnitStop(outUnit)
         let switched = AudioEngine.applyOutputDevice(device.deviceID, on: outUnit, metrics: runtimeMetrics, token)
-        if switched { rebuildPresentationDelay(for: device.deviceID, outputDeviceUID: device.uid, token) }
+        if switched { rebuildForOutputDevice(device.deviceID, outputDeviceUID: device.uid, token) }
         let restarted = AudioOutputUnitStart(outUnit) == noErr
         ringReader?.requestOccupancyReset()
         if switched && restarted {
@@ -484,14 +495,62 @@ final class AudioEngine: @unchecked Sendable {
         }
         AudioOutputUnitStop(outUnit)
         if let previousID, AudioEngine.applyOutputDevice(previousID, on: outUnit, metrics: runtimeMetrics, token), switched {
-            rebuildPresentationDelay(for: previousID, outputDeviceUID: deviceUID(previousID, token), token)
+            rebuildForOutputDevice(previousID, outputDeviceUID: deviceUID(previousID, token), token)
         }
         AudioOutputUnitStart(outUnit)
         return false
     }
 
+    private func rebuildForOutputDevice(_ deviceID: AudioDeviceID, outputDeviceUID: String?, _ token: AudioWorldToken) {
+        let outputRate = sampleRateIO.nominalRate(deviceID, token)
+        rebuildPresentationDelayLine(for: deviceID, outputDeviceUID: outputDeviceUID, token)
+        let appliedTotal = presentationLatencyTotal(
+            outputDeclaredFrames: presentationDeclaredFrames, appliedSampleRate: AudioConfig.appliedSampleRate
+        )
+        driverPresentationLatencyDeclaredFrames = appliedTotal
+        driverSampleRateFollower.decide(outputRate: outputRate, appliedTotal: appliedTotal, port: driverSampleRatePort(for: deviceID, token))
+    }
+
+    private func driverSampleRatePort(for outputDeviceID: AudioDeviceID, _ token: AudioWorldToken) -> DriverSampleRatePort {
+        DriverSampleRatePort(engine: self, outputDeviceID: outputDeviceID, token: token)
+    }
+
+    /// 判断の最中に呼ばれるため、driverSampleRateFollower を読み書きしない (排他アクセス違反になる)。
+    private struct DriverSampleRatePort: DriverSampleRateFollowerPort {
+        unowned let engine: AudioEngine
+        let outputDeviceID: AudioDeviceID
+        let token: AudioWorldToken
+
+        func readDriver() -> DriverSampleRateFollower.DriverReading? {
+            guard engine.captureSource == nil, let reader = engine.ringReader, reader.isSelfOwner,
+                  let driverID = engine.driverDeviceID else { return nil }
+            return .init(rate: reader.driverReportedSampleRate, availableRates: engine.sampleRateIO.availableNominalRates(driverID, token))
+        }
+
+        func declaredLatencyTotal(at rate: Double) -> Int {
+            engine.presentationLatencyTotal(
+                outputDeclaredFrames: engine.readDeclaredPresentationLatencyFrames(outputDeviceID, rate, token), appliedSampleRate: rate
+            )
+        }
+
+        func writeDeclaredLatency(_ frames: Int) {
+            engine.writeDriverPresentationLatency(frames, ownsAudioPath: engine.ringReader?.isSelfOwner ?? false, token)
+        }
+
+        func writeDriverRate(_ rate: Double) -> Bool {
+            guard let driverID = engine.driverDeviceID else { return false }
+            return engine.sampleRateIO.writeNominalRate(rate, driverID, token)
+        }
+    }
+
     /// 出力段が止まっている間に限って呼ぶ。
     private func rebuildPresentationDelay(for deviceID: AudioDeviceID, outputDeviceUID: String?, _ token: AudioWorldToken) {
+        rebuildPresentationDelayLine(for: deviceID, outputDeviceUID: outputDeviceUID, token)
+        declareDriverPresentationLatency(outputDeclaredFrames: presentationDeclaredFrames, token)
+    }
+
+    /// 出力段が止まっている間に限って呼ぶ。ドライバへは申告しない。
+    private func rebuildPresentationDelayLine(for deviceID: AudioDeviceID, outputDeviceUID: String?, _ token: AudioWorldToken) {
         let rate = AudioConfig.appliedSampleRate
         let declared = readDeclaredPresentationLatencyFrames(deviceID, rate, token)
         presentationDeclaredFrames = declared
@@ -500,7 +559,13 @@ final class AudioEngine: @unchecked Sendable {
             delayFrames: PresentationDelayLine.delayFrames(declaredFrames: declared ?? 0, appliedSampleRate: rate),
             channels: Int(AudioConfig.channels)
         )
-        declareDriverPresentationLatency(outputDeclaredFrames: declared, token)
+    }
+
+    private func presentationLatencyTotal(outputDeclaredFrames: Int?, appliedSampleRate: Double) -> Int {
+        DriverPresentationLatencyPolicy.totalFrames(
+            outputDeclaredFrames: outputDeclaredFrames, avSyncOffsetMilliseconds: currentAVSyncOffsetMilliseconds,
+            appliedSampleRate: appliedSampleRate
+        )
     }
 
     /// 取り込み経路ではドライバを経由しないので、前の値が残らないよう中立を書く。
@@ -513,11 +578,9 @@ final class AudioEngine: @unchecked Sendable {
             writeDriverPresentationLatency(DriverConfig.presentationLatencyNeutralFrames, ownsAudioPath: ownsAudioPath, token)
             return
         }
-        let total = DriverPresentationLatencyPolicy.totalFrames(
-            outputDeclaredFrames: outputDeclaredFrames, avSyncOffsetMilliseconds: currentAVSyncOffsetMilliseconds,
-            appliedSampleRate: AudioConfig.appliedSampleRate
-        )
+        let total = presentationLatencyTotal(outputDeclaredFrames: outputDeclaredFrames, appliedSampleRate: AudioConfig.appliedSampleRate)
         driverPresentationLatencyDeclaredFrames = total
+        guard !driverSampleRateFollower.holdsDeclarations else { return }
         writeDriverPresentationLatency(total, ownsAudioPath: ownsAudioPath, token)
     }
 
@@ -544,7 +607,7 @@ final class AudioEngine: @unchecked Sendable {
 
     /// coreaudiod 再起動後と、所有を取り戻した後の自己修復。
     func reassertDriverPresentationLatency(_ token: AudioWorldToken) {
-        guard processingState == .active, captureSource == nil,
+        guard processingState == .active, captureSource == nil, !driverSampleRateFollower.holdsDeclarations,
               let total = driverPresentationLatencyDeclaredFrames else { return }
         writeDriverPresentationLatency(total, ownsAudioPath: ringReader?.isSelfOwner ?? false, token)
     }
@@ -627,6 +690,7 @@ final class AudioEngine: @unchecked Sendable {
         presentationDelay = nil
         presentationOutputDeviceUID = nil
         presentationDeclaredFrames = nil
+        driverSampleRateFollower.reset()
         runtimeMetrics.recordAudioInput(.none)
         intendedOutputDeviceUID = nil
         discardEQChain()
@@ -812,6 +876,7 @@ final class AudioEngine: @unchecked Sendable {
         guard processingState == .active, captureSource == nil, let reader = ringReader else { return }
         let headerRate = reader.driverReportedSampleRate
         guard headerRate > 0, headerRate != AudioConfig.appliedSampleRate else { return }
+        driverSampleRateFollower.driverRateDidChange()
         performRateChange(newSampleRate: headerRate, token)
     }
 

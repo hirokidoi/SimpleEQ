@@ -72,6 +72,31 @@ func nominalSampleRate(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Double?
     return rate
 }
 
+func availableNominalSampleRates(_ id: AudioDeviceID, _ token: AudioWorldToken) -> [ClosedRange<Double>] {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyAvailableNominalSampleRates,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+    var ranges = [AudioValueRange](repeating: AudioValueRange(), count: Int(size) / MemoryLayout<AudioValueRange>.size)
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &ranges) == noErr else { return [] }
+    return ranges.prefix(Int(size) / MemoryLayout<AudioValueRange>.size)
+        .filter { $0.mMinimum <= $0.mMaximum }
+        .map { $0.mMinimum...$0.mMaximum }
+}
+
+func setNominalSampleRate(_ id: AudioDeviceID, _ rate: Double, _ token: AudioWorldToken) -> Bool {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyNominalSampleRate,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var value = rate
+    return AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<Double>.size), &value) == noErr
+}
+
 private func readUInt32Property(
     _ id: AudioObjectID, _ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope
 ) -> UInt32? {

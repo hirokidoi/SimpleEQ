@@ -3322,3 +3322,225 @@ extension AudioEngineTests {
         }
     }
 }
+
+// MARK: - ドライバのレート
+
+extension AudioEngineTests {
+    private struct SampleRateFixture {
+        let engine: AudioEngine
+        let rateIO: MockDeviceSampleRateIO
+        let latencyIO: MockDriverPresentationLatencyIO
+        let reader: SharedRingReader
+        let url: URL
+        let device: (deviceID: AudioDeviceID, uid: String)
+        var outputDevice: ResolvedOutputDevice { ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID) }
+        func otherDevice(_ tag: String) -> ResolvedOutputDevice {
+            ResolvedOutputDevice(uid: "forced-different-uid-for-driver-rate-\(tag)", deviceID: device.deviceID)
+        }
+    }
+
+    private static let outputDeclaredFramesForRateTests = 4000
+
+    private func makeSampleRateFixture(
+        headerRate: Double = 48000, outputRate: Double? = 44100, ownerIsSelf: Bool = true, assemble: Bool = true
+    ) throws -> SampleRateFixture {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        restoringBaseSampleRateAfterTest()
+        let rateIO = MockDeviceSampleRateIO()
+        rateIO.rates[device.deviceID] = outputRate
+        rateIO.available[Self.latencyDriverID] = TestSampleRates.all.map { $0...$0 }
+        XCTAssertTrue(
+            Set<Double>([44100, 48000, 88200, 96000]).isSubset(of: TestSampleRates.all),
+            "前提: この extension が使うレートはドライバの一覧に入る"
+        )
+        let latencyIO = MockDriverPresentationLatencyIO()
+        latencyIO.values[Self.latencyDriverID] = Self.neutralFrames
+        let engine = makeSilencedEngine(driverPresentationLatencyIO: latencyIO, deviceSampleRateIO: rateIO)
+        engine.readDeclaredPresentationLatencyFrames = { _, _, _ in Self.outputDeclaredFramesForRateTests }
+        let owner = ownerIsSelf ? SharedRingReader.selfProcessID : SharedRingReader.selfProcessID &+ 1
+        let url = makeMinimalSharedRingReaderFixture(sampleRate: headerRate, ownerProcessID: owner)
+        tempURLs.update { $0.append(url) }
+        let reader = try SharedRingReader.open(path: url.path).get()
+        let fixture = SampleRateFixture(engine: engine, rateIO: rateIO, latencyIO: latencyIO, reader: reader, url: url, device: device)
+        if assemble {
+            XCTAssertTrue(engine.assemble(
+                outputDevice: fixture.outputDevice, ringReader: reader, driverDeviceID: Self.latencyDriverID, testToken
+            ), "前提: 実デバイスへの組み立てが成立すること")
+        }
+        return fixture
+    }
+
+    private func expectedLatencyAtAppliedRate() -> Int {
+        expectedDriverLatency(outputDeclared: Self.outputDeclaredFramesForRateTests)
+    }
+
+    private func expectedLatency(
+        at rate: Double, declared: Int = outputDeclaredFramesForRateTests,
+        avSyncOffset: Int = DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsDefault
+    ) -> Int {
+        DriverPresentationLatencyPolicy.totalFrames(
+            outputDeclaredFrames: declared, avSyncOffsetMilliseconds: avSyncOffset, appliedSampleRate: rate
+        )
+    }
+
+    private func takeTheSeatBack(_ f: SampleRateFixture) throws {
+        let handle = try FileHandle(forWritingTo: f.url)
+        try handle.seek(toOffset: UInt64(ownershipOwnerProcessIDOffset))
+        try handle.write(contentsOf: withUnsafeBytes(of: SharedRingReader.selfProcessID) { Data($0) })
+        try handle.close()
+        XCTAssertTrue(f.reader.isSelfOwner, "前提: 席を取り戻した")
+    }
+
+    private func runPeriodicPass(_ f: SampleRateFixture) {
+        f.engine.reassertDriverPresentationLatency(testToken)
+        f.engine.refreshOutputDeviceSampleRate(testToken)
+    }
+
+    /// ヘッダが出力先のレートになり、作り直しが済んだ状態にする。
+    private func converge(_ f: SampleRateFixture) {
+        guard let outputRate = f.rateIO.rates[f.device.deviceID] else { return XCTFail("前提: 出力先のレートがある") }
+        setHeaderSampleRate(f.url, outputRate)
+        f.engine.applyDriverSampleRateIfChanged(testToken)
+        XCTAssertEqual(f.engine.processingState, .active, "前提: レート変更の作り直しで出力段が再開した")
+        XCTAssertEqual(AudioConfig.appliedSampleRate, outputRate, "前提: 出力先のレートが適用された")
+    }
+
+    func testAssemblingDeclaresAheadAndTheReflectionSettlesTheRequest() throws {
+        let latencyWritesAtRateWrite = Recorded<[Int]>([])
+        let f = try makeSampleRateFixture(assemble: false)
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+        f.rateIO.willWrite = { [latencyIO = f.latencyIO] in latencyWritesAtRateWrite.update { $0.append(latencyIO.writes.count) } }
+        XCTAssertTrue(f.engine.assemble(
+            outputDevice: f.outputDevice, ringReader: f.reader, driverDeviceID: Self.latencyDriverID, testToken
+        ), "前提: 実デバイスへの組み立てが成立すること")
+        let notified = Recorded<[Double]>([])
+        f.engine.appliedSampleRateDidChange = { rate in notified.update { $0.append(rate) } }
+        let atTargetRate = expectedLatency(at: 44100)
+        XCTAssertNotEqual(atTargetRate, expectedLatencyAtAppliedRate(), "前提: 行き先のレートと適用中のレートで値が違う")
+
+        XCTAssertEqual(f.rateIO.writtenRates, [44100], "組み立てが出力先のレートを決める")
+        XCTAssertEqual(f.rateIO.writes.map(\.id), [Self.latencyDriverID], "レートの書き込み先はドライバ")
+        XCTAssertEqual(f.latencyIO.writtenFrames, [atTargetRate], "出力先の申告を行き先のレートで読み直して書く")
+        XCTAssertEqual(latencyWritesAtRateWrite.value, [1], "レートの書き込み時点で申告は書き終えている")
+
+        converge(f)
+
+        XCTAssertEqual(notified.value, [44100], "反映の通知は 1 回")
+        XCTAssertEqual(f.rateIO.writtenRates, [44100], "反映では書き直さない")
+        XCTAssertEqual(f.latencyIO.writtenFrames, [atTargetRate], "反映後は申告も書き増えない")
+
+        setHeaderSampleRate(f.url, 88200)
+        f.engine.applyDriverSampleRateIfChanged(testToken)
+
+        XCTAssertEqual(AudioConfig.appliedSampleRate, 88200, "前提: 外部の変更に追従して作り直した")
+        XCTAssertEqual(f.rateIO.writtenRates, [44100], "作り直しは出力先のレートを決めない")
+        XCTAssertEqual(f.latencyIO.writtenFrames, [atTargetRate, expectedLatency(at: 88200)], "反映で依頼が決着し、作り直しの申告が書かれる")
+
+        let step = DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsStep
+        f.engine.applyAVSyncOffsets([f.device.uid: step], testToken)
+
+        XCTAssertEqual(
+            f.latencyIO.writtenFrames, [atTargetRate, expectedLatency(at: 88200), expectedLatency(at: 88200, avSyncOffset: step)],
+            "決着の後の同期補正は書かれる"
+        )
+    }
+
+    func testARequestThatNeverLandsHoldsTheDeclarationsAndReleasesThemOnTheSecondPass() throws {
+        let f = try makeSampleRateFixture()
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+        let atTargetRate = expectedLatency(at: 44100)
+        let step = DriverPresentationLatencyPolicy.avSyncOffsetMillisecondsStep
+        XCTAssertNotEqual(AudioConfig.appliedSampleRate, 44100, "前提: 反映されていない")
+
+        f.engine.applyAVSyncOffsets([f.device.uid: step], testToken)
+        XCTAssertEqual(f.latencyIO.writtenFrames, [atTargetRate], "依頼中の同期補正は書かない")
+
+        runPeriodicPass(f)
+        XCTAssertEqual(f.latencyIO.writtenFrames, [atTargetRate], "依頼を出した周の再申告は書かない")
+
+        runPeriodicPass(f)
+        f.engine.reassertDriverPresentationLatency(testToken)
+
+        XCTAssertEqual(
+            f.latencyIO.writtenFrames, [atTargetRate, expectedLatency(at: AudioConfig.appliedSampleRate, avSyncOffset: step)],
+            "手放した後の再申告で、適用中のレートでの同期補正込みの値を書く"
+        )
+        XCTAssertEqual(f.rateIO.writtenRates, [44100], "再依頼しない")
+    }
+
+    func testTheDecisionPointsAreAssemblingAndSwitchingAndStoppingForgetsTheRequest() throws {
+        let f = try makeSampleRateFixture(headerRate: 48000, outputRate: 48000)
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+        XCTAssertTrue(f.rateIO.writes.isEmpty, "前提: 一致している間は書かない")
+
+        f.rateIO.rates[f.device.deviceID] = 96000
+        XCTAssertTrue(f.engine.switchOutputDevice(to: f.outputDevice, testToken))
+        XCTAssertTrue(f.rateIO.writes.isEmpty, "遅延線を作り直さない早期 return では決めない")
+
+        XCTAssertTrue(f.engine.switchOutputDevice(to: f.otherDevice("switch"), testToken))
+        XCTAssertEqual(f.rateIO.writtenRates, [96000], "切替の成功で決める")
+
+        f.rateIO.rates[f.device.deviceID] = 88200
+        XCTAssertTrue(f.engine.switchOutputDevice(to: f.outputDevice, testToken))
+        XCTAssertEqual(f.rateIO.writtenRates, [96000, 88200], "遅延線を作り直す切替で決める")
+
+        f.engine.suspend(cause: .routeUnavailable, testToken)
+        f.rateIO.rates[f.device.deviceID] = 96000
+        f.engine.refreshOutputDeviceSampleRate(testToken)
+        XCTAssertEqual(f.rateIO.writtenRates, [96000, 88200], "停止中の周期パスは何もしない")
+
+        f.rateIO.rates[f.device.deviceID] = 88200
+        XCTAssertTrue(f.engine.assemble(
+            outputDevice: f.outputDevice, ringReader: f.reader, driverDeviceID: Self.latencyDriverID, testToken
+        ))
+        XCTAssertEqual(f.rateIO.writtenRates, [96000, 88200, 88200], "停止で依頼中を忘れているので組み立て直しで決め直す")
+    }
+
+    func testTheGateKeepsTheDriverUntouchedAndThePeriodicPassFollows() throws {
+        let f = try makeSampleRateFixture(ownerIsSelf: false)
+        defer { f.engine.suspend(cause: .applicationTermination, testToken) }
+        XCTAssertTrue(f.rateIO.writes.isEmpty, "席が無い間は書かない")
+        XCTAssertTrue(f.latencyIO.writes.isEmpty, "席が無い間は申告も書かない")
+        XCTAssertEqual(f.rateIO.availableReadCount, 0, "席が無い間は一覧も読まない")
+
+        try takeTheSeatBack(f)
+        f.engine.updateDriverDeviceID(nil, testToken)
+        f.engine.refreshOutputDeviceSampleRate(testToken)
+        XCTAssertTrue(f.rateIO.writes.isEmpty, "ドライバが無ければ書かない")
+        XCTAssertEqual(f.rateIO.availableReadCount, 0, "ドライバが無ければ一覧も読まない")
+
+        f.engine.updateDriverDeviceID(Self.latencyDriverID, testToken)
+        f.rateIO.writeShouldSucceed = false
+        f.engine.refreshOutputDeviceSampleRate(testToken)
+
+        XCTAssertEqual(f.rateIO.writtenRates, [44100], "周期パスが出力先のレートへ追従する")
+        XCTAssertEqual(
+            f.latencyIO.writtenFrames, [expectedLatency(at: 44100), expectedLatencyAtAppliedRate()],
+            "行き先のレートの値を先に書き、拒否されたので決定地点で保持した適用中のレートの値へ戻す"
+        )
+    }
+
+    func testTheCapturePathNeverAsksTheDriverForARate() throws {
+        guard let device = usableOutputDevice() else {
+            throw XCTSkip("この環境で駆動に使える出力デバイスが無いため、実クラスの assemble を駆動できない")
+        }
+        restoringBaseSampleRateAfterTest()
+        let rateIO = MockDeviceSampleRateIO()
+        rateIO.rates[device.deviceID] = 44100
+        rateIO.available[Self.latencyDriverID] = TestSampleRates.all.map { $0...$0 }
+        let engine = makeSilencedEngine(deviceSampleRateIO: rateIO)
+        let url = makeMinimalSharedRingReaderFixture(sampleRate: 48000, ownerProcessID: SharedRingReader.selfProcessID)
+        tempURLs.update { $0.append(url) }
+        let reader = try SharedRingReader.open(path: url.path).get()
+        let capture = FakeCaptureSource(endpointUID: device.uid, endpointDeviceID: device.deviceID, sampleRate: 44100)
+
+        XCTAssertTrue(engine.assembleAirPlay(capture: capture, ringReader: reader, driverDeviceID: Self.latencyDriverID, testToken))
+        defer { engine.suspend(cause: .applicationTermination, testToken) }
+        engine.refreshOutputDeviceSampleRate(testToken)
+
+        XCTAssertTrue(rateIO.writes.isEmpty)
+        XCTAssertEqual(rateIO.availableReadCount, 0, "取り込み経路では一覧も読まない")
+    }
+}

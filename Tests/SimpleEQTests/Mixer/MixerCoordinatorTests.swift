@@ -51,6 +51,7 @@ final class MixerCoordinatorTests: XCTestCase {
     private static let playerKey = MixerSpec.bundleKey("com.example.player")
 
     private var bridge: FakeMixerBridge!
+    private var audioWorld: AudioWorld!
     private var levelStore: MixerLevelStore!
     private var coordinator: MixerCoordinator!
     private var clock: TestClock!
@@ -68,8 +69,9 @@ final class MixerCoordinatorTests: XCTestCase {
             executablePath: { $0 == 501 ? Self.playerPath : nil },
             bundleInfo: { _ in MixerAppResolver.BundleInfo(bundleID: "com.example.player", displayName: "Player") }
         ))
+        audioWorld = AudioWorld(queue: DispatchQueue(label: "MixerCoordinatorTests.audioWorld"))
         coordinator = MixerCoordinator(
-            audioWorld: AudioWorld(queue: DispatchQueue(label: "MixerCoordinatorTests.audioWorld")),
+            audioWorld: audioWorld,
             bridge: bridge,
             levelStore: levelStore,
             resolver: resolver,
@@ -82,6 +84,7 @@ final class MixerCoordinatorTests: XCTestCase {
 
     override func tearDown() {
         coordinator = nil
+        audioWorld = nil
         levelStore = nil
         bridge = nil
         sink = nil
@@ -100,12 +103,14 @@ final class MixerCoordinatorTests: XCTestCase {
         levelStore.beginFold(tableGeneration: generation)
     }
 
+    /// 書き込みは押し出しより先にオーディオ世界へ積まれるので、そのキューを空けてから返す。
     @discardableResult
     private func waitForUpdate(_ body: () -> Void) -> MixerCoordinatorUpdate {
         let armed = expectation(description: "coordinator update")
         sink.arm(armed)
         body()
         wait(for: [armed], timeout: 2)
+        audioWorld.queue.sync {}
         return sink.last!
     }
 
@@ -181,8 +186,9 @@ final class MixerCoordinatorTests: XCTestCase {
     // 取り戻した回に押し直さないと、保存済みのゲインが次の周までドライバへ届かない。
     func testGainsAreWithheldWhileAnotherSessionOwnsThePathAndPushedAgainOnRegaining() {
         let owns = Recorded<Bool>(false)
+        let ownedAudioWorld = AudioWorld(queue: DispatchQueue(label: "MixerCoordinatorTests.ownedAudioWorld"))
         let coordinator = MixerCoordinator(
-            audioWorld: AudioWorld(queue: DispatchQueue(label: "MixerCoordinatorTests.ownedAudioWorld")),
+            audioWorld: ownedAudioWorld,
             bridge: bridge,
             levelStore: levelStore,
             resolver: MixerAppResolver(environment: MixerAppResolver.Environment(
@@ -202,6 +208,7 @@ final class MixerCoordinatorTests: XCTestCase {
             sink.arm(armed)
             body()
             wait(for: [armed], timeout: 2)
+            ownedAudioWorld.queue.sync {}
         }
 
         bridge.roster = [entry(clientID: 1, pid: 501, bundleID: "com.example.player", active: true)]

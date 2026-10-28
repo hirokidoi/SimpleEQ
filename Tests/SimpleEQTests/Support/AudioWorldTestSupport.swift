@@ -67,9 +67,13 @@ func waitForAudioWorld(
 
 @MainActor
 func makeSilencedEngine(
-    driverPresentationLatencyIO: DriverPresentationLatencyIO = MockDriverPresentationLatencyIO()
+    driverPresentationLatencyIO: DriverPresentationLatencyIO = MockDriverPresentationLatencyIO(),
+    deviceSampleRateIO: DeviceSampleRateIO = MockDeviceSampleRateIO()
 ) -> AudioEngine {
-    let engine = AudioEngine(volumeDeviceIO: MockDeviceVolumeIO(), driverPresentationLatencyIO: driverPresentationLatencyIO)
+    let engine = AudioEngine(
+        volumeDeviceIO: MockDeviceVolumeIO(), driverPresentationLatencyIO: driverPresentationLatencyIO,
+        deviceSampleRateIO: deviceSampleRateIO
+    )
     engine.applyDriverVolumeAndMute(volume: 0, muted: true, testToken)
     return engine
 }
@@ -149,5 +153,33 @@ final class MockDriverPresentationLatencyIO: DriverPresentationLatencyIO, @unche
         guard writeShouldSucceed else { return false }
         values[id] = frames
         return true
+    }
+}
+
+/// デバイスの公称レートの代役。実機のドライバへ書かず、書き込みを記録する。
+/// 書き込みは `rates` を更新しない (実機のドライバは構成変更が済むまで旧い値を返す)。
+final class MockDeviceSampleRateIO: DeviceSampleRateIO, @unchecked Sendable {
+    var rates: [AudioDeviceID: Double] = [:]
+    var available: [AudioDeviceID: [ClosedRange<Double>]] = [:]
+    var writeShouldSucceed = true
+    /// 書き込みのたびに、記録の前に呼ぶ (他の代役の状態を書き込み時点で採るため)。
+    var willWrite: (() -> Void)?
+
+    private(set) var writes: [(rate: Double, id: AudioDeviceID)] = []
+    private(set) var availableReadCount = 0
+
+    var writtenRates: [Double] { writes.map(\.rate) }
+
+    func nominalRate(_ id: AudioDeviceID, _ token: AudioWorldToken) -> Double? { rates[id] }
+
+    func availableNominalRates(_ id: AudioDeviceID, _ token: AudioWorldToken) -> [ClosedRange<Double>] {
+        availableReadCount += 1
+        return available[id] ?? []
+    }
+
+    func writeNominalRate(_ rate: Double, _ id: AudioDeviceID, _ token: AudioWorldToken) -> Bool {
+        willWrite?()
+        writes.append((rate, id))
+        return writeShouldSucceed
     }
 }

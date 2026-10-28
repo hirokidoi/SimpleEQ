@@ -72,7 +72,7 @@ Everything else (the skeleton of AudioServerPlugIn property dispatch, the basic 
 - A custom property that takes the delay of the output destination, the app's own path and the user's per-destination sync correction added together, and declares it as the device's delay (→ The Delay the Driver Declares)
 - A setup in which the dB range of the Volume/Mute controls is obtained from the single source in the shared header. These controls themselves, however, do not act on the audio on the path (→ Operating Rules for the Dedicated Driver)
 - While some instance holds the ownership seat, the Volume/Mute controls do not accept a write that the host's audio service makes to restore a stored value (→ Operating Rules for the Dedicated Driver)
-- Following multiple sample rates and deriving the ring capacity
+- Following the sample rate it is asked for, which the app sets to the output destination's own (→ The Rate the Driver Runs At), and deriving the ring capacity from the rates it declares
 - Declaring the device icon (pointing at an image bundled into the bundle)
 
 The driver binary is bundled into the app bundle. The app only places it at the installation location and never builds it at runtime.
@@ -425,8 +425,8 @@ The value is the delay the real output destination declares for itself plus a fi
 The third term is the sync correction the user chooses per output destination: a positive value holds the picture back, and the total is stopped at zero. It is kept by the destination's uid (→ Settings Persistence) and is not used in AirPlay mode, which saves no endpoint identifier (→ AirPlay Mode).
 The share is not built up from the occupancy and the output unit's buffer (→ Occupancy Control): measured on a real machine, the actual delay barely depends on the client's buffer, while such a sum is several times the actual delay and moves with whichever client is playing at assembly.
 
-The value is decided at the places where the delay line of the visualizer is rebuilt — the output stage being assembled, the destination switched, the rate changed — and when the sync correction changes while the value is being declared. While the output stage is stopped or the capture path stands in for the driver nothing is written on a change of the correction, and it takes effect at the next assembly. The value shares the single reading of the destination's declared delay with that line instead of reading it again (→ Rules for UI Rendering). While the capture path stands in for the driver, the player reads the AirPlay endpoint's own declaration and the driver's value is unused, so the neutral value is written there and nothing is added for the capture path.
-The periodic pass only compares the value the driver holds with the one being declared and writes it back when they differ, which repairs a driver that was restarted and a seat taken back after a lapse. A destination that changes what it declares while connected is not followed, for the same reason the visualizer's delay line is not.
+The value is decided at the places where the delay line of the visualizer is rebuilt — the output stage being assembled, the destination switched, the rate changed — and when the sync correction changes while the value is being declared. While the output stage is stopped or the capture path stands in for the driver nothing is written on a change of the correction, and it takes effect at the next assembly. The value at the running rate shares the single reading of the destination's declared delay with that line instead of reading it again (→ Rules for UI Rendering); only the value placed ahead of a rate request reads it again, at the rate being headed for. While the capture path stands in for the driver, the player reads the AirPlay endpoint's own declaration and the driver's value is unused, so the neutral value is written there and nothing is added for the capture path.
+The periodic pass only compares the value the driver holds with the one being declared and writes it back when they differ, which repairs a driver that was restarted and a seat taken back after a lapse. Neither this repair nor a change of the correction writes while a request for the driver's rate is pending (→ The Rate the Driver Runs At). A destination that changes what it declares while connected is not followed, for the same reason the visualizer's delay line is not.
 The computed value depends only on the destination, the rate and that destination's sync correction, so assembling again under the same conditions does not change it, and switching between destinations that declare the same delay and correction does not either. Each change, a change of the correction included, briefly stops the IO of the clients playing (→ Operating Rules for the Dedicated Driver). The slider in the settings window therefore commits only when the operation ends, not while it is being dragged.
 
 Only an instance that is driving the output stage and is also the owner by the same reading the render path uses to decide whether to sound or to go silent writes the value. The processing state alone cannot close the interval after an ownership lease has lapsed and another instance has taken the seat, because the instance that lost it stays active in that interval; writing then would overwrite the new owner's declaration, and the two instances would keep rewriting each other from their periodic passes.
@@ -437,6 +437,36 @@ The instance returns the driver to neutral when it stops while it is declaring a
 No lease is attached. After a crash nobody reads the ring, so nothing the driver receives is audible and no sound is corrected by a leftover value; the next instance to assemble the output stage overwrites it, and a restart of the host's audio service returns it to neutral. If the default output is put back on a real device, the player reads that device's declaration and the driver's value does not matter. A lease would add a field to the shared header and with it a layout version bump, would have the realtime IO path ask for a configuration change on expiry, and would expire while sound is still playing from a stalled app, which shifts the sync it is supposed to protect.
 
 An older driver has no such property, so nothing happens. The Diagnostics row reads as unavailable then even while audio processing runs and this instance holds the seat, and in that state it is the cue that the driver needs reinstalling.
+
+---
+
+## The Rate the Driver Runs At
+
+The app sets the driver's nominal rate to that of the output destination, so the output stage has no rate conversion of its own to do. Which rates the driver accepts is read from the driver each time; the app keeps no copy of the list.
+
+The rate is set at two kinds of place:
+
+- The places where the output destination is decided, which are the same places that rebuild the delay line (→ The Delay the Driver Declares): the output stage being assembled, the destination switched, and the switch rolled back after a failure. The rate-changed rebuild is not one of them.
+- The periodic pass, when the destination's own nominal rate differs from the one read at the last decision that could be made. It follows with a delay of up to the pass's interval, and the output stage converts in the meantime.
+
+Nothing is written when:
+
+- the destination's rate is not one the driver declares, or either rate cannot be read
+- the destination's rate already equals where the driver is headed: the rate asked for while a request is pending, the driver's own rate otherwise. Going back to the driver's old rate while a request is pending is therefore a write
+- the capture path stands in for the driver (→ AirPlay Mode)
+- this instance does not own the seat, by the same reading as the declared delay
+- the output stage is stopped
+
+A change of the driver's rate never starts a write. A write does not move the destination's rate, so a decision ends in one write and one rebuild. A change made from outside (the host's audio settings, a player that picks a rate) is left in place until the next decision point, because pushing it back would have the app and that player rewrite each other. The rate is not restored on exit.
+After the host's audio service restarts and the driver returns to its default rate, the output stage converts until the next decision point.
+
+The driver answers with the old rate until its configuration change is done, so the app keeps the rate it asked for. A pending request is dropped on any of three occasions: the change of the driver's rate being observed, whether it arrived or was overtaken; the periodic pass after the one that followed the request; and stopping. The pass in which a request was made does not drop it, so a request made by the route reconciliation is still pending when that same pass ends. It is never re-asked. A request to return to the driver's old rate produces no observed change, so the declared delay waits until the periodic pass drops it.
+
+The driver asks for a configuration change separately for the rate and for the declared delay, so these are two stops of the IO and cannot be one. The delay goes first, converted at the rate the driver is headed for (the rate about to be asked for, or, when none is asked for, the one still pending), and the rate is asked for after it. The reason is the order: a player that reopens its output when the driver's rate changes reads the declared delay at that moment, so a delay declared only after the rate would reach it too late. The value is not kept as the declared delay in force, which stays the total at the rate the driver is running at.
+A destination decided again while a request is pending is placed the same way: one whose rate is asked for afresh gets its delay converted at that rate, and every other one (its rate is the one being headed for, is not one the driver declares, or cannot be read) declares its own delay at the rate being headed for without asking for a rate. Apart from those and a follow by the periodic pass, nothing is written while a request is pending; the periodic pass's repair and a change of the sync correction wait. The rebuild that follows the rate change computes the same value from the same inputs, so it writes nothing and the stops stay at two.
+If the request for the rate is refused, the delay goes back to what it was before the request: the one for the rate still pending if there is one, otherwise the total at the rate the driver is running at. A request that is let go without landing is repaired by the periodic pass, which declares the total at the running rate.
+
+There is no setting to turn this off.
 
 ---
 
@@ -794,6 +824,7 @@ While the output stage reads the dedicated driver, in a healthy state the two sh
 The rate the app uses for EQ processing is the rate declared by the dedicated driver, or the capture path's while the output stage reads from it.
 Separately from that, the nominal rate of the output device that actually plays the audio is displayed alongside it. The two are treated as separate clock domains, and the design assumes they can disagree.
 The reason the two values are shown side by side is to make it possible to confirm by eye whether these two clock domains currently agree.
+They agree once the app has set the driver's rate to the output device's. Where and when it does, and when it leaves the rate alone, is in → The Rate the Driver Runs At; a disagreement in any of the cases it leaves alone, or in the delay before it follows, is normal.
 
 **The declared delay and the applied delay**
 The declared delay is the total the output destination reports for itself; the applied delay is how far the visualizer is actually being held back.
