@@ -74,10 +74,8 @@ final class BluetoothAutoDisconnectTests: XCTestCase {
     private let limit: TimeInterval = 60
     private let target = "bt-uid"
 
-    private func observation(
-        running: Bool = true, silent: TimeInterval, priming: UInt64 = 0
-    ) -> OutputSilenceObservation {
-        OutputSilenceObservation(writerIOIsRunning: running, silentSeconds: silent, primingSilenceCount: priming)
+    private func observation(sound: TimeInterval?) -> OutputSilenceObservation {
+        OutputSilenceObservation(lastSoundAt: sound)
     }
 
     private func evaluate(
@@ -87,163 +85,108 @@ final class BluetoothAutoDisconnectTests: XCTestCase {
         tracker.evaluate(observation: observation, targetUID: target, limitSeconds: limit ?? self.limit, now: now)
     }
 
-    func testTrackerReadsASoundSinceTheLastEvaluationAsPlayingAndKeepsNoOrigin() {
+    func testTrackerCountsFromArmingWhileNoSoundIsHeard() {
         var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(silent: 0)), .playing)
-        XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 5)), .playing)
-        // 起点が残っていれば残りは limit − 30 になる。
-        XCTAssertEqual(evaluate(&tracker, at: 130, observation(silent: 20)), .countingDown(remainingSeconds: limit - 20))
+        XCTAssertEqual(evaluate(&tracker, at: 100, observation(sound: nil)), .countingDown(remainingSeconds: limit))
+        XCTAssertEqual(evaluate(&tracker, at: 115, observation(sound: nil)), .countingDown(remainingSeconds: limit - 15))
     }
 
-    func testTrackerBackdatesTheOriginByTheSilenceWhileTheWriterIsRunning() {
+    func testTrackerDoesNotCountASoundBeforeArming() {
         var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(silent: 50)), .countingDown(remainingSeconds: limit - 50))
+        XCTAssertEqual(evaluate(&tracker, at: 100, observation(sound: 99)), .countingDown(remainingSeconds: limit), "再生中とも読まない")
     }
 
-    func testTrackerStartsCountingAtTheEvaluationWhenTheWriterIsStopped() {
+    func testTrackerReadsASoundSinceTheLastEvaluationAsPlayingAndCountsFromIt() {
         var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(running: false, silent: 999)), .countingDown(remainingSeconds: limit))
-        XCTAssertEqual(evaluate(&tracker, at: 115, observation(running: false, silent: 999)), .countingDown(remainingSeconds: limit - 15))
+        _ = evaluate(&tracker, at: 100, observation(sound: nil))
+        XCTAssertEqual(evaluate(&tracker, at: 115, observation(sound: 110)), .playing)
+        XCTAssertEqual(evaluate(&tracker, at: 130, observation(sound: 110)), .countingDown(remainingSeconds: limit - 20))
+    }
+
+    // 短い通知音: 評価と評価の間で鳴り終わる。
+    func testTrackerCatchesASoundThatStartsAndEndsBetweenEvaluations() {
+        var tracker = BluetoothAutoDisconnectTracker()
+        _ = evaluate(&tracker, at: 100, observation(sound: nil))
+        XCTAssertEqual(evaluate(&tracker, at: 145, observation(sound: nil)), .countingDown(remainingSeconds: limit - 45))
+        XCTAssertEqual(evaluate(&tracker, at: 160, observation(sound: 150)), .playing, "満了の時刻でも切断しない")
+        XCTAssertEqual(evaluate(&tracker, at: 175, observation(sound: 150)), .countingDown(remainingSeconds: limit - 25))
     }
 
     func testTrackerDisconnectsOnceAtExpiryThenAwaitsRearm() {
         var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(silent: 50)), .countingDown(remainingSeconds: limit - 50))
-        XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 65)), .disconnect)
-        XCTAssertEqual(evaluate(&tracker, at: 130, observation(silent: 80)), .awaitingRearm)
-        XCTAssertEqual(evaluate(&tracker, at: 145, observation(silent: 95)), .awaitingRearm)
+        _ = evaluate(&tracker, at: 100, observation(sound: nil))
+        XCTAssertEqual(evaluate(&tracker, at: 160, observation(sound: nil)), .disconnect)
+        XCTAssertEqual(evaluate(&tracker, at: 175, observation(sound: nil)), .awaitingRearm)
+        XCTAssertEqual(evaluate(&tracker, at: 190, observation(sound: nil)), .awaitingRearm)
     }
 
     func testTrackerRearmsAfterASoundAndDisconnectsAgainAtTheNextExpiry() {
         var tracker = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&tracker, at: 100, observation(silent: 50))
-        XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 65)), .disconnect)
-        XCTAssertEqual(evaluate(&tracker, at: 130, observation(silent: 5)), .playing)
-        XCTAssertEqual(evaluate(&tracker, at: 145, observation(silent: 20)), .countingDown(remainingSeconds: limit - 20))
-        XCTAssertEqual(evaluate(&tracker, at: 190, observation(silent: 65)), .disconnect)
+        _ = evaluate(&tracker, at: 100, observation(sound: nil))
+        XCTAssertEqual(evaluate(&tracker, at: 160, observation(sound: nil)), .disconnect)
+        XCTAssertEqual(evaluate(&tracker, at: 175, observation(sound: 170)), .playing)
+        XCTAssertEqual(evaluate(&tracker, at: 190, observation(sound: 170)), .countingDown(remainingSeconds: limit - 20))
+        XCTAssertEqual(evaluate(&tracker, at: 230, observation(sound: 170)), .disconnect)
     }
 
-    // 無音契機のリセット由来と再プライミング由来は、どちらも「巻き戻り + 0 フレーム返却の加算」の同じ観測になる。
-    func testTrackerDoesNotReadAZeroFrameReturnedRewindAsASound() {
+    func testTrackerRearmsAtTheEvaluationWhenTheTargetChanges() {
         var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(
-            evaluate(&tracker, at: 100, observation(silent: 50, priming: 0)), .countingDown(remainingSeconds: limit - 50)
-        )
-        XCTAssertEqual(
-            evaluate(&tracker, at: 105, observation(silent: 3, priming: 1)), .countingDown(remainingSeconds: limit - 55),
-            "起点を保つ"
-        )
+        _ = evaluate(&tracker, at: 100, observation(sound: nil), target: "a")
+        XCTAssertEqual(evaluate(&tracker, at: 115, observation(sound: nil), target: "b"), .countingDown(remainingSeconds: limit))
     }
 
-    func testTrackerDefersAnExpiryItCannotTellFromAResumedSound() {
-        func prepared() -> BluetoothAutoDisconnectTracker {
-            var tracker = BluetoothAutoDisconnectTracker()
-            _ = evaluate(&tracker, at: 100, observation(silent: 50, priming: 0))
-            XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 3, priming: 1)), .countingDown(remainingSeconds: 0), "保留")
-            return tracker
-        }
-        var quiet = prepared()
-        XCTAssertEqual(evaluate(&quiet, at: 130, observation(silent: 18, priming: 1)), .disconnect, "巻き戻りが無ければ満了")
-        var sounding = prepared()
-        XCTAssertEqual(evaluate(&sounding, at: 130, observation(silent: 5, priming: 1)), .playing, "加算なしの巻き戻りは音")
-        var stopped = prepared()
-        XCTAssertEqual(evaluate(&stopped, at: 130, observation(running: false, silent: 0, priming: 9)), .playing, "見送った直後に IO が止まったら音")
-        XCTAssertEqual(evaluate(&stopped, at: 145, observation(running: false, silent: 0, priming: 20)), .countingDown(remainingSeconds: limit))
-    }
-
-    // 短い再生: IO 再開の評価は再プライミングと重なって判別できず、次の評価までに再生が終わって IO が止まる。
-    func testTrackerReadsAPlaybackThatStopsAfterAnAmbiguousEvaluationAsASound() {
-        var atExpiry = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&atExpiry, at: 100, observation(running: false, silent: 0, priming: 0))
-        XCTAssertEqual(evaluate(&atExpiry, at: 100 + limit, observation(silent: 3, priming: 4)), .countingDown(remainingSeconds: 0))
-        XCTAssertEqual(
-            evaluate(&atExpiry, at: 115 + limit, observation(running: false, silent: 0, priming: 9)), .playing, "再生の直後に切断しない"
-        )
-
-        var beforeExpiry = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&beforeExpiry, at: 100, observation(running: false, silent: 0, priming: 0))
-        XCTAssertEqual(evaluate(&beforeExpiry, at: 115, observation(silent: 3, priming: 4)), .countingDown(remainingSeconds: limit - 15))
-        XCTAssertEqual(evaluate(&beforeExpiry, at: 130, observation(running: false, silent: 0, priming: 9)), .playing)
-        XCTAssertEqual(evaluate(&beforeExpiry, at: 145, observation(running: false, silent: 0, priming: 20)), .countingDown(remainingSeconds: limit))
-    }
-
-    // 無音のまま IO を開くクライアントで数え直さない。
-    func testTrackerKeepsTheOriginWhenTheWriterResumesSilently() {
+    func testTrackerIsInactiveWithoutAnObservationAndRearmsWhenItResumes() {
         var tracker = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&tracker, at: 100, observation(running: false, silent: 0, priming: 0))
-        XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 3, priming: 4)), .countingDown(remainingSeconds: limit - 15))
-        XCTAssertEqual(evaluate(&tracker, at: 130, observation(silent: 18, priming: 4)), .countingDown(remainingSeconds: limit - 30))
-    }
-
-    func testTrackerForgetsAnAmbiguousEvaluationWhenTheObservationIsInterrupted() {
-        var tracker = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&tracker, at: 100, observation(silent: 50, priming: 0))
-        _ = evaluate(&tracker, at: 115, observation(silent: 3, priming: 1))
-        XCTAssertEqual(evaluate(&tracker, at: 130, nil), .inactive)
-        XCTAssertEqual(evaluate(&tracker, at: 145, observation(running: false, silent: 0, priming: 9)), .countingDown(remainingSeconds: limit))
-    }
-
-    func testTrackerTakesTheFirstPrimingCountAsABaselineNotAnIncrease() {
-        var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(silent: 0, priming: 7)), .playing)
-        var other = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&other, at: 100, observation(silent: 0, priming: 7))
-        XCTAssertEqual(evaluate(&other, at: 115, observation(silent: 20, priming: 7)), .countingDown(remainingSeconds: limit - 20))
-    }
-
-    func testTrackerDropsTheOriginWhenTheTargetChanges() {
-        var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(running: false, silent: 0), target: "a"), .countingDown(remainingSeconds: limit))
-        XCTAssertEqual(
-            evaluate(&tracker, at: 115, observation(running: false, silent: 0), target: "b"), .countingDown(remainingSeconds: limit)
-        )
-    }
-
-    func testTrackerIsInactiveWithoutAnObservationAndDropsTheOrigin() {
-        var tracker = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&tracker, at: 100, observation(running: false, silent: 0))
+        _ = evaluate(&tracker, at: 100, observation(sound: nil))
         XCTAssertEqual(evaluate(&tracker, at: 115, nil), .inactive)
-        XCTAssertEqual(evaluate(&tracker, at: 130, observation(running: false, silent: 0)), .countingDown(remainingSeconds: limit))
+        XCTAssertEqual(evaluate(&tracker, at: 130, observation(sound: nil)), .countingDown(remainingSeconds: limit))
     }
 
     func testTrackerIsInactiveWithoutATargetWhileKeepingTheObservation() {
         var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(silent: 50), target: nil), .inactive)
+        XCTAssertEqual(evaluate(&tracker, at: 100, observation(sound: nil), target: nil), .inactive)
     }
 
     func testTrackerDoesNotDisconnectAgainWhenTheSameTargetReturnsWhileSilenceContinues() {
         func disconnected() -> BluetoothAutoDisconnectTracker {
             var tracker = BluetoothAutoDisconnectTracker()
-            _ = evaluate(&tracker, at: 100, observation(silent: 50))
-            XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 65)), .disconnect)
+            _ = evaluate(&tracker, at: 100, observation(sound: nil))
+            XCTAssertEqual(evaluate(&tracker, at: 160, observation(sound: nil)), .disconnect)
             return tracker
         }
         var moved = disconnected()
-        XCTAssertEqual(evaluate(&moved, at: 130, observation(silent: 80), target: "other"), .disconnect, "別の機器は別に数える")
-        XCTAssertEqual(evaluate(&moved, at: 145, observation(silent: 95)), .awaitingRearm, "同じ UID が戻っても再切断しない")
+        XCTAssertEqual(evaluate(&moved, at: 175, observation(sound: nil), target: "other"), .countingDown(remainingSeconds: limit))
+        XCTAssertEqual(evaluate(&moved, at: 190, observation(sound: nil)), .awaitingRearm, "同じ UID が戻っても再切断しない")
 
         var vanished = disconnected()
-        XCTAssertEqual(evaluate(&vanished, at: 130, observation(silent: 80), target: nil), .inactive)
-        XCTAssertEqual(evaluate(&vanished, at: 145, observation(silent: 95)), .awaitingRearm)
+        XCTAssertEqual(evaluate(&vanished, at: 175, observation(sound: nil), target: nil), .inactive)
+        XCTAssertEqual(evaluate(&vanished, at: 190, observation(sound: nil)), .awaitingRearm)
 
         var stopped = disconnected()
-        XCTAssertEqual(evaluate(&stopped, at: 130, nil), .inactive)
-        XCTAssertEqual(evaluate(&stopped, at: 145, observation(silent: 95)), .awaitingRearm, "観測が途切れても同じ")
+        XCTAssertEqual(evaluate(&stopped, at: 175, nil), .inactive)
+        XCTAssertEqual(evaluate(&stopped, at: 190, observation(sound: nil)), .awaitingRearm, "観測が途切れても同じ")
     }
 
     func testTrackerCountsAgainOnceASoundCameWhileTheTargetWasAway() {
-        var tracker = BluetoothAutoDisconnectTracker()
-        _ = evaluate(&tracker, at: 100, observation(silent: 50))
-        XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 65)), .disconnect)
-        XCTAssertEqual(evaluate(&tracker, at: 130, observation(silent: 3), target: nil), .inactive, "対象が無い間の音も区間の終わり")
-        XCTAssertEqual(evaluate(&tracker, at: 145, observation(silent: 18)), .countingDown(remainingSeconds: limit - 18))
-        XCTAssertEqual(evaluate(&tracker, at: 190, observation(silent: 63)), .disconnect)
+        func disconnected() -> BluetoothAutoDisconnectTracker {
+            var tracker = BluetoothAutoDisconnectTracker()
+            _ = evaluate(&tracker, at: 100, observation(sound: nil))
+            XCTAssertEqual(evaluate(&tracker, at: 160, observation(sound: nil)), .disconnect)
+            return tracker
+        }
+        var away = disconnected()
+        XCTAssertEqual(evaluate(&away, at: 175, observation(sound: 170), target: nil), .inactive, "対象が無い間の音も区間の終わり")
+        XCTAssertEqual(evaluate(&away, at: 190, observation(sound: 170)), .countingDown(remainingSeconds: limit))
+
+        var unobserved = disconnected()
+        XCTAssertEqual(evaluate(&unobserved, at: 175, nil), .inactive)
+        XCTAssertEqual(evaluate(&unobserved, at: 190, observation(sound: 180)), .countingDown(remainingSeconds: limit), "観測が途切れた間の音も同じ")
     }
 
     func testTrackerAppliesAShorterLimitToTheKeptOrigin() {
         var tracker = BluetoothAutoDisconnectTracker()
-        XCTAssertEqual(evaluate(&tracker, at: 100, observation(silent: 50), limit: 600), .countingDown(remainingSeconds: 550))
-        XCTAssertEqual(evaluate(&tracker, at: 115, observation(silent: 65), limit: 60), .disconnect)
+        XCTAssertEqual(evaluate(&tracker, at: 100, observation(sound: nil), limit: 600), .countingDown(remainingSeconds: 600))
+        XCTAssertEqual(evaluate(&tracker, at: 165, observation(sound: nil), limit: 60), .disconnect)
     }
 
     // MARK: - 設定の導出・表示値
@@ -316,7 +259,7 @@ final class BluetoothAutoDisconnectTests: XCTestCase {
             directory.transportTypes[deviceID] = kAudioDeviceTransportTypeBluetooth
             directory.namesByDeviceID[deviceID] = deviceName
             engine.intendedOutputDeviceUID = uid
-            engine.observation = OutputSilenceObservation(writerIOIsRunning: false, silentSeconds: 0, primingSilenceCount: 0)
+            engine.observation = OutputSilenceObservation(lastSoundAt: nil)
             let clock = clock
             coordinator = BluetoothAutoDisconnectCoordinator(
                 engine: engine, directory: directory, airPlayMode: airPlay, connectionControl: control,
@@ -426,9 +369,11 @@ final class BluetoothAutoDisconnectTests: XCTestCase {
 
     func testCoordinatorReportsPlayingWhileASoundIsHeard() {
         let f = Fixture()
-        f.engine.observation = OutputSilenceObservation(writerIOIsRunning: true, silentSeconds: 0, primingSilenceCount: 0)
         f.coordinator.configure(Fixture.enabled, testToken)
-        XCTAssertEqual(f.statuses.value, [.playing(deviceName: f.deviceName)])
+        f.clock.advance(by: 15)
+        f.engine.observation = OutputSilenceObservation(lastSoundAt: f.clock.now - 1)
+        f.coordinator.evaluate(testToken)
+        XCTAssertEqual(f.statuses.value.last, .playing(deviceName: f.deviceName))
     }
 
     // MARK: - 許可が無いとき

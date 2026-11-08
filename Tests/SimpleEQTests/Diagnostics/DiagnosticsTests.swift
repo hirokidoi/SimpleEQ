@@ -68,6 +68,18 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(stateRow(ioIsRunning: false), ["停止中"])
     }
 
+    func testLastSoundRowShowsTheTimeSinceTheLastSound() {
+        let metrics = AudioRuntimeMetrics()
+        func row(now: TimeInterval) -> [String]? {
+            DiagnosticsReport.sections(metrics.snapshot(appliedSampleRate: AudioConfig.appliedSampleRate, now: now), render: idleRender())
+                .flatMap(\.rows).first { $0.title == "音の検出" }?.values
+        }
+
+        XCTAssertEqual(row(now: 100), [unreadableValue])
+        metrics.recordSound(at: 30)
+        XCTAssertEqual(row(now: 100), [OccupancyPolicy.formattedDuration(seconds: 70)])
+    }
+
     // 直前のデバイスの値を、今のデバイスの公称値として見せない。
     func testOutputDeviceSampleRateBecomesUnobservedWhileNoOutputIsAttached() {
         let (model, engine, audioWorld) = makeModelWithEngine()

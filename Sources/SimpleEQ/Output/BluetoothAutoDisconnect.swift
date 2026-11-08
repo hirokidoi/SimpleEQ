@@ -2,12 +2,10 @@ import CoreAudio
 import CoreBluetooth
 import Foundation
 
-/// 出力段の無音の観測。値は評価の瞬間のもの。
+/// 出力段の無音の観測。
 struct OutputSilenceObservation: Equatable, Sendable {
-    let writerIOIsRunning: Bool
-    let silentSeconds: TimeInterval
-    /// 出力コールバックが 0 フレームを返した回数の起動以来の累計。
-    let primingSilenceCount: UInt64
+    /// 単位は uptimeSeconds。nil は起動以来音が出ていない。
+    let lastSoundAt: TimeInterval?
 }
 
 struct BluetoothAutoDisconnectSettings: Equatable, Sendable {
@@ -48,11 +46,10 @@ struct BluetoothAutoDisconnectTracker {
 
     // 観測系
     private var lastEvaluatedAt: TimeInterval?
-    private var lastPrimingSilenceCount: UInt64?
-    private var lastEvaluationAmbiguous = false
-    // 対象系
+    private var lastSeenSoundAt: TimeInterval?
+    // 対象系: 今の対象を数え始めた時刻
     private var targetUID: String?
-    private var silenceOrigin: TimeInterval?
+    private var armedAt: TimeInterval?
     // 区間系: この無音区間で切断した UID。音が出るか機能が無効になるまで保持する。
     private var disconnectedUIDs: Set<String> = []
 
@@ -62,49 +59,31 @@ struct BluetoothAutoDisconnectTracker {
     ) -> Verdict {
         guard let observation else {
             lastEvaluatedAt = nil
-            lastPrimingSilenceCount = nil
-            lastEvaluationAmbiguous = false
             targetUID = nil
-            silenceOrigin = nil
+            armedAt = nil
             return .inactive
         }
 
-        let window = lastEvaluatedAt.map { now - $0 } ?? 0
-        let counterRewound = observation.writerIOIsRunning && observation.silentSeconds <= window
-        // 音以外 (各種リセット・再プライミング) の巻き戻りは 0 フレーム返却を伴う。音と読むと起点が引き直され続けて満了しない。
-        let zeroFrameReturned = lastPrimingSilenceCount.map { observation.primingSilenceCount > $0 } ?? false
-        let ambiguous = counterRewound && zeroFrameReturned
-        // 判別できなかった区間の後で IO が止まっていれば、その間に鳴って終わった再生とみなす。
-        let stoppedAfterAmbiguous = lastEvaluationAmbiguous && !observation.writerIOIsRunning
+        let soundAt = observation.lastSoundAt
+        let heardSinceLastEvaluation = lastEvaluatedAt.map { previous in soundAt.map { $0 > previous } ?? false } ?? false
+        if let soundAt, soundAt > (lastSeenSoundAt ?? -.infinity) { disconnectedUIDs.removeAll() }
+        lastSeenSoundAt = soundAt
         lastEvaluatedAt = now
-        lastPrimingSilenceCount = observation.primingSilenceCount
-        lastEvaluationAmbiguous = ambiguous
-
-        if (counterRewound && !zeroFrameReturned) || stoppedAfterAmbiguous {
-            silenceOrigin = nil
-            disconnectedUIDs.removeAll()
-            targetUID = newTargetUID
-            return newTargetUID == nil ? .inactive : .playing
-        }
 
         guard let newTargetUID else {
             targetUID = nil
-            silenceOrigin = nil
+            armedAt = nil
             return .inactive
         }
-        if newTargetUID != targetUID { silenceOrigin = nil }
+        let armed = newTargetUID == targetUID ? (armedAt ?? now) : now
+        armedAt = armed
         targetUID = newTargetUID
 
         if disconnectedUIDs.contains(newTargetUID) { return .awaitingRearm }
 
-        let origin = silenceOrigin ?? (observation.writerIOIsRunning ? now - observation.silentSeconds : now)
-        silenceOrigin = origin
-
-        let remaining = limitSeconds - (now - origin)
+        if heardSinceLastEvaluation { return .playing }
+        let remaining = max(armed, soundAt ?? armed) + limitSeconds - now
         if remaining > 0 { return .countingDown(remainingSeconds: remaining) }
-
-        // 音か判別できない評価では満了を見送る。
-        if ambiguous { return .countingDown(remainingSeconds: 0) }
 
         disconnectedUIDs.insert(newTargetUID)
         return .disconnect

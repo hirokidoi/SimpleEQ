@@ -542,6 +542,20 @@ final class AudioRuntimeMetrics {
         if peak > rawPeakBeforeVolume { peakBeforeVolumeStorage.store(UInt64(peak.bitPattern)) }
     }
 
+    // MARK: - 最後に音が出た時刻 (現在の状態)
+
+    /// 単位は uptimeSeconds。0 は起動以来音が出ていない。
+    private let lastSoundAtStorage = AtomicUInt64(0)
+
+    var lastSoundAt: TimeInterval? {
+        let value = Double(bitPattern: lastSoundAtStorage.value)
+        return value > 0 ? value : nil
+    }
+
+    func recordSound(at uptime: TimeInterval) {
+        lastSoundAtStorage.store(uptime.bitPattern)
+    }
+
     // MARK: - リセット (累積カウンタ・窓統計は基準値方式、走行最大値と直近イベントの値は書き直し)
 
     /// 基準値 (reset 時点の値) を控えるだけで、カウンタそのものには書き込まない
@@ -636,6 +650,7 @@ final class AudioRuntimeMetrics {
         let ringCapacityFrames: Int
         let peak: Float
         let peakBeforeVolume: Float
+        let secondsSinceLastSound: TimeInterval?
         let mixerDriver: MixerDriverObservation
         let mixerCoordination: MixerCoordinationObservation
         let ownershipObserved: Bool
@@ -649,7 +664,7 @@ final class AudioRuntimeMetrics {
     func snapshot(
         appliedSampleRate: Double, volumeRoute: VolumeRouteObservation? = nil,
         presentationDelay: PresentationDelayObservation? = nil,
-        driverPresentationLatencyFrames: Int? = nil
+        driverPresentationLatencyFrames: Int? = nil, now: TimeInterval = uptimeSeconds()
     ) -> Snapshot {
         Snapshot(
             appVersion: appVersion,
@@ -697,6 +712,7 @@ final class AudioRuntimeMetrics {
             ringCapacityFrames: ringCapacityFrames,
             peak: peak,
             peakBeforeVolume: peakBeforeVolume,
+            secondsSinceLastSound: lastSoundAt.map { max(0, now - $0) },
             mixerDriver: mixerDriverObservation,
             mixerCoordination: mixerCoordinationObservation,
             ownershipObserved: ownershipObserved,

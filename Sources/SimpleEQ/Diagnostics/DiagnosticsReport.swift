@@ -135,6 +135,10 @@ enum DiagnosticsReport {
                     ].joined(separator: " / "),
                 ]
             ),
+            DiagnosticsRow(
+                title: "音の検出", subtitle: "最後の音を検出してからの経過時間",
+                values: [s.secondsSinceLastSound.map(OccupancyPolicy.formattedDuration) ?? unobserved]
+            ),
             // 読み手が居ない間は、読み手が書いていた値を現在の状態として見せない。
             DiagnosticsRow(
                 title: "ドライバの IO 稼働", subtitle: "ドライバの申告値",

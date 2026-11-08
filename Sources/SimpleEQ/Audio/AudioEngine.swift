@@ -143,13 +143,7 @@ final class AudioEngine: @unchecked Sendable {
         guard processingState == .active, captureSource == nil, let reader = ringReader, reader.isSelfOwner else {
             return nil
         }
-        // 無音カウンタを先に読む (巻き戻りと加算が同じ回に起きても、読み落としは「音」側へ倒れる)。
-        let silentFrames = reader.silentOutputFrameCount
-        return OutputSilenceObservation(
-            writerIOIsRunning: reader.writerIOIsRunning,
-            silentSeconds: OccupancyPolicy.durationSeconds(frames: silentFrames, sampleRate: AudioConfig.appliedSampleRate),
-            primingSilenceCount: runtimeMetrics.primingSilenceCountSinceLaunch
-        )
+        return OutputSilenceObservation(lastSoundAt: runtimeMetrics.lastSoundAt)
     }
 
     /// HAL への問い合わせを含むため、読み手が居ない間は呼んではならない。
@@ -1102,6 +1096,10 @@ final class AudioEngine: @unchecked Sendable {
         for i in 0..<(frameCount * channels) { peak = max(peak, abs(dst[i])) }
         runtimeMetrics.recordPeak(peak)
         runtimeMetrics.recordPeakBeforeVolume(peakBeforeVolume)
+        // 音量・消音を掛ける前で判定する (消音中の再生も音として数える)。
+        if peakBeforeVolume > OccupancyPolicy.silenceLevelThresholdAmplitude {
+            runtimeMetrics.recordSound(at: uptimeSeconds())
+        }
         if let captureRing {
             captureRing.observeOutputLevel(peak: peak, effectiveOutputGain: effectiveOutputGain, frames: frameCount)
         } else {

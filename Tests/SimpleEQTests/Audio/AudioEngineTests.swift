@@ -837,9 +837,9 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertTrue(engine.assemble(outputDevice: outputDevice, ringReader: reader, testToken))
         defer { engine.suspend(cause: .applicationTermination, testToken) }
 
+        engine.runtimeMetrics.recordSound(at: 123)
         let observation = try XCTUnwrap(engine.outputSilenceObservation(testToken))
-        XCTAssertTrue(observation.writerIOIsRunning, "転記値ではなくヘッダの稼働フラグを読む")
-        XCTAssertEqual(observation.primingSilenceCount, engine.runtimeMetrics.primingSilenceCountSinceLaunch)
+        XCTAssertEqual(observation.lastSoundAt, 123)
     }
 
     func testOutputSilenceObservationIsNilWhileAnotherProcessOwnsTheRing() throws {
@@ -1352,6 +1352,34 @@ final class AudioEngineTests: XCTestCase {
 
         XCTAssertEqual(engine.runtimeMetrics.peak, 0, "音量適用後は渡したバッファそのもの")
         XCTAssertEqual(engine.runtimeMetrics.peakBeforeVolume, exceedingPeak, accuracy: 1e-9)
+    }
+
+    func testRecordOutputLevelRecordsTheLastSoundFromThePeakBeforeVolume() throws {
+        let engine = AudioEngine()
+        let frameCount = 128
+        let channels = Int(AudioConfig.channels)
+        let threshold = OccupancyPolicy.silenceLevelThresholdAmplitude
+        let silentBuffer = [Float](repeating: 0, count: frameCount * channels)
+        func record(beforeVolume: Float) {
+            silentBuffer.withUnsafeBufferPointer {
+                engine.recordOutputLevel(
+                    $0.baseAddress!, frameCount: frameCount, channels: channels,
+                    peakBeforeVolume: beforeVolume, effectiveOutputGain: 0, reader: nil
+                )
+            }
+        }
+
+        record(beforeVolume: threshold * 0.5)
+        XCTAssertNil(engine.runtimeMetrics.lastSoundAt, "閾値以下は音にしない")
+
+        let before = uptimeSeconds()
+        record(beforeVolume: threshold * 10)
+        let recorded = try XCTUnwrap(engine.runtimeMetrics.lastSoundAt, "消音で出力が 0 でも、掛ける前に音があれば音")
+        XCTAssertGreaterThanOrEqual(recorded, before)
+        XCTAssertLessThanOrEqual(recorded, uptimeSeconds())
+
+        record(beforeVolume: 0)
+        XCTAssertEqual(engine.runtimeMetrics.lastSoundAt, recorded, "無音の回は書き換えない")
     }
 
     // MARK: - レート変更の検知・再構築 (実クラス経由)
