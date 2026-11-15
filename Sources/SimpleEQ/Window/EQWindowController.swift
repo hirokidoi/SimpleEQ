@@ -155,8 +155,14 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
         }
 
         guard previousMode != nil, window.isVisible else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        bringToFront(window)
+    }
+
+    /// activate() はほかのアプリの使用中に断られうるので、orderFrontRegardless で前に出す。
+    private func bringToFront(_ window: NSWindow?) {
+        NSApp.activate()
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
     }
 
     static func restoredOrigin(saved: SettingsStore.WindowOrigin?, size: NSSize) -> NSPoint? {
@@ -196,9 +202,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
             settingsWindowController = controller
             applyAlwaysOnTop(viewModel.alwaysOnTop)
         }
-        NSApp.activate(ignoringOtherApps: true)
         settingsWindowController?.showWindow(nil)
-        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+        bringToFront(settingsWindowController?.window)
     }
 
     /// Diagnostics ウィンドウを開く。Settings ウィンドウと同じ流儀に倣う。位置は永続化しない。
@@ -232,10 +237,9 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
             window.delegate = delegate
             applyAlwaysOnTop(viewModel.alwaysOnTop)
         }
-        NSApp.activate(ignoringOtherApps: true)
         diagnosticsWindowController?.showWindow(nil)
         if let diagnosticsWindow = diagnosticsWindowController?.window {
-            diagnosticsWindow.makeKeyAndOrderFront(nil)
+            bringToFront(diagnosticsWindow)
             updateDiagnosticsActive(
                 isVisible: diagnosticsWindow.isVisible, isMiniaturized: diagnosticsWindow.isMiniaturized
             )
@@ -269,9 +273,8 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
             aboutWindowController = NSWindowController(window: window)
             applyAlwaysOnTop(viewModel.alwaysOnTop)
         }
-        NSApp.activate(ignoringOtherApps: true)
         aboutWindowController?.showWindow(nil)
-        aboutWindowController?.window?.makeKeyAndOrderFront(nil)
+        bringToFront(aboutWindowController?.window)
     }
 
     /// スクロールが要らなくなる高さをウィンドウの高さ上限にする。
@@ -328,8 +331,7 @@ final class EQWindowController: NSWindowController, NSWindowDelegate {
     /// ウィンドウを表示して最前面に持ってくる。起動時の自動表示とトグルの両方から呼ぶ。
     func show() {
         guard let window = window else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        bringToFront(window)
         windowIsVisible = true
         promptDriverInstallIfNeeded()
     }
