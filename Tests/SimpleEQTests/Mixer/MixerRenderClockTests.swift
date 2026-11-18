@@ -4,19 +4,15 @@ import XCTest
 @MainActor
 final class MixerRenderClockTests: XCTestCase {
 
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
 
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("MixerRenderClockTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 

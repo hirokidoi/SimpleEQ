@@ -167,8 +167,7 @@ final class ManualRoutingScheduler: Sendable {
 
 @MainActor
 final class DeviceRoutingReconcilerTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
     nonisolated private let tempURLs = Recorded<[URL]>([])
 
     private let driverUID = "driver-device-uid"
@@ -185,16 +184,13 @@ final class DeviceRoutingReconcilerTests: XCTestCase {
     // 同期版は隔離を持たず、この検証が保持する状態 (メイン隔離) を触れない。
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("DeviceRoutingReconcilerTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
         for url in tempURLs.value { try? FileManager.default.removeItem(at: url) }
         tempURLs.update { $0.removeAll() }
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 

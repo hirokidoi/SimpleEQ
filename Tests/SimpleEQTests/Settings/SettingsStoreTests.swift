@@ -3,20 +3,16 @@ import XCTest
 
 @MainActor
 final class SettingsStoreTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
 
     // 非同期版の setUp を使う (同期版はこの検証が要る隔離を持たない)。
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("SettingsStoreTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 

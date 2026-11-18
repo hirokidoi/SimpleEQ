@@ -588,9 +588,7 @@ final class AudioEngineTests: XCTestCase {
         defer { engine.suspend(cause: .applicationTermination, testToken) }
         XCTAssertEqual(engine.processingState, .active, "前提: 稼働中")
 
-        let suiteName = TestDefaults.makeName("OwnershipRingReplacement")
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { TestDefaults.remove(name: suiteName, defaults: defaults) }
+        let defaults = MemoryPreferences()
         let directory = MockAudioDeviceDirectory()
         let lifecycle = DriverLifecycleController(directory: directory, targetDeviceUID: DriverConfig.deviceUID)
         let outputController = OutputDeviceController(
@@ -869,9 +867,7 @@ final class AudioEngineTests: XCTestCase {
         }
         let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
 
-        let suiteName = TestDefaults.makeName("AudioEngineTests")
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { TestDefaults.remove(name: suiteName, defaults: defaults) }
+        let defaults = MemoryPreferences()
         let settings = SettingsStore(defaults: defaults)
         settings.savedDefaultOutputUID = "startup-default-uid"
         settings.switchPending = true
@@ -899,9 +895,7 @@ final class AudioEngineTests: XCTestCase {
         }
         let outputDevice = ResolvedOutputDevice(uid: device.uid, deviceID: device.deviceID)
 
-        let suiteName = TestDefaults.makeName("AudioEngineTests")
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { TestDefaults.remove(name: suiteName, defaults: defaults) }
+        let defaults = MemoryPreferences()
         let settings = SettingsStore(defaults: defaults)
         settings.savedDefaultOutputUID = "startup-default-uid"
         settings.switchPending = true
@@ -1513,9 +1507,7 @@ final class AudioEngineTests: XCTestCase {
         // セッション中に選び直した先。
         let switchedDevice = ResolvedOutputDevice(uid: "switched-to-uid", deviceID: device.deviceID)
 
-        let suiteName = TestDefaults.makeName("AudioEngineTests")
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { TestDefaults.remove(name: suiteName, defaults: defaults) }
+        let defaults = MemoryPreferences()
         let settings = SettingsStore(defaults: defaults)
         settings.savedDefaultOutputUID = "startup-default-uid"
         settings.switchPending = true
@@ -1771,8 +1763,7 @@ final class MockActivatableAudioEngine: ActivatableAudioEngine, @unchecked Senda
 
 @MainActor
 final class AudioActivationCoordinatorTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
     nonisolated private let tempURLs = Recorded<[URL]>([])
 
     private let driverUID = "driver-device-uid"
@@ -1783,16 +1774,13 @@ final class AudioActivationCoordinatorTests: XCTestCase {
     // 同期版は隔離を持たず、この検証が保持する状態 (メイン隔離) を触れない。
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("AudioActivationCoordinatorTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
         for url in tempURLs.value { try? FileManager.default.removeItem(at: url) }
         tempURLs.update { $0.removeAll() }
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 

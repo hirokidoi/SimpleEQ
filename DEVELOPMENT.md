@@ -1006,8 +1006,7 @@ Installing and removing the driver requires administrator privileges, so they ar
 
 The tests never perform Bluetooth connection operations: the test runner holds no permission for them, and a call terminates it. Reading the permission state sits on the same side of that boundary. The operations sit behind a replaceable boundary, and the code that coordinates them has no default implementation to fall back on.
 
-The tests create a disposable storage area. macOS leaves a preferences file behind for each such name, so `make test` also cleans up after the tests.
-If the tests failed and stopped partway, running `make clean-test-prefs` on its own recovers from it.
+The tests never touch the system's preferences: the settings store takes a store that the tests replace with one in memory. Every preferences domain a test creates stays held by the system's preferences service until the Mac restarts, even after its file is removed, and enough of them stop preferences from working for every app.
 
 Some tests drive the real assembly against a real output device, since an output unit cannot be built without one. Those reach the machine the tests are running on in two ways, and both have to be closed off.
 

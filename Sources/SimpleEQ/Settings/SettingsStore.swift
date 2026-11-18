@@ -6,7 +6,7 @@ extension EQPreset: Codable {}
 /// プリセットの上書き内容を通常の JSON オブジェクト (キー=rawValue文字列) としてエンコード/デコードするために必要な適合。
 extension EQPreset: CodingKeyRepresentable {}
 
-/// EQ 設定と出力デバイス復帰状態の永続化。UserDefaults へ Codable モデル 1 件として保存する。
+/// EQ 設定と出力デバイス復帰状態の永続化。Codable モデル 1 件として保存する。
 @MainActor
 final class SettingsStore {
     struct WindowOrigin: Codable, Equatable {
@@ -114,11 +114,11 @@ final class SettingsStore {
 
     static let defaultsKey = "SimpleEQ.settings.v1"
 
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStore
     private var state: Persisted
     private var stateLock = os_unfair_lock_s()
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: any PreferenceStore) {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.defaultsKey),
            let decoded = try? JSONDecoder().decode(Persisted.self, from: data) {

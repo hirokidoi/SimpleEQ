@@ -44,8 +44,7 @@ final class FakeAirPlayEngine: AirPlayRoutingEngine, ActivatableAudioEngine, @un
 
 @MainActor
 final class AirPlayModeCoordinatorTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
     nonisolated private let tempURLs = Recorded<[URL]>([])
 
     private let driverUID = "driver-uid"
@@ -59,16 +58,13 @@ final class AirPlayModeCoordinatorTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("AirPlayModeCoordinatorTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
         for url in tempURLs.value { try? FileManager.default.removeItem(at: url) }
         tempURLs.update { $0.removeAll() }
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 

@@ -8,24 +8,20 @@ import XCTest
 
 @MainActor
 final class EQViewModelTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
     /// 実クラスを駆動するテストが使う共有メモリフィクスチャの後始末対象。
     nonisolated private let tempURLs = Recorded<[URL]>([])
 
     // 非同期版の setUp を使う (同期版はこの検証が要る隔離を持たない)。
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("EQViewModelTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
         for url in tempURLs.value { try? FileManager.default.removeItem(at: url) }
         tempURLs.update { $0.removeAll() }
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 

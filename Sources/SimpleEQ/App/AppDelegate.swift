@@ -7,7 +7,7 @@ import Synchronization
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioWorld = AudioWorld()
-    private let settings = SettingsStore()
+    private let settings = SettingsStore(defaults: UserDefaults.standard)
     private lazy var engine = AudioEngine(audioWorld: audioWorld)
     private lazy var outputController = OutputDeviceController(
         settings: settings,

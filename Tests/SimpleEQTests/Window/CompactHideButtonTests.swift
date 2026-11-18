@@ -60,8 +60,7 @@ final class CompactHideButtonPolicyTests: XCTestCase {
 
 @MainActor
 final class CompactHideButtonRevealTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
 
     private let hotZone = CGSize(width: 72, height: 56)
     private let buttonRect = CGRect(x: 10, y: 10, width: 20, height: 20)
@@ -69,14 +68,11 @@ final class CompactHideButtonRevealTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("CompactHideButtonRevealTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 

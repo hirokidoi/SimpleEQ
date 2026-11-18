@@ -383,20 +383,16 @@ final class DragBadgeBakerTests: XCTestCase {
 /// 実物のレイヤを組み立てる検証 (統合寄り・画素は見ない)。
 @MainActor
 final class VisualizerHostViewTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: MemoryPreferences!
 
     // 非同期版の setUp を使う (同期版はこの検証が要る隔離を持たない)。
     override func setUp() async throws {
         try await super.setUp()
-        suiteName = TestDefaults.makeName("VisualizerHostViewTests")
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = MemoryPreferences()
     }
 
     override func tearDown() async throws {
-        TestDefaults.remove(name: suiteName, defaults: defaults)
         defaults = nil
-        suiteName = nil
         try await super.tearDown()
     }
 
